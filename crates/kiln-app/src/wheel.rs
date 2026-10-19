@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 use kiln_core::{Kiln, Kind, Tool};
 
+use crate::actions::FileAction;
+
 /// Outer and inner radius of the ring, in DIPs.
 pub const R_OUTER: f32 = 136.0;
 pub const R_INNER: f32 = 56.0;
@@ -20,14 +22,19 @@ pub enum WheelKind {
     Convert,
     /// Ctrl: compress, crop, trim, split, merge.
     Tools,
+    /// Alt: copy path, move, open in Windows Terminal.
+    Actions,
 }
 
 impl WheelKind {
+    pub const ALL: [WheelKind; 3] = [WheelKind::Convert, WheelKind::Tools, WheelKind::Actions];
+
     /// The label in the wheel's centre.
     pub fn title(self) -> &'static str {
         match self {
             WheelKind::Convert => "Convert",
             WheelKind::Tools => "Tools",
+            WheelKind::Actions => "Actions",
         }
     }
 }
@@ -37,6 +44,7 @@ pub enum Action {
     /// Convert to this extension.
     Convert(String),
     Tool(Tool),
+    File(FileAction),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +117,15 @@ pub fn items_for(kind: WheelKind, kiln: &Kiln, paths: &[PathBuf]) -> Vec<Item> {
                 is_code: false,
                 icon: icon_for_tool(t),
                 action: Action::Tool(t),
+            })
+            .collect(),
+        WheelKind::Actions => FileAction::ALL
+            .into_iter()
+            .map(|a| Item {
+                label: a.label().to_owned(),
+                is_code: false,
+                icon: a.icon(),
+                action: Action::File(a),
             })
             .collect(),
     }
@@ -304,6 +321,17 @@ mod tests {
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         assert_eq!(labels, ["Compress", "Trim", "Split", "Merge"]);
         assert!(items.iter().all(|i| !i.is_code));
+        assert!(items
+            .iter()
+            .all(|i| crate::icons::ALL.iter().any(|ic| ic.name == i.icon)));
+    }
+
+    #[test]
+    fn actions_are_offered_for_any_files() {
+        let kiln = Kiln::new();
+        let items = items_for(WheelKind::Actions, &kiln, &["a.xyz".into(), "b.png".into()]);
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, ["Copy path", "Move", "Open in Terminal"]);
         assert!(items
             .iter()
             .all(|i| crate::icons::ALL.iter().any(|ic| ic.name == i.icon)));

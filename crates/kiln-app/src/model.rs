@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use kiln_core::{Kiln, Tool};
 
+use crate::actions::FileAction;
 use crate::wheel::Action;
 
 /// Where a file's latest job stands.
@@ -50,6 +51,8 @@ pub fn doing(action: &Action) -> String {
             Tool::Merge => "Merging",
         }
         .to_owned(),
+        Action::File(FileAction::Move) => "Moving".to_owned(),
+        Action::File(a) => a.label().to_owned(),
     }
 }
 
@@ -58,6 +61,8 @@ pub fn done(action: &Action) -> String {
     match action {
         Action::Convert(ext) => format!("Converted to {}", ext.to_ascii_uppercase()),
         Action::Tool(t) => past(*t).to_owned(),
+        Action::File(FileAction::Move) => "Moved".to_owned(),
+        Action::File(a) => a.label().to_owned(),
     }
 }
 
@@ -80,6 +85,9 @@ pub fn batch_summary(
     cancelled: usize,
 ) -> String {
     let n = |k: usize| format!("{k} file{}", if k == 1 { "" } else { "s" });
+    if let Action::File(_) = action {
+        return format!("{} {}.", done(action), n(ok));
+    }
     let merge = matches!(action, Action::Tool(Tool::Merge));
     if ok == 0 && !merge {
         if failed == 0 {
@@ -95,6 +103,7 @@ pub fn batch_summary(
                 format!("Couldn't convert {what} to {}.", ext.to_ascii_uppercase())
             }
             Action::Tool(t) => format!("Couldn't {} {what}.", t.id()),
+            Action::File(_) => unreachable!("handled above"),
         };
         if cancelled > 0 {
             s.push_str(&format!(" {cancelled} cancelled."));
@@ -114,6 +123,7 @@ pub fn batch_summary(
         ),
         Action::Tool(t) if ok == files => format!("{} {}.", past(*t), n(ok)),
         Action::Tool(t) => format!("{} {ok} of {}.", past(*t), n(files)),
+        Action::File(_) => unreachable!("handled above"),
     };
     if !merge {
         if failed > 0 {
@@ -145,6 +155,16 @@ impl Entry {
         match &self.job {
             JobState::Idle => (self.detail(), Tone::Muted),
             JobState::Running { action, .. } => (doing(action), Tone::Muted),
+            JobState::Done {
+                action: Action::File(FileAction::Move),
+                ..
+            } => (
+                format!(
+                    "Moved to {}",
+                    crate::actions::folder_name(Path::new(&self.folder))
+                ),
+                Tone::Result,
+            ),
             JobState::Done { outputs, .. } => {
                 let first = outputs
                     .first()
@@ -264,6 +284,18 @@ impl FileList {
 
     pub fn index_of(&self, path: &Path) -> Option<usize> {
         self.entries.iter().position(|e| same_path(&e.path, path))
+    }
+
+    /// Point the entry for `old` at `new` after the file moved. Returns
+    /// its index.
+    pub fn relocate(&mut self, kiln: &Kiln, old: &Path, new: PathBuf) -> Option<usize> {
+        let i = self.index_of(old)?;
+        let e = &mut self.entries[i];
+        let fresh = entry_for(kiln, new, e.size);
+        e.path = fresh.path;
+        e.name = fresh.name;
+        e.folder = fresh.folder;
+        Some(i)
     }
 
     pub fn clear(&mut self) {

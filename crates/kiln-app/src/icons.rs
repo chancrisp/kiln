@@ -105,6 +105,64 @@ pub const IMAGE_PATH: &[Cmd] = &[
     Close,
 ];
 
+/// Settings: a kiln's temperature dial with its needle.
+pub const DIAL_PATH: &[Cmd] = &[
+    Move(12.0, 4.75),
+    Cubic(16.0, 4.75, 19.25, 8.0, 19.25, 12.0),
+    Cubic(19.25, 16.0, 16.0, 19.25, 12.0, 19.25),
+    Cubic(8.0, 19.25, 4.75, 16.0, 4.75, 12.0),
+    Cubic(4.75, 8.0, 8.0, 4.75, 12.0, 4.75),
+    Close,
+    Move(12.0, 12.0),
+    Line(15.25, 8.75),
+    Move(7.5, 16.5),
+    Line(8.5, 15.5),
+    Move(16.5, 16.5),
+    Line(15.5, 15.5),
+];
+
+/// Copy path: a sheet in front of another.
+pub const COPY_PATH: &[Cmd] = &[
+    Move(9.0, 9.0),
+    Line(19.0, 9.0),
+    Line(19.0, 19.0),
+    Line(9.0, 19.0),
+    Close,
+    Move(5.0, 15.0),
+    Line(5.0, 5.0),
+    Line(15.0, 5.0),
+];
+
+/// Move: an arrow going into a folder.
+pub const MOVE_PATH: &[Cmd] = &[
+    Move(3.5, 6.0),
+    Line(9.5, 6.0),
+    Line(11.5, 8.5),
+    Line(20.5, 8.5),
+    Line(20.5, 19.0),
+    Line(3.5, 19.0),
+    Close,
+    Move(8.0, 13.75),
+    Line(15.0, 13.75),
+    Move(12.5, 11.25),
+    Line(15.0, 13.75),
+    Line(12.5, 16.25),
+];
+
+/// Open in Terminal: a window with a prompt.
+pub const TERMINAL_PATH: &[Cmd] = &[
+    Move(3.5, 5.0),
+    Line(20.5, 5.0),
+    Line(20.5, 19.0),
+    Line(3.5, 19.0),
+    Close,
+    Move(7.0, 9.5),
+    Line(10.0, 12.0),
+    Line(7.0, 14.5),
+    Move(12.0, 15.0),
+    Line(16.5, 15.0),
+];
+
 /// Sound: five bars of a level meter.
 pub const AUDIO_PATH: &[Cmd] = &[
     Move(6.0, 10.0),
@@ -241,7 +299,7 @@ const fn stroke(name: &'static str, path: &'static [Cmd]) -> Icon {
     }
 }
 
-pub const ALL: [Icon; 14] = [
+pub const ALL: [Icon; 18] = [
     VESSEL,
     VESSEL_SOLID,
     FLAME,
@@ -256,6 +314,10 @@ pub const ALL: [Icon; 14] = [
     stroke("trim", TRIM_PATH),
     stroke("split", SPLIT_PATH),
     stroke("merge", MERGE_PATH),
+    stroke("copy", COPY_PATH),
+    stroke("move", MOVE_PATH),
+    stroke("terminal", TERMINAL_PATH),
+    stroke("dial", DIAL_PATH),
 ];
 
 /// The app icon's geometry at a given pixel size: the tile's corner radius

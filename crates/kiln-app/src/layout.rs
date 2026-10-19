@@ -1,7 +1,9 @@
 //! Where things go, in DIPs. Pure functions, so the 4 px grid and the
 //! 16 px panel padding can be tested without a window.
 
+use crate::settings::{Engine, ThemeChoice};
 use crate::theme::shape::{GRID, PANEL_PADDING};
+use crate::wheel::WheelKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Rect {
@@ -65,6 +67,8 @@ pub struct Layout {
     pub rows: Vec<Rect>,
     pub footer: Option<Rect>,
     pub clear_button: Option<Rect>,
+    /// The dial at the right of the header that opens settings.
+    pub settings_button: Rect,
 }
 
 /// Lay out a window of `w` x `h` DIPs holding `rows` files.
@@ -73,6 +77,7 @@ pub fn layout(w: f32, h: f32, rows: usize) -> Layout {
     let header = Rect::new(0.0, 0.0, w, HEADER_HEIGHT);
     let icon = Rect::new(p, p, 24.0, 24.0);
     let wordmark = Rect::new(icon.right() + 12.0, 12.0, 160.0, 32.0);
+    let settings_button = Rect::new((w - p - 32.0).max(0.0), 12.0, 32.0, 32.0);
     let body = Rect::new(
         p,
         HEADER_HEIGHT + p,
@@ -90,6 +95,7 @@ pub fn layout(w: f32, h: f32, rows: usize) -> Layout {
             rows: vec![],
             footer: None,
             clear_button: None,
+            settings_button,
         };
     }
 
@@ -125,6 +131,7 @@ pub fn layout(w: f32, h: f32, rows: usize) -> Layout {
         rows,
         footer: Some(footer),
         clear_button: Some(clear_button),
+        settings_button,
     }
 }
 
@@ -178,6 +185,145 @@ pub fn dialog(w: f32, h: f32) -> Dialog {
         body,
         close,
     }
+}
+
+/// Something the settings panel lets you press.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Control {
+    OutputChoose,
+    OutputReset,
+    Theme(ThemeChoice),
+    Key(WheelKind),
+    EngineChoose(Engine),
+    EngineReset(Engine),
+    Close,
+}
+
+/// One labelled line of the settings panel.
+pub struct SettingsRow {
+    pub label: &'static str,
+    pub label_rect: Rect,
+    /// Where the row's current value is written, for rows that show one.
+    pub value: Option<Rect>,
+}
+
+pub struct SettingsLayout {
+    pub panel: Rect,
+    pub title: Rect,
+    pub rows: Vec<SettingsRow>,
+    /// Every control, in Tab order.
+    pub controls: Vec<(Control, Rect)>,
+}
+
+pub const SETTINGS_ROW: f32 = 40.0;
+pub const SETTINGS_LABEL: f32 = 112.0;
+/// Theme segments and key buttons.
+pub const SEGMENT_WIDTH: f32 = 72.0;
+
+/// What the settings panel needs to know to lay itself out: which values
+/// are set, since those rows grow a Reset button.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SettingsShape {
+    pub output_custom: bool,
+    pub engine_custom: [bool; 2],
+}
+
+pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
+    let p = PANEL_PADDING;
+    let rows_n = 5.0;
+    let ph = p + 32.0 + 8.0 + rows_n * SETTINGS_ROW + p + BUTTON_HEIGHT + p;
+    let pw = snap((w - 32.0).clamp(0.0, 560.0));
+    let panel = Rect::new(
+        snap(((w - pw) / 2.0).max(0.0)),
+        snap(((h - ph) / 2.0).max(8.0)),
+        pw,
+        ph,
+    );
+    let title = Rect::new(panel.x + p, panel.y + p, panel.w - 2.0 * p, 32.0);
+    let right = panel.right() - p;
+    let x0 = panel.x + p + SETTINGS_LABEL + 8.0;
+    let row_y = |i: usize| title.bottom() + 8.0 + i as f32 * SETTINGS_ROW;
+    let ctl = |x: f32, i: usize, w: f32| Rect::new(x, row_y(i) + 4.0, w, BUTTON_HEIGHT);
+
+    let mut rows = Vec::new();
+    let mut controls = Vec::new();
+    let row = |label, i: usize, value: Option<Rect>| SettingsRow {
+        label,
+        label_rect: Rect::new(panel.x + p, row_y(i) + 8.0, SETTINGS_LABEL, 24.0),
+        value,
+    };
+
+    // A row with a value on the left and Choose (and maybe Reset) on the
+    // right.
+    let chooser =
+        |controls: &mut Vec<(Control, Rect)>, i: usize, choose: Control, reset: Option<Control>| {
+            let choose_r = ctl(right - BUTTON_WIDTH, i, BUTTON_WIDTH);
+            let mut left = choose_r.x;
+            if let Some(reset) = reset {
+                let r = ctl(left - 8.0 - BUTTON_WIDTH, i, BUTTON_WIDTH);
+                left = r.x;
+                controls.push((reset, r));
+            }
+            controls.push((choose, choose_r));
+            Rect::new(x0, row_y(i) + 8.0, (left - 8.0 - x0).max(0.0), 24.0)
+        };
+
+    let v = chooser(
+        &mut controls,
+        0,
+        Control::OutputChoose,
+        shape.output_custom.then_some(Control::OutputReset),
+    );
+    rows.push(row("Output folder", 0, Some(v)));
+
+    for (k, t) in ThemeChoice::ALL.into_iter().enumerate() {
+        controls.push((
+            Control::Theme(t),
+            ctl(x0 + k as f32 * SEGMENT_WIDTH, 1, SEGMENT_WIDTH),
+        ));
+    }
+    rows.push(row("Theme", 1, None));
+
+    let key_w = (((right - x0 - 16.0) / 3.0).min(120.0) / GRID).floor() * GRID;
+    for (k, wheel) in WheelKind::ALL.into_iter().enumerate() {
+        controls.push((
+            Control::Key(wheel),
+            ctl(x0 + k as f32 * (key_w + 8.0), 2, key_w),
+        ));
+    }
+    rows.push(row("Wheel keys", 2, None));
+
+    for (k, e) in Engine::ALL.into_iter().enumerate() {
+        let v = chooser(
+            &mut controls,
+            3 + k,
+            Control::EngineChoose(e),
+            shape.engine_custom[k].then_some(Control::EngineReset(e)),
+        );
+        // Both engines sit under one "Engines" label, the name error
+        // messages point to.
+        let label = if k == 0 { "Engines" } else { "" };
+        rows.push(row(label, 3 + k, Some(v)));
+    }
+
+    let close = Rect::new(
+        right - BUTTON_WIDTH,
+        panel.bottom() - p - BUTTON_HEIGHT,
+        BUTTON_WIDTH,
+        BUTTON_HEIGHT,
+    );
+    controls.push((Control::Close, close));
+
+    SettingsLayout {
+        panel,
+        title,
+        rows,
+        controls,
+    }
+}
+
+fn snap(v: f32) -> f32 {
+    (v / GRID).floor() * GRID
 }
 
 /// Largest scroll offset for a list of `rows` inside a panel `panel_h` tall.
@@ -288,6 +434,58 @@ mod tests {
             assert_eq!(d.panel.bottom() - d.close.bottom(), 16.0);
             assert!(d.body.bottom() <= d.close.y);
         }
+    }
+
+    #[test]
+    fn the_settings_button_sits_in_the_header() {
+        let l = layout(720.0, 480.0, 0);
+        assert_grid(&l.settings_button, "settings button");
+        assert_eq!(l.header.right() - l.settings_button.right(), 16.0);
+        assert!(l.settings_button.bottom() <= l.header.bottom());
+        assert!(l.settings_button.x > l.wordmark.right());
+    }
+
+    #[test]
+    fn settings_controls_fit_without_overlapping() {
+        let shapes = [
+            SettingsShape::default(),
+            SettingsShape {
+                output_custom: true,
+                engine_custom: [true, true],
+            },
+        ];
+        for (w, h) in [(480.0, 400.0), (720.0, 480.0), (1600.0, 1000.0)] {
+            for shape in shapes {
+                let s = settings(w, h, shape);
+                assert_grid(&s.panel, "settings panel");
+                assert!(s.panel.x >= 16.0 && s.panel.right() <= w - 16.0);
+                assert_eq!(s.title.x - s.panel.x, 16.0);
+                for (c, r) in &s.controls {
+                    assert_grid(r, "settings control");
+                    assert!(r.x >= s.panel.x + 16.0, "{c:?} {r:?}");
+                    assert!(r.right() <= s.panel.right() - 16.0, "{c:?} {r:?}");
+                    assert!(r.bottom() <= s.panel.bottom() - 16.0, "{c:?} {r:?}");
+                }
+                for (i, (a, ra)) in s.controls.iter().enumerate() {
+                    for (b, rb) in &s.controls[i + 1..] {
+                        let apart = ra.right() <= rb.x
+                            || rb.right() <= ra.x
+                            || ra.bottom() <= rb.y
+                            || rb.bottom() <= ra.y;
+                        assert!(apart, "{a:?} overlaps {b:?} at {w}x{h}");
+                    }
+                }
+                for row in &s.rows {
+                    if let Some(v) = row.value {
+                        assert!(v.x > row.label_rect.right());
+                    }
+                }
+            }
+        }
+        let s = settings(720.0, 480.0, SettingsShape::default());
+        assert_eq!(s.rows.len(), 5);
+        assert_eq!(s.controls.len(), 1 + 3 + 3 + 2 + 1);
+        assert_eq!(s.controls.last().unwrap().0, Control::Close);
     }
 
     #[test]

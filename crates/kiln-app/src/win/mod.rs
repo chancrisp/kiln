@@ -2,6 +2,7 @@
 
 mod drop;
 mod render;
+mod system;
 mod text;
 
 use std::collections::HashMap;
@@ -26,24 +27,29 @@ use windows::Win32::UI::HiDpi::{
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use kiln_core::{JobEvent, JobId, JobKind, Kiln, Options, Progress, Runner, Tool};
+use kiln_core::{JobEvent, JobId, JobKind, Kiln, Progress, Runner, Tool};
 
-use crate::layout::{self, ROW_HEIGHT};
+use crate::actions::{self, FileAction};
+use crate::layout::{self, Control, SettingsLayout, SettingsShape, ROW_HEIGHT};
 use crate::model::{batch_summary, status_line, FileList, JobState};
+use crate::settings::{self, Engine, Settings};
 use crate::theme::{self, motion, Palette};
 use crate::wheel::{self, Action, Wheel, WheelKind};
 use drop::{DragEvent, DropTarget, DRAG_ENTER, DRAG_LEAVE, DRAG_OVER, WM_KILN_DRAG, WM_KILN_DROP};
-use render::{Renderer, RowAnim, View, WheelView};
+use render::{Renderer, RowAnim, SettingsView, View, WheelView};
 
 const ANIM_TIMER: usize = 1;
 const FRAME_MS: u32 = 16;
 
 /// Posted by the worker threads; lparam is a `Box<JobEvent>`.
 const WM_KILN_JOB: u32 = WM_APP + 3;
+/// Posted when a move finishes; lparam is a `Box<Moved>`.
+const WM_KILN_MOVED: u32 = WM_APP + 4;
 
-/// Drag modifier flags (MK_SHIFT, MK_CONTROL).
+/// Drag modifier flags (MK_SHIFT, MK_CONTROL, MK_ALT).
 const MK_SHIFT_FLAG: u32 = 0x0004;
 const MK_CONTROL_FLAG: u32 = 0x0008;
+const MK_ALT_FLAG: u32 = 0x0020;
 
 /// How long the wheel takes to pour open.
 const OPEN_MS: u32 = 160;
@@ -102,11 +108,11 @@ fn within(t: Instant, ms: u32) -> bool {
 struct PostTarget(usize);
 
 impl PostTarget {
-    fn post(self, ev: JobEvent) {
-        let raw = Box::into_raw(Box::new(ev));
+    /// Post `value` boxed in lparam; the handler for `msg` takes the box.
+    fn post<T>(self, msg: u32, value: T) {
+        let raw = Box::into_raw(Box::new(value));
         let hwnd = HWND(self.0 as *mut core::ffi::c_void);
-        let posted =
-            unsafe { PostMessageW(Some(hwnd), WM_KILN_JOB, WPARAM(0), LPARAM(raw as isize)) };
+        let posted = unsafe { PostMessageW(Some(hwnd), msg, WPARAM(0), LPARAM(raw as isize)) };
         if posted.is_err() {
             // The window is gone; nobody will free the event but us.
             drop(unsafe { Box::from_raw(raw) });
@@ -133,6 +139,20 @@ impl WheelUi {
     fn is_open(&self) -> bool {
         self.closing.is_none() && self.pulse.is_none()
     }
+}
+
+/// The result of moving files, from the thread that moved them.
+struct Moved {
+    dest: PathBuf,
+    results: Vec<(PathBuf, std::result::Result<PathBuf, String>)>,
+}
+
+/// The settings panel while it is open.
+struct SettingsUi {
+    hover: Option<usize>,
+    focus: Option<usize>,
+    output_line: (String, bool),
+    engine_lines: [(String, bool); 2],
 }
 
 struct RowTimes {
@@ -165,6 +185,14 @@ struct App {
     batches: HashMap<u64, Batch>,
     next_batch: u64,
     palette: &'static Palette,
+    settings: Settings,
+    settings_path: Option<PathBuf>,
+    system_light: bool,
+    settings_ui: Option<SettingsUi>,
+    settings_hover: bool,
+    /// Where the pointer last was, to ignore the moves Windows reports
+    /// when a window appears under a still pointer.
+    last_mouse: Option<(i32, i32)>,
     renderer: Renderer,
     files: FileList,
     rows: Vec<RowTimes>,
@@ -412,6 +440,10 @@ impl App {
         if paths.is_empty() {
             return;
         }
+        if let Action::File(a) = action {
+            self.file_action(a, paths);
+            return;
+        }
         let batch = self.next_batch;
         self.next_batch += 1;
         let groups: Vec<Vec<PathBuf>> = match action {
@@ -439,8 +471,9 @@ impl App {
                     tool: *tool,
                     inputs: group.clone(),
                 },
+                Action::File(_) => unreachable!("file actions return above"),
             };
-            let id = self.runner.submit(kind, Options::default());
+            let id = self.runner.submit(kind, self.settings.options());
             for p in &group {
                 if let Some(i) = self.files.index_of(p) {
                     self.files.entries_mut()[i].job = JobState::Running {
@@ -527,6 +560,278 @@ impl App {
         self.invalidate();
     }
 
+    // File actions.
+
+    fn file_action(&mut self, a: FileAction, paths: Vec<PathBuf>) {
+        match a {
+            FileAction::CopyPath => {
+                let text = actions::clipboard_text(&paths);
+                self.status = match system::set_clipboard(self.hwnd, &text) {
+                    Ok(()) => actions::copied_summary(paths.len()),
+                    Err(e) => format!("Couldn't copy the path: {}", e.message()),
+                };
+            }
+            FileAction::OpenTerminal => {
+                let Some(folder) = actions::terminal_folder(&paths) else {
+                    return;
+                };
+                self.status = match actions::terminal_command(&folder).spawn() {
+                    Ok(_) => format!("Opened Terminal in {}.", actions::folder_name(&folder)),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        "Windows Terminal isn't installed. Get it from the Microsoft Store."
+                            .to_owned()
+                    }
+                    Err(e) => format!("Couldn't open Terminal: {e}"),
+                };
+            }
+            FileAction::Move => self.move_files(paths),
+        }
+        self.invalidate();
+    }
+
+    fn move_files(&mut self, paths: Vec<PathBuf>) {
+        let busy = paths.iter().any(|p| {
+            self.files
+                .index_of(p)
+                .is_some_and(|i| matches!(self.files.entries()[i].job, JobState::Running { .. }))
+        });
+        if busy {
+            self.status = "Kiln can't move a file while a job is using it.".to_owned();
+            return;
+        }
+        let title = if paths.len() == 1 {
+            "Move the file to"
+        } else {
+            "Move the files to"
+        };
+        let Some(dest) = system::pick_folder(self.hwnd, title) else {
+            return;
+        };
+        let action = Action::File(FileAction::Move);
+        for p in &paths {
+            if let Some(i) = self.files.index_of(p) {
+                self.files.entries_mut()[i].job = JobState::Running {
+                    action: action.clone(),
+                    fraction: None,
+                };
+                self.rows[i].settled = None;
+            }
+        }
+        // Across drives a move is a copy, which can take a while: keep it
+        // off the UI thread.
+        let target = PostTarget(self.hwnd.0 as usize);
+        std::thread::spawn(move || {
+            let results = paths
+                .into_iter()
+                .map(|p| {
+                    let r = actions::move_to(&p, &dest);
+                    (p, r)
+                })
+                .collect();
+            target.post(WM_KILN_MOVED, Moved { dest, results });
+        });
+    }
+
+    fn on_moved(&mut self, m: Moved) {
+        let now = Instant::now();
+        let (mut ok, mut failed) = (0, 0);
+        for (old, result) in m.results {
+            let index = match &result {
+                Ok(new) => self.files.relocate(&self.kiln, &old, new.clone()),
+                Err(_) => self.files.index_of(&old),
+            };
+            let state = match result {
+                Ok(new) => {
+                    ok += 1;
+                    JobState::Done {
+                        action: Action::File(FileAction::Move),
+                        outputs: vec![new],
+                    }
+                }
+                Err(message) => {
+                    failed += 1;
+                    JobState::Failed {
+                        message,
+                        details: String::new(),
+                    }
+                }
+            };
+            if let Some(i) = index {
+                self.files.entries_mut()[i].job = state;
+                self.rows[i].settled = Some(now);
+            }
+        }
+        self.status = actions::moved_summary(ok, failed, &m.dest);
+        self.animate();
+    }
+
+    // Settings.
+
+    /// Read settings.toml. Called once the window is on screen.
+    fn load_settings(&mut self) {
+        let Some(path) = self.settings_path.clone() else {
+            return;
+        };
+        let (s, err) = Settings::load(&path);
+        self.settings = s;
+        if let Some(e) = err {
+            self.status = format!("{e}. Using the defaults.");
+            log(&self.status);
+        }
+        self.apply_theme();
+    }
+
+    fn save_settings(&mut self) {
+        let Some(path) = &self.settings_path else {
+            self.status = "Settings can't be saved because APPDATA isn't set.".to_owned();
+            return;
+        };
+        if let Err(e) = self.settings.save(path) {
+            self.status = format!("Settings couldn't be saved: {e}");
+        }
+    }
+
+    fn apply_theme(&mut self) {
+        let p = if self.settings.theme.is_light(self.system_light) {
+            &theme::LIGHT
+        } else {
+            &theme::DARK
+        };
+        if !std::ptr::eq(p, self.palette) {
+            self.palette = p;
+            style_title_bar(self.hwnd, p);
+        }
+        self.invalidate();
+    }
+
+    fn settings_layout(&self) -> SettingsLayout {
+        let (w, h) = self.renderer.size_dips();
+        let e = &self.settings.engines;
+        layout::settings(
+            w,
+            h,
+            SettingsShape {
+                output_custom: self.settings.output_folder.is_some(),
+                engine_custom: [e.ffmpeg.is_some(), e.pandoc.is_some()],
+            },
+        )
+    }
+
+    /// The text beside each chooser, refreshed whenever settings change.
+    fn settings_lines(&self) -> ((String, bool), [(String, bool); 2]) {
+        let output = match &self.settings.output_folder {
+            Some(p) => (p.display().to_string(), false),
+            None => ("Next to each file".to_owned(), true),
+        };
+        let path_var = std::env::var_os("PATH").unwrap_or_default();
+        let line = |e: Engine| {
+            let st = settings::engine_status(&self.settings, e, &path_var);
+            let muted = !matches!(st, settings::EngineStatus::Chosen { .. });
+            (format!("{}  ·  {}", e.label(), st.describe()), muted)
+        };
+        (output, [line(Engine::Ffmpeg), line(Engine::Pandoc)])
+    }
+
+    fn open_settings(&mut self) {
+        self.close_wheel();
+        let (output_line, engine_lines) = self.settings_lines();
+        self.settings_ui = Some(SettingsUi {
+            hover: None,
+            focus: None,
+            output_line,
+            engine_lines,
+        });
+        self.settings_hover = false;
+        self.invalidate();
+    }
+
+    /// Press a settings control. Choices save at once.
+    fn activate(&mut self, c: Control) {
+        let hwnd = self.hwnd;
+        match c {
+            Control::Close => {
+                self.settings_ui = None;
+                self.invalidate();
+                return;
+            }
+            Control::OutputChoose => match system::pick_folder(hwnd, "Write results to") {
+                Some(p) => self.settings.output_folder = Some(p),
+                None => return,
+            },
+            Control::OutputReset => self.settings.output_folder = None,
+            Control::Theme(t) => {
+                self.settings.theme = t;
+                self.apply_theme();
+            }
+            Control::Key(w) => self.settings.keys.cycle(w),
+            Control::EngineChoose(e) => {
+                let title = format!("Choose {}.exe", e.program());
+                match system::pick_program(hwnd, &title) {
+                    Some(p) => self.settings.engines.set(e, Some(p)),
+                    None => return,
+                }
+            }
+            Control::EngineReset(e) => self.settings.engines.set(e, None),
+        }
+        self.save_settings();
+        let (output_line, engine_lines) = self.settings_lines();
+        // Reset buttons come and go. Keep keyboard focus on the same
+        // control, or on its Choose button when a Reset went away.
+        let had_focus = self
+            .settings_ui
+            .as_ref()
+            .is_some_and(|ui| ui.focus.is_some());
+        let l = self.settings_layout();
+        let find = |c: Control| l.controls.iter().position(|(k, _)| *k == c);
+        let refocus = had_focus.then(|| {
+            find(c)
+                .or_else(|| match c {
+                    Control::OutputReset => find(Control::OutputChoose),
+                    Control::EngineReset(e) => find(Control::EngineChoose(e)),
+                    _ => None,
+                })
+                .unwrap_or(0)
+        });
+        if let Some(ui) = &mut self.settings_ui {
+            ui.output_line = output_line;
+            ui.engine_lines = engine_lines;
+            ui.focus = refocus;
+            ui.hover = None;
+        }
+        self.invalidate();
+    }
+
+    fn settings_hit(&self, x: f32, y: f32) -> Option<usize> {
+        self.settings_layout()
+            .controls
+            .iter()
+            .position(|(_, r)| r.contains(x, y))
+    }
+
+    /// Tab, Shift+Tab and the arrows move focus; Enter or Space presses;
+    /// Escape closes.
+    fn settings_key(&mut self, key: VIRTUAL_KEY, shift: bool) {
+        let n = self.settings_layout().controls.len();
+        let Some(ui) = &mut self.settings_ui else {
+            return;
+        };
+        match key {
+            VK_ESCAPE => self.settings_ui = None,
+            VK_TAB | VK_DOWN | VK_RIGHT | VK_UP | VK_LEFT => {
+                let back = (key == VK_TAB && shift) || key == VK_UP || key == VK_LEFT;
+                ui.focus = wheel::step(ui.focus, if back { -1 } else { 1 }, n);
+            }
+            VK_RETURN | VK_SPACE => {
+                if let Some(i) = ui.focus {
+                    let c = self.settings_layout().controls[i].0;
+                    self.activate(c);
+                }
+            }
+            _ => return,
+        }
+        self.invalidate();
+    }
+
     fn cancel_row(&self, i: usize) {
         if let Some(e) = self.files.entries().get(i) {
             self.cancel_jobs_for(&e.path);
@@ -564,6 +869,16 @@ impl App {
     }
 
     fn mouse_move(&mut self, x: f32, y: f32) {
+        if self.settings_ui.is_some() {
+            let hover = self.settings_hit(x, y);
+            if let Some(ui) = &mut self.settings_ui {
+                if ui.hover != hover {
+                    ui.hover = hover;
+                    self.invalidate();
+                }
+            }
+            return;
+        }
         if self.details.is_some() {
             let (w, h) = self.renderer.size_dips();
             let hot = layout::dialog(w, h).close.contains(x, y);
@@ -584,7 +899,13 @@ impl App {
             return;
         }
         let (row, cancel, link) = self.hit_row(x, y);
-        let clear = self.layout().clear_button.is_some_and(|b| b.contains(x, y));
+        let l = self.layout();
+        let clear = l.clear_button.is_some_and(|b| b.contains(x, y));
+        let gear = l.settings_button.contains(x, y);
+        if gear != self.settings_hover {
+            self.settings_hover = gear;
+            self.invalidate();
+        }
         if (row, cancel, link, clear)
             != (
                 self.hover_row,
@@ -602,6 +923,17 @@ impl App {
     }
 
     fn mouse_down(&mut self, x: f32, y: f32) {
+        if self.settings_ui.is_some() {
+            if let Some(i) = self.settings_hit(x, y) {
+                let c = self.settings_layout().controls[i].0;
+                self.activate(c);
+            } else if !self.settings_layout().panel.contains(x, y) {
+                // A click on the scrim closes the panel.
+                self.settings_ui = None;
+            }
+            self.invalidate();
+            return;
+        }
         if self.details.is_some() {
             let (w, h) = self.renderer.size_dips();
             if layout::dialog(w, h).close.contains(x, y) {
@@ -620,7 +952,9 @@ impl App {
             return;
         }
         let l = self.layout();
-        if l.clear_button.is_some_and(|b| b.contains(x, y)) {
+        if l.settings_button.contains(x, y) {
+            self.open_settings();
+        } else if l.clear_button.is_some_and(|b| b.contains(x, y)) {
             self.clear_pressed = true;
             unsafe { SetCapture(self.hwnd) };
         } else {
@@ -638,7 +972,12 @@ impl App {
     }
 
     fn key(&mut self, key: VIRTUAL_KEY) -> bool {
-        let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
+        let down = |k: VIRTUAL_KEY| unsafe { GetKeyState(k.0 as i32) } < 0;
+        let (shift, ctrl, alt) = (down(VK_SHIFT), down(VK_CONTROL), down(VK_MENU));
+        if self.settings_ui.is_some() {
+            self.settings_key(key, shift);
+            return true;
+        }
         if self.details.is_some() {
             if matches!(key, VK_ESCAPE | VK_RETURN | VK_SPACE) {
                 self.details = None;
@@ -673,8 +1012,17 @@ impl App {
             VK_END => self.files.select(self.files.len().checked_sub(1)),
             VK_DELETE | VK_BACK => self.remove_selected(),
             VK_ESCAPE => self.files.select(None),
-            VK_RETURN if ctrl => self.open_wheel_for_selection(WheelKind::Tools),
-            VK_RETURN => self.open_wheel_for_selection(WheelKind::Convert),
+            // Enter opens the convert wheel; with a modifier, that
+            // modifier's wheel, following the key settings.
+            VK_RETURN => {
+                let kind = self
+                    .settings
+                    .keys
+                    .wheel_for(shift, ctrl, alt)
+                    .unwrap_or(WheelKind::Convert);
+                self.open_wheel_for_selection(kind);
+            }
+            VK_OEM_COMMA if ctrl => self.open_settings(),
             // Space follows a failed row's "Show details" link.
             VK_SPACE => {
                 if let Some(i) = self.files.selected() {
@@ -688,18 +1036,20 @@ impl App {
         true
     }
 
-    /// While a drag is over the window: Shift pours the convert wheel,
-    /// Ctrl the tools wheel; letting go of the key lets it fade.
+    /// While a drag is over the window, a held modifier pours its wheel
+    /// (Shift convert, Ctrl tools, Alt actions, unless settings say
+    /// otherwise); letting go of the key lets it fade.
     fn drag_over(&mut self, ev: &DragEvent) {
+        if self.settings_ui.is_some() || self.details.is_some() {
+            return;
+        }
         let at = self.screen_dips(ev.x, ev.y);
         let keys = ev.keys.0;
-        let want = if keys & MK_SHIFT_FLAG != 0 {
-            Some(WheelKind::Convert)
-        } else if keys & MK_CONTROL_FLAG != 0 {
-            Some(WheelKind::Tools)
-        } else {
-            None
-        };
+        let want = self.settings.keys.wheel_for(
+            keys & MK_SHIFT_FLAG != 0,
+            keys & MK_CONTROL_FLAG != 0,
+            keys & MK_ALT_FLAG != 0,
+        );
         let showing = self
             .wheel
             .as_ref()
@@ -746,6 +1096,7 @@ impl App {
     }
 
     fn paint(&mut self) {
+        let settings_layout = self.settings_layout();
         let anims: Vec<RowAnim> = (0..self.files.len()).map(|i| self.row_anim(i)).collect();
         let anim = |i: usize| {
             anims.get(i).copied().unwrap_or(RowAnim {
@@ -769,6 +1120,19 @@ impl App {
             wheel: Self::wheel_view(self.wheel.as_ref()),
             details: self.details.as_deref(),
             dialog_close_hover: self.dialog_close_hover,
+            settings_hover: self.settings_hover,
+            settings: self.settings_ui.as_ref().map(|ui| SettingsView {
+                layout: &settings_layout,
+                output: (ui.output_line.0.as_str(), ui.output_line.1),
+                theme: self.settings.theme,
+                keys: self.settings.keys,
+                engines: [
+                    (ui.engine_lines[0].0.as_str(), ui.engine_lines[0].1),
+                    (ui.engine_lines[1].0.as_str(), ui.engine_lines[1].1),
+                ],
+                hover: ui.hover,
+                focus: ui.focus,
+            }),
         };
         if let Err(e) = self.renderer.draw(&view) {
             log(&format!("draw failed: {e}"));
@@ -806,7 +1170,14 @@ pub fn run() -> Result<()> {
 }
 
 fn run_window() -> Result<()> {
-    let palette = &theme::DARK;
+    // The first frame follows the Windows app mode; settings.toml, read
+    // once the window is up, can override it.
+    let system_light = system::system_light();
+    let palette = if system_light {
+        &theme::LIGHT
+    } else {
+        &theme::DARK
+    };
     let instance: HINSTANCE = unsafe { GetModuleHandleW(None)? }.into();
     let class = w!("KilnWindow");
     let icon = unsafe { LoadIconW(Some(instance), PCWSTR(1 as _)) }.unwrap_or_default();
@@ -849,7 +1220,7 @@ fn run_window() -> Result<()> {
     let kiln = Arc::new(Kiln::new());
     let target = PostTarget(hwnd.0 as usize);
     let runner = Runner::new(kiln.clone(), Runner::default_workers(), move |ev| {
-        target.post(ev)
+        target.post(WM_KILN_JOB, ev)
     });
 
     let app = Box::new(App {
@@ -860,6 +1231,12 @@ fn run_window() -> Result<()> {
         batches: HashMap::new(),
         next_batch: 1,
         palette,
+        settings: Settings::default(),
+        settings_path: settings::default_path(),
+        system_light,
+        settings_ui: None,
+        settings_hover: false,
+        last_mouse: None,
         renderer: Renderer::new(hwnd, dpi)?,
         files: FileList::default(),
         rows: vec![],
@@ -894,6 +1271,7 @@ fn run_window() -> Result<()> {
     unsafe {
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = UpdateWindow(hwnd);
+        (*app).load_settings();
     }
 
     // Files dropped on the app icon arrive as arguments.
@@ -1061,12 +1439,17 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
                 }
                 app.tracking_mouse = true;
             }
-            let (x, y) = app.dips(lo(lparam), hi(lparam));
-            app.mouse_move(x, y);
+            let at = (lo(lparam), hi(lparam));
+            if app.last_mouse != Some(at) {
+                app.last_mouse = Some(at);
+                let (x, y) = app.dips(at.0, at.1);
+                app.mouse_move(x, y);
+            }
             Some(LRESULT(0))
         }
         WM_MOUSELEAVE => {
             app.tracking_mouse = false;
+            app.last_mouse = None;
             app.hover_row = None;
             app.hover_cancel = false;
             app.hover_link = false;
@@ -1109,7 +1492,7 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
         // The Apps key, Shift+F10 or a right click: the convert wheel for
         // the selected file.
         WM_CONTEXTMENU => {
-            if app.wheel.is_some() || app.details.is_some() {
+            if app.wheel.is_some() || app.details.is_some() || app.settings_ui.is_some() {
                 return Some(LRESULT(0));
             }
             if lparam.0 == -1 {
@@ -1126,6 +1509,34 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             Some(LRESULT(0))
         }
         WM_KEYDOWN => app.key(VIRTUAL_KEY(wparam.0 as u16)).then_some(LRESULT(0)),
+        // Alt+Enter arrives as a system key.
+        WM_SYSKEYDOWN if wparam.0 == VK_RETURN.0 as usize => {
+            app.key(VK_RETURN);
+            Some(LRESULT(0))
+        }
+        // Its character would otherwise go looking for a menu mnemonic,
+        // which beeps.
+        WM_SYSCHAR if wparam.0 == '\r' as usize => Some(LRESULT(0)),
+        // There's no menu bar, so a lone Alt shouldn't put the window into
+        // menu mode and swallow the next key.
+        WM_SYSCOMMAND if (wparam.0 & 0xFFF0) == SC_KEYMENU as usize && lparam.0 == 0 => {
+            Some(LRESULT(0))
+        }
+        WM_SETTINGCHANGE => {
+            let name = lparam.0 as *const u16;
+            if !name.is_null()
+                && unsafe { PCWSTR(name).to_string() }.ok().as_deref() == Some("ImmersiveColorSet")
+            {
+                app.system_light = system::system_light();
+                app.apply_theme();
+            }
+            None
+        }
+        WM_KILN_MOVED => {
+            let m = unsafe { Box::from_raw(lparam.0 as *mut Moved) };
+            app.on_moved(*m);
+            Some(LRESULT(0))
+        }
         WM_KILN_DRAG => {
             let ev = unsafe { &*(lparam.0 as *const DragEvent) };
             match wparam.0 {

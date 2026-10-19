@@ -14,8 +14,12 @@ use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::icons::{self, Cmd, Icon, Style};
-use crate::layout::{self, Layout, Rect, CHIP_HEIGHT, CHIP_MIN_WIDTH, PROGRESS_HEIGHT, ROW_HEIGHT};
+use crate::layout::{
+    self, Control, Layout, Rect, SettingsLayout, CHIP_HEIGHT, CHIP_MIN_WIDTH, PROGRESS_HEIGHT,
+    ROW_HEIGHT,
+};
 use crate::model::{Entry, JobState, Tone};
+use crate::settings::{KeyMap, ThemeChoice};
 use crate::theme::{effects, shape, Palette, Rgb};
 use crate::wheel::{self, Wheel, R_INNER, R_OUTER};
 
@@ -61,6 +65,22 @@ pub struct View<'a> {
     /// Engine output shown in the details dialog.
     pub details: Option<&'a str>,
     pub dialog_close_hover: bool,
+    pub settings_hover: bool,
+    pub settings: Option<SettingsView<'a>>,
+}
+
+/// The settings panel this frame.
+pub struct SettingsView<'a> {
+    pub layout: &'a SettingsLayout,
+    /// The output folder line, and whether it is the default (muted).
+    pub output: (&'a str, bool),
+    pub theme: ThemeChoice,
+    pub keys: KeyMap,
+    /// Each engine's line, and whether it is muted.
+    pub engines: [(&'a str, bool); 2],
+    /// Indexes into `layout.controls`.
+    pub hover: Option<usize>,
+    pub focus: Option<usize>,
 }
 
 pub struct Renderer {
@@ -283,7 +303,7 @@ impl Renderer {
             icons: &self.icons,
             base: Cell::new(Matrix3x2::identity()),
         };
-        let mut result = d.header(&l, p);
+        let mut result = d.header(&l, v);
         if result.is_ok() {
             result = if v.entries.is_empty() {
                 d.empty_state(&l, v)
@@ -296,6 +316,9 @@ impl Renderer {
         }
         if let (Ok(()), Some(details)) = (&result, v.details) {
             result = d.dialog(w, h, details, v);
+        }
+        if let (Ok(()), Some(sv)) = (&result, &v.settings) {
+            result = d.settings(w, h, sv, p);
         }
 
         let end = unsafe { rt.EndDraw(None, None) };
@@ -415,10 +438,21 @@ impl Draw<'_> {
         }
     }
 
-    fn header(&self, l: &Layout, p: &Palette) -> Result<()> {
+    fn header(&self, l: &Layout, v: &View) -> Result<()> {
+        let p = v.palette;
         // The app icon: a celadon vessel on the soot ground.
         self.icon("vessel-solid", l.icon.x, l.icon.y, 1.0, p.accent, 1.0);
         self.label("Kiln", &self.text.display, &l.wordmark, p.text, 1.0);
+        let b = l.settings_button;
+        if v.settings_hover {
+            self.fill(&b, shape::RADIUS_CONTROL, p.line, 1.0);
+        }
+        let c = if v.settings_hover {
+            p.text
+        } else {
+            p.text_muted
+        };
+        self.icon("dial", b.x + 4.0, b.y + 4.0, 1.0, c, 1.0);
         self.hline(0.0, l.header.w, l.header.bottom() - 1.0, p.line, 1.0);
         Ok(())
     }
@@ -731,16 +765,37 @@ impl Draw<'_> {
     /// A quiet secondary control. Pressed: a soft inner shadow, as if the
     /// surface gave a little under the finger.
     fn button(&self, text: &str, b: &Rect, hover: bool, pressed: bool, p: &Palette) {
+        self.button_face(b, hover, pressed, false, p);
+        self.label(text, &self.text.body_center, b, p.text, 1.0);
+    }
+
+    /// A button's fill and border. Selected: the celadon wash and edge.
+    fn button_face(&self, b: &Rect, hover: bool, pressed: bool, selected: bool, p: &Palette) {
         let fill = if hover { p.line } else { p.surface };
         self.fill(b, shape::RADIUS_CONTROL, fill, 1.0);
+        if selected {
+            self.fill(b, shape::RADIUS_CONTROL, p.accent, effects::HOVER_FILL);
+        }
         if pressed {
             for (k, alpha) in [(1.0, 0.35), (2.0, 0.2), (3.0, 0.1)] {
                 let inner = Rect::new(b.x + 1.0, b.y + k, b.w - 2.0, 1.0);
                 self.fill(&inner, 0.0, p.ground, alpha);
             }
         }
-        self.border(b, shape::RADIUS_CONTROL, p.line, 1.0, shape::BORDER);
-        self.label(text, &self.text.body_center, b, p.text, 1.0);
+        let edge = if selected { p.accent } else { p.line };
+        self.border(b, shape::RADIUS_CONTROL, edge, 1.0, shape::BORDER);
+    }
+
+    /// The keyboard focus ring: a celadon line just outside the control.
+    fn focus_ring(&self, b: &Rect, p: &Palette) {
+        let r = Rect::new(b.x - 3.0, b.y - 3.0, b.w + 6.0, b.h + 6.0);
+        self.border(
+            &r,
+            shape::RADIUS_CONTROL + 3.0,
+            p.accent,
+            1.0,
+            shape::ICON_STROKE,
+        );
     }
 
     /// The glaze wheel, drawn in its own coordinates around its centre.
@@ -826,10 +881,11 @@ impl Draw<'_> {
             for (i, item) in w.items.iter().enumerate() {
                 let (lx, ly) = wheel::label_point(i, n);
                 self.icon(item.icon, lx - 12.0, ly - 22.0, 1.0, p.text, 1.0);
-                let r = Rect::new(lx - 40.0, ly + 4.0, 80.0, 16.0);
                 if item.is_code {
+                    let r = Rect::new(lx - 40.0, ly + 4.0, 80.0, 16.0);
                     self.code(&item.label, &r, p.text, 1.0)?;
                 } else {
+                    let r = Rect::new(lx - 52.0, ly + 4.0, 104.0, 16.0);
                     self.label(&item.label, &self.text.caption_center, &r, p.text, 1.0);
                 }
             }
@@ -949,6 +1005,103 @@ impl Draw<'_> {
         }
         self.button("Close", &d.close, v.dialog_close_hover, false, p);
         Ok(())
+    }
+
+    /// The settings panel, over a scrim. Changes apply as they are made,
+    /// so there is only Close.
+    fn settings(&self, w: f32, h: f32, sv: &SettingsView, p: &Palette) -> Result<()> {
+        let l = sv.layout;
+        self.fill(&Rect::new(0.0, 0.0, w, h), 0.0, p.ground, 0.7);
+        self.fill(&l.panel, shape::RADIUS_PANEL, p.surface, 1.0);
+        self.border(&l.panel, shape::RADIUS_PANEL, p.line, 1.0, shape::BORDER);
+        self.label("Settings", &self.text.display, &l.title, p.text, 1.0);
+
+        for (i, row) in l.rows.iter().enumerate() {
+            self.label(
+                row.label,
+                &self.text.body,
+                &row.label_rect,
+                p.text_muted,
+                1.0,
+            );
+            let Some(r) = row.value else { continue };
+            let (text, muted) = match i {
+                0 => sv.output,
+                3 => sv.engines[0],
+                _ => sv.engines[1],
+            };
+            let c = if muted { p.text_muted } else { p.text };
+            self.label(text, &self.text.body, &r, c, 1.0);
+        }
+
+        for (k, (control, r)) in l.controls.iter().enumerate() {
+            let hover = sv.hover == Some(k);
+            match control {
+                Control::OutputChoose | Control::EngineChoose(_) => {
+                    self.button("Choose", r, hover, false, p)
+                }
+                Control::OutputReset | Control::EngineReset(_) => {
+                    self.button("Reset", r, hover, false, p)
+                }
+                Control::Close => self.button("Close", r, hover, false, p),
+                Control::Theme(t) => {
+                    // One segmented control: fills here, one shared
+                    // border below, so neighbours never double up.
+                    let fill = if hover { p.line } else { p.surface };
+                    self.fill(r, shape::RADIUS_CONTROL, fill, 1.0);
+                    if *t == sv.theme {
+                        self.fill(r, shape::RADIUS_CONTROL, p.accent, effects::HOVER_FILL);
+                    }
+                    self.label(t.label(), &self.text.body_center, r, p.text, 1.0);
+                }
+                Control::Key(wheel) => {
+                    self.button_face(r, hover, false, false, p);
+                    let name = Rect::new(r.x + 12.0, r.y, r.w - 12.0, r.h);
+                    self.label(wheel.title(), &self.text.body, &name, p.text, 1.0);
+                    let code = sv.keys.key_for(*wheel).code();
+                    let (_, cw) = self.text.code_layout(code, r.w, r.h)?;
+                    let cr = Rect::new(r.right() - 12.0 - cw.ceil(), r.y, cw.ceil(), r.h);
+                    self.code(code, &cr, p.text_muted, 1.0)?;
+                }
+            }
+            if sv.focus == Some(k) {
+                self.focus_ring(r, p);
+            }
+        }
+        self.segment_edges(l, sv, p);
+        Ok(())
+    }
+
+    /// The theme control's outline: one border round the group, hairline
+    /// dividers, and the chosen segment's celadon edge on top.
+    fn segment_edges(&self, l: &SettingsLayout, sv: &SettingsView, p: &Palette) {
+        let segs: Vec<(ThemeChoice, Rect)> = l
+            .controls
+            .iter()
+            .filter_map(|(c, r)| match c {
+                Control::Theme(t) => Some((*t, *r)),
+                _ => None,
+            })
+            .collect();
+        let (Some(first), Some(last)) = (segs.first(), segs.last()) else {
+            return;
+        };
+        let group = Rect::new(first.1.x, first.1.y, last.1.right() - first.1.x, first.1.h);
+        self.border(&group, shape::RADIUS_CONTROL, p.line, 1.0, shape::BORDER);
+        for (_, r) in &segs[1..] {
+            unsafe {
+                self.rt.DrawLine(
+                    pt(r.x + 0.5, r.y + 1.0),
+                    pt(r.x + 0.5, r.bottom() - 1.0),
+                    self.paint(p.line, 1.0),
+                    shape::BORDER,
+                    None,
+                );
+            }
+        }
+        if let Some((_, r)) = segs.iter().find(|(t, _)| *t == sv.theme) {
+            self.border(r, shape::RADIUS_CONTROL, p.accent, 1.0, shape::BORDER);
+        }
     }
 }
 

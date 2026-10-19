@@ -64,3 +64,28 @@ window between them as well.
 ## App icon
 
 - [ ] Explorer, the taskbar and Alt+Tab show the celadon vessel on a soot tile at 16, 32, 48 and 256 px.
+
+## File actions
+
+- [ ] Alt while dragging (or Alt+Enter on a row) opens the Actions wheel: Copy path, Move, Open in Terminal.
+- [ ] Copy path puts the full path on the clipboard, one per line for several files, and says "Copied the path.".
+- [ ] Move asks for a folder, moves the file without replacing anything there ("photo (1).png" if the name is taken), and the row says "Moved to" the folder.
+- [ ] Moving across drives works, and a file a job is using can't be moved.
+- [ ] Open in Terminal opens Windows Terminal in the file's folder. Without Terminal installed, the footer says so plainly.
+- [ ] Pressing and releasing Alt alone doesn't make the next key disappear, and Alt+Enter doesn't beep.
+
+## Settings
+
+- [ ] The dial in the header and Ctrl+, open Settings over a scrim. Escape, Close or a click on the scrim closes it.
+- [ ] Tab and Shift+Tab move a celadon focus ring through every control; Enter or Space presses.
+- [ ] Output folder: Choose picks a folder and results go there; Reset goes back to "Next to each file".
+- [ ] Wheel keys: pressing a key button moves that wheel to the next key and swaps with the wheel that had it. Dragging follows the new keys at once.
+- [ ] Engines shows "Found on PATH", "Not installed" or the chosen path for FFmpeg and Pandoc. Choose takes an .exe; jobs use it straight away.
+- [ ] Every change is saved to %APPDATA%\Kiln\settings.toml. A broken file starts Kiln with defaults and a footer line saying why.
+
+## Themes
+
+- [ ] With Theme on System, Kiln follows Settings > Personalization > Colors > app mode, and switches live when it changes.
+- [ ] Dark and Light override it. The title bar follows the theme.
+- [ ] Light mode: bone ground (#F3EFE7), soot text, celadon accent, brick errors. Check the list, every wheel, a failed row, the details dialog and Settings.
+- [ ] Nothing in either theme uses pure black, pure white or orange.
