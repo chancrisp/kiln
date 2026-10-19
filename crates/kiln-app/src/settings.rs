@@ -8,12 +8,12 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use kiln_core::{Engines, Format, Options};
+use kiln_core::{Engines, Format, Habits, Options};
 
 use crate::quality::QualityDefaults;
 use crate::wheel::WheelKind;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     /// Where results are written. Unset writes each result next to its
@@ -21,9 +21,33 @@ pub struct Settings {
     #[serde(skip_serializing_if = "Option::is_none", with = "opt_path")]
     pub output_folder: Option<PathBuf>,
     pub theme: ThemeChoice,
+    /// Whether Kiln looks at dropped files and suggests what to do.
+    #[serde(default = "yes")]
+    pub suggestions: bool,
     pub keys: KeyMap,
     pub quality: QualityDefaults,
     pub engines: EnginePaths,
+    /// Conversions picked, counted per source type on this PC.
+    #[serde(default, skip_serializing_if = "Habits::is_empty")]
+    pub habits: Habits,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            output_folder: None,
+            theme: ThemeChoice::default(),
+            suggestions: true,
+            keys: KeyMap::default(),
+            quality: QualityDefaults::default(),
+            engines: EnginePaths::default(),
+            habits: Habits::default(),
+        }
+    }
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -311,6 +335,7 @@ const HEADER: &str = "\
 #
 # output_folder = 'C:\\Users\\you\\Converted'   # unset: next to each file
 # theme = 'system'                            # system, dark or light
+# suggestions = true
 # [keys]                                      # shift, ctrl or alt, one each
 # [quality]                                   # video and images: small, high
 #                                             # or best; resolution, fps and
@@ -320,6 +345,7 @@ const HEADER: &str = "\
 # [engines]                                   # full paths to ffmpeg.exe, pandoc.exe,
 #                                             # soffice.exe (libreoffice) and
 #                                             # ebook-convert.exe (calibre)
+# [habits]                                    # picks per source type, counted on this PC
 
 ";
 
@@ -649,6 +675,58 @@ mod tests {
         assert!(engine_status(&s, Engine::Ffmpeg, &path_var)
             .describe()
             .starts_with("Not found at"));
+    }
+
+    #[test]
+    fn habits_and_suggestions_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        let mut s = Settings {
+            suggestions: false,
+            ..Settings::default()
+        };
+        for _ in 0..3 {
+            s.habits.record("heic", "png");
+        }
+        s.save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("suggestions = false"), "{text}");
+        assert!(text.contains("[habits]"), "{text}");
+        assert_eq!(Settings::load(&path), (s, None));
+    }
+
+    #[test]
+    fn missing_suggestions_means_on() {
+        let s = Settings::parse("theme = 'dark'").unwrap();
+        assert!(s.suggestions);
+        assert!(s.habits.is_empty());
+        assert!(Settings::default().suggestions);
+        // No picks yet: no [habits] table is written.
+        assert!(!Settings::default().to_toml().contains(
+            "
+[habits]"
+        ));
+    }
+
+    #[test]
+    fn a_bad_habit_is_a_settings_error() {
+        let e = Settings::parse(
+            "[habits]
+heic = 3",
+        )
+        .unwrap_err();
+        assert!(e.0.starts_with("settings.toml couldn't be read"), "{e}");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        std::fs::write(
+            &path,
+            "[habits]
+heic = 3",
+        )
+        .unwrap();
+        let (s, e) = Settings::load(&path);
+        assert_eq!(s, Settings::default());
+        assert!(matches!(e, Some(SettingsError(_))));
     }
 
     #[test]

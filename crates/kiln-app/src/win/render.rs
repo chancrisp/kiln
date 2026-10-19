@@ -111,6 +111,10 @@ pub struct SettingsView<'a> {
     /// The output folder line, and whether it is the default (muted).
     pub output: (&'a str, bool),
     pub theme: ThemeChoice,
+    /// Whether suggestions are on.
+    pub suggestions: bool,
+    /// Whether any picks are counted; Forget picks is disabled without.
+    pub has_habits: bool,
     pub keys: KeyMap,
     /// Each engine's line, and whether it is muted.
     pub engines: [(&'a str, bool); 4],
@@ -1381,6 +1385,23 @@ impl Draw<'_> {
                     self.segment(t.label(), r, hover, pressed, chosen, p);
                     Some(chosen)
                 }
+                Control::Suggestions(on) => {
+                    let chosen = *on == sv.suggestions;
+                    let label = if *on { "On" } else { "Off" };
+                    self.segment(label, r, hover, pressed, chosen, p);
+                    Some(chosen)
+                }
+                Control::ForgetPicks if sv.has_habits => {
+                    self.button("Forget picks", r, hover, pressed, p);
+                    None
+                }
+                Control::ForgetPicks => {
+                    // Disabled: the label goes muted, with no hover or press.
+                    self.button_face(r, false, false, false, p);
+                    let text = "Forget picks";
+                    self.label(text, &self.text.body_center, r, p.text_muted, 1.0);
+                    None
+                }
                 Control::Preset(s, preset) => {
                     let chosen = sv.quality.get(*s) == Value::Preset(*preset);
                     self.segment(preset.label(), r, hover, pressed, chosen, p);
@@ -1508,7 +1529,8 @@ impl Band {
 /// Whether two controls are segments of one group.
 fn same_group(a: Control, b: Control) -> bool {
     match (a, b) {
-        (Control::Theme(_), Control::Theme(_)) => true,
+        (Control::Theme(_), Control::Theme(_))
+        | (Control::Suggestions(_), Control::Suggestions(_)) => true,
         (Control::Preset(x, _), Control::Preset(y, _)) => x == y,
         _ => false,
     }

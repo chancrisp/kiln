@@ -227,6 +227,10 @@ pub enum Control {
     OutputReset,
     Theme(ThemeChoice),
     Key(WheelKind),
+    /// The On (true) or Off (false) segment of the Suggestions control.
+    Suggestions(bool),
+    /// Clears the picks counted for suggestions.
+    ForgetPicks,
     /// One segment of a quality preset control.
     Preset(DefaultSetting, Preset),
     /// A value that steps through its choices: "1080p", "30 fps".
@@ -368,6 +372,18 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
                 ));
             }
             rows.push(row("Wheel keys", 2, None));
+
+            for (k, on) in [true, false].into_iter().enumerate() {
+                controls.push((
+                    Control::Suggestions(on),
+                    ctl(x0 + k as f32 * SEGMENT_WIDTH, 3, SEGMENT_WIDTH),
+                ));
+            }
+            controls.push((
+                Control::ForgetPicks,
+                ctl(x0 + 2.0 * SEGMENT_WIDTH + 8.0, 3, BUTTON_WIDTH),
+            ));
+            rows.push(row("Suggestions", 3, None));
         }
         SettingsTab::Quality => {
             // Every stepper has its own label: a second one on a line
@@ -739,9 +755,39 @@ mod tests {
     #[test]
     fn settings_pages_hold_their_rows() {
         let general = page(SettingsTab::General);
-        assert_eq!(general.rows.len(), 3);
-        assert_eq!(general.controls.len(), 3 + 1 + 3 + 3 + 1 + 1);
+        let labels: Vec<_> = general.rows.iter().map(|r| r.label).collect();
+        assert_eq!(
+            labels,
+            ["Output folder", "Theme", "Wheel keys", "Suggestions"]
+        );
+        assert_eq!(general.controls.len(), 3 + 1 + 3 + 3 + 2 + 1 + 1 + 1);
         assert_eq!(general.controls[0].0, Control::Tab(SettingsTab::General));
+        let keys = general
+            .controls
+            .iter()
+            .rposition(|(c, _)| matches!(c, Control::Key(_)))
+            .unwrap();
+        let after: Vec<_> = general.controls[keys + 1..keys + 4]
+            .iter()
+            .map(|(c, _)| *c)
+            .collect();
+        assert_eq!(
+            after,
+            [
+                Control::Suggestions(true),
+                Control::Suggestions(false),
+                Control::ForgetPicks
+            ]
+        );
+        for (c, r) in &general.controls {
+            let p = general.panel;
+            assert!(
+                r.x >= p.x && r.right() <= p.right() && r.y >= p.y && r.bottom() <= p.bottom(),
+                "{c:?} {r:?}"
+            );
+        }
+        // The fourth row fits the panel height every page keeps.
+        assert_eq!(general.panel, page(SettingsTab::Quality).panel);
         let n = general.controls.len();
         assert_eq!(general.controls[n - 2].0, Control::CheckUpdates);
         assert_eq!(general.controls[n - 1].0, Control::Close);

@@ -7,7 +7,7 @@ mod system;
 mod text;
 mod updates;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -825,6 +825,7 @@ impl App {
         if paths.is_empty() {
             return;
         }
+        self.record_habit(&action, &paths);
         if let Action::File(a) = action {
             self.file_action(a, paths);
             return;
@@ -891,6 +892,26 @@ impl App {
         let n = paths.len();
         self.status = format!("Working on {n} file{}.", if n == 1 { "" } else { "s" });
         self.animate();
+    }
+
+    /// Count a conversion's picks, once per source type, and save them.
+    /// Tools and file actions are not counted.
+    fn record_habit(&mut self, action: &Action, paths: &[PathBuf]) {
+        let reg = self.kiln.registry();
+        // Aliases count as their format, as the suggestions read them:
+        // a .jpeg file is a jpg.
+        let canon = |e: String| reg.format(&e).map_or(e, |f| f.ext.clone());
+        let picks: BTreeSet<(String, String)> = habit_picks(action, paths)
+            .into_iter()
+            .map(|(from, to)| (canon(from), canon(to)))
+            .collect();
+        if picks.is_empty() {
+            return;
+        }
+        for (from, to) in &picks {
+            self.settings.habits.record(from, to);
+        }
+        self.save_settings();
     }
 
     fn on_job(&mut self, ev: JobEvent) {
@@ -1198,6 +1219,22 @@ impl App {
                 self.apply_theme();
             }
             Control::Key(w) => self.settings.keys.cycle(w),
+            Control::Suggestions(on) => {
+                if self.settings.suggestions == on {
+                    return;
+                }
+                self.settings.suggestions = on;
+                self.save_settings();
+                self.suggestions_changed();
+                self.invalidate();
+                return;
+            }
+            Control::ForgetPicks => {
+                if self.settings.habits.is_empty() {
+                    return;
+                }
+                self.settings.habits.clear();
+            }
             Control::EngineChoose(e) => {
                 let title = format!("Choose {}.exe", e.program());
                 match system::pick_program(hwnd, &title) {
@@ -1223,9 +1260,13 @@ impl App {
         let find = |c: Control| l.controls.iter().position(|(k, _)| *k == c);
         let refocus = had_focus.then(|| {
             find(c)
+                .filter(|_| c != Control::ForgetPicks)
                 .or_else(|| match c {
                     Control::OutputReset => find(Control::OutputChoose),
                     Control::EngineReset(e) => find(Control::EngineChoose(e)),
+                    // Forget picks is now disabled: focus goes to the
+                    // chosen On or Off segment.
+                    Control::ForgetPicks => find(Control::Suggestions(self.settings.suggestions)),
                     _ => None,
                 })
                 .unwrap_or(0)
@@ -1239,11 +1280,23 @@ impl App {
         self.invalidate();
     }
 
+    /// Suggestions were turned on or off; the setting is already saved.
+    /// Task 7 fills this in: Off cancels and forgets inspects.
+    fn suggestions_changed(&mut self) {}
+
+    /// Whether a settings control can be used now. Forget picks is
+    /// disabled while there are no picks.
+    fn control_enabled(&self, c: Control) -> bool {
+        c != Control::ForgetPicks || !self.settings.habits.is_empty()
+    }
+
+    /// The enabled control under the pointer, so a disabled one shows no
+    /// hover or press and a click on it does nothing.
     fn settings_hit(&self, x: f32, y: f32) -> Option<usize> {
         self.settings_layout()
             .controls
             .iter()
-            .position(|(_, r)| r.contains(x, y))
+            .position(|(c, r)| r.contains(x, y) && self.control_enabled(*c))
     }
 
     /// Tab, Shift+Tab and the up and down arrows move focus. Left and
@@ -1252,6 +1305,11 @@ impl App {
     fn settings_key(&mut self, key: VIRTUAL_KEY, shift: bool) {
         let l = self.settings_layout();
         let n = l.controls.len();
+        let enabled: Vec<bool> = l
+            .controls
+            .iter()
+            .map(|(c, _)| self.control_enabled(*c))
+            .collect();
         let Some(ui) = &mut self.settings_ui else {
             return;
         };
@@ -1276,7 +1334,15 @@ impl App {
             }
             VK_TAB | VK_DOWN | VK_RIGHT | VK_UP | VK_LEFT => {
                 let back = (key == VK_TAB && shift) || key == VK_UP || key == VK_LEFT;
-                ui.focus = wheel::step(ui.focus, if back { -1 } else { 1 }, n);
+                // Disabled controls are skipped.
+                let mut f = ui.focus;
+                for _ in 0..n {
+                    f = wheel::step(f, if back { -1 } else { 1 }, n);
+                    if f.is_some_and(|i| enabled[i]) {
+                        break;
+                    }
+                }
+                ui.focus = f;
             }
             VK_RETURN | VK_SPACE => {
                 if let Some(c) = focused {
@@ -1714,6 +1780,8 @@ impl App {
                 quality: &self.settings.quality,
                 output: (ui.output_line.0.as_str(), ui.output_line.1),
                 theme: self.settings.theme,
+                suggestions: self.settings.suggestions,
+                has_habits: !self.settings.habits.is_empty(),
                 keys: self.settings.keys,
                 engines: ui.engine_lines.each_ref().map(|(s, m)| (s.as_str(), *m)),
                 hover: ui.hover,
@@ -1739,18 +1807,40 @@ fn step_delta(r: &layout::Rect, x: f32) -> isize {
     }
 }
 
+/// The picks a conversion of `paths` counts: one (source type, target)
+/// pair per source type, by lower-case extension. Tools and file actions
+/// count nothing.
+fn habit_picks(action: &Action, paths: &[PathBuf]) -> Vec<(String, String)> {
+    let Action::Convert(to) = action else {
+        return Vec::new();
+    };
+    let to = to.trim_start_matches('.').to_ascii_lowercase();
+    let from: BTreeSet<String> = paths
+        .iter()
+        .filter_map(|p| p.extension()?.to_str())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    from.into_iter().map(|f| (f, to.clone())).collect()
+}
+
 /// Controls whose value the left and right arrows change.
 fn segmented_or_step(c: Control) -> bool {
     matches!(
         c,
-        Control::Tab(_) | Control::Theme(_) | Control::Preset(..) | Control::Step(_)
+        Control::Tab(_)
+            | Control::Theme(_)
+            | Control::Suggestions(_)
+            | Control::Preset(..)
+            | Control::Step(_)
     )
 }
 
 /// Whether two controls are segments of one group.
 fn same_group(a: Control, b: Control) -> bool {
     match (a, b) {
-        (Control::Tab(_), Control::Tab(_)) | (Control::Theme(_), Control::Theme(_)) => true,
+        (Control::Tab(_), Control::Tab(_))
+        | (Control::Theme(_), Control::Theme(_))
+        | (Control::Suggestions(_), Control::Suggestions(_)) => true,
         (Control::Preset(x, _), Control::Preset(y, _)) => x == y,
         _ => false,
     }
@@ -2238,5 +2328,27 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             Some(LRESULT(0))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_conversion_counts_once_per_source_type() {
+        let paths: Vec<PathBuf> = ["a.png", "b.png", "c.PNG", "d.jpg"]
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+        assert_eq!(
+            habit_picks(&Action::Convert("webp".into()), &paths),
+            [
+                ("jpg".to_owned(), "webp".to_owned()),
+                ("png".to_owned(), "webp".to_owned())
+            ]
+        );
+        assert_eq!(habit_picks(&Action::Tool(Tool::Merge), &paths), []);
+        assert_eq!(habit_picks(&Action::File(FileAction::ALL[0]), &paths), []);
     }
 }
