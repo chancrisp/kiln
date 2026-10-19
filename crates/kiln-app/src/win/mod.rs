@@ -2456,8 +2456,8 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             Some(LRESULT(0))
         }
         WM_DESTROY => {
-            // Stop the inspect thread with the window: nothing is looked
-            // at or reported after this.
+            // Stop the inspect thread with the window, without waiting
+            // for a decode under way: nothing is reported after this.
             app.inspector.shutdown();
             unsafe {
                 let _ = RevokeDragDrop(hwnd);

@@ -105,8 +105,10 @@ impl Inspector {
         }
     }
 
-    /// Cancel everything and wait for the thread to finish. Safe to call
-    /// more than once.
+    /// Cancel everything and let the thread go without waiting for it: a
+    /// decode under way may not look at its token for a while, and the
+    /// window shouldn't freeze on close. Once this returns, `done` is
+    /// never called again. Safe to call more than once.
     pub fn shutdown(&mut self) {
         {
             let mut s = self.shared.lock();
@@ -117,9 +119,8 @@ impl Inspector {
             }
         }
         self.shared.wake.notify_all();
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        // Detached: it ends on its own once its current run returns.
+        drop(self.thread.take());
     }
 }
 
@@ -174,7 +175,7 @@ fn below_normal() {
 mod tests {
     use super::*;
     use std::sync::mpsc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     /// An inspector whose `run` waits for a go on `release` (one per file,
     /// in order) and whose `done` reports to the receiver.
@@ -221,7 +222,11 @@ mod tests {
         assert_eq!(reported.recv_timeout(WAIT).unwrap(), PathBuf::from("a"));
         assert_eq!(reported.recv_timeout(WAIT).unwrap(), PathBuf::from("c"));
         drop(inspector);
-        assert!(reported.try_recv().is_err());
+        drop(release);
+        assert_eq!(
+            reported.recv_timeout(WAIT),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        );
         let seen: Vec<PathBuf> = started.try_iter().collect();
         assert_eq!(seen, [PathBuf::from("c")]);
     }
@@ -237,7 +242,11 @@ mod tests {
         let _ = release.send(());
         assert_eq!(reported.recv_timeout(WAIT).unwrap(), PathBuf::from("b"));
         drop(inspector);
-        assert!(reported.try_recv().is_err());
+        drop(release);
+        assert_eq!(
+            reported.recv_timeout(WAIT),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        );
     }
 
     #[test]
@@ -255,23 +264,36 @@ mod tests {
         let _ = release.send(());
         assert_eq!(reported.recv_timeout(WAIT).unwrap(), PathBuf::from("d"));
         drop(inspector);
-        assert!(reported.try_recv().is_err());
+        drop(release);
+        assert_eq!(
+            reported.recv_timeout(WAIT),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        );
         assert!(started.try_recv().is_err());
     }
 
     #[test]
-    fn dropping_stops_the_thread() {
+    fn shutdown_does_not_wait_for_a_run() {
         let (mut inspector, release, started, reported) = gated();
         inspector.queue("a".into(), Options::default());
-        assert_eq!(started.recv_timeout(WAIT).unwrap(), PathBuf::from("a"));
-        // The run in progress finishes once let go; the drop waits for it.
-        let _ = release.send(());
-        inspector.shutdown();
         inspector.queue("b".into(), Options::default());
+        assert_eq!(started.recv_timeout(WAIT).unwrap(), PathBuf::from("a"));
+        // "a" is blocked in `run`; shutting down doesn't wait for it.
+        let t = Instant::now();
+        inspector.shutdown();
         drop(inspector);
+        assert!(
+            t.elapsed() < Duration::from_millis(100),
+            "{:?}",
+            t.elapsed()
+        );
+        // Let "a" finish: the thread ends without reporting or starting "b".
+        let _ = release.send(());
+        drop(release);
+        assert_eq!(
+            reported.recv_timeout(WAIT),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        );
         assert!(started.try_recv().is_err());
-        // "a" may or may not have reported before the stop; nothing after.
-        let after: Vec<PathBuf> = reported.try_iter().collect();
-        assert!(after.iter().all(|p| p == Path::new("a")), "{after:?}");
     }
 }
