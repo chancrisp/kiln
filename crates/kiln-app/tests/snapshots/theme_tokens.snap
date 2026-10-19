@@ -1,0 +1,63 @@
+[tokens]
+kiln-soot = #1C1B19
+kiln-clay = #2A2825
+kiln-ash = #3B3834
+kiln-bone = #EDE6DA
+kiln-stone = #9A8F80
+kiln-celadon = #7FB5A0
+kiln-brick = #B5503F
+kiln-bone-ground = #F3EFE7
+kiln-slip = #E8E2D7
+kiln-bisque = #D6CEC1
+kiln-umber = #6B6257
+
+[palette.dark]
+ground = #1C1B19
+surface = #2A2825
+line = #3B3834
+text = #EDE6DA
+text_muted = #9A8F80
+accent = #7FB5A0
+on_accent = #1C1B19
+crack = #B5503F
+grain_light = #EDE6DA
+grain_dark = #1C1B19
+
+[palette.light]
+ground = #F3EFE7
+surface = #E8E2D7
+line = #D6CEC1
+text = #1C1B19
+text_muted = #6B6257
+accent = #7FB5A0
+on_accent = #1C1B19
+crack = #B5503F
+grain_light = #F3EFE7
+grain_dark = #6B6257
+
+[type]
+scale = [12.0, 14.0, 16.0, 22.0, 32.0]
+code_tracking_em = 0.06
+display = "Fraunces 72pt SuperSoft SemiBold"
+ui = ["Segoe UI Variable Text", "Segoe UI"]
+mono = ["Cascadia Mono", "Consolas"]
+
+[shape]
+grid = 4
+panel_padding = 16
+radius_control = 6
+radius_panel = 12
+border = 1
+icon_grid = 24
+icon_stroke = 1.5
+
+[motion]
+quick_ms = 120
+settle_ms = 180
+confirm_ms = 200
+
+[effects]
+hover_fill = 0.18
+drop_wash = 0.06
+grain_opacity = 0.03
+grain_tile = 128

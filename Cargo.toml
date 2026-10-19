@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/kiln-core", "crates/kiln-cli"]
+members = ["crates/kiln-core", "crates/kiln-cli", "crates/kiln-app"]
 
 [workspace.package]
 version = "0.1.0"

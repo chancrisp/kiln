@@ -1,0 +1,193 @@
+//! The OLE drop target. It runs on the UI thread and forwards each event
+//! to the window procedure with SendMessage, so all state stays in `App`.
+
+use std::path::PathBuf;
+
+use windows::core::{implement, Ref, Result};
+use windows::Win32::Foundation::{HWND, LPARAM, POINTL, WPARAM};
+use windows::Win32::System::Com::{IDataObject, DVASPECT_CONTENT, FORMATETC, TYMED_HGLOBAL};
+use windows::Win32::System::Ole::{
+    IDropTarget, IDropTarget_Impl, ReleaseStgMedium, CF_HDROP, DROPEFFECT, DROPEFFECT_COPY,
+    DROPEFFECT_NONE,
+};
+use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
+use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
+use windows::Win32::UI::WindowsAndMessaging::{SendMessageW, WM_APP};
+
+pub const WM_KILN_DRAG: u32 = WM_APP + 1;
+pub const WM_KILN_DROP: u32 = WM_APP + 2;
+
+/// `WM_KILN_DRAG` wparam values.
+pub const DRAG_ENTER: usize = 1;
+pub const DRAG_OVER: usize = 2;
+pub const DRAG_LEAVE: usize = 3;
+
+/// Sent with `WM_KILN_DRAG` and `WM_KILN_DROP`; lparam points at it for
+/// the duration of the SendMessage call.
+pub struct DragEvent {
+    /// Screen coordinates, physical pixels.
+    pub x: i32,
+    pub y: i32,
+    pub paths: Vec<PathBuf>,
+}
+
+#[implement(IDropTarget)]
+pub struct DropTarget {
+    hwnd: HWND,
+    has_files: std::cell::Cell<bool>,
+}
+
+impl DropTarget {
+    pub fn new(hwnd: HWND) -> Self {
+        Self {
+            hwnd,
+            has_files: std::cell::Cell::new(false),
+        }
+    }
+
+    fn send(&self, msg: u32, kind: usize, ev: &DragEvent) {
+        unsafe {
+            SendMessageW(
+                self.hwnd,
+                msg,
+                Some(WPARAM(kind)),
+                Some(LPARAM(ev as *const DragEvent as isize)),
+            );
+        }
+    }
+}
+
+fn hdrop_format() -> FORMATETC {
+    FORMATETC {
+        cfFormat: CF_HDROP.0,
+        ptd: std::ptr::null_mut(),
+        dwAspect: DVASPECT_CONTENT.0,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL.0 as u32,
+    }
+}
+
+fn offers_files(data: &IDataObject) -> bool {
+    unsafe { data.QueryGetData(&hdrop_format()).is_ok() }
+}
+
+/// The file paths in a drag, read from its CF_HDROP payload.
+fn dropped_paths(data: &IDataObject) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    unsafe {
+        let Ok(mut medium) = data.GetData(&hdrop_format()) else {
+            return out;
+        };
+        let hdrop = HDROP(medium.u.hGlobal.0);
+        let count = DragQueryFileW(hdrop, u32::MAX, None);
+        for i in 0..count {
+            let len = DragQueryFileW(hdrop, i, None) as usize;
+            let mut buf = vec![0u16; len + 1];
+            let got = DragQueryFileW(hdrop, i, Some(&mut buf)) as usize;
+            use std::os::windows::ffi::OsStringExt;
+            out.push(PathBuf::from(std::ffi::OsString::from_wide(&buf[..got])));
+        }
+        ReleaseStgMedium(&mut medium);
+    }
+    out
+}
+
+fn set_effect(effect: *mut DROPEFFECT, value: DROPEFFECT) {
+    if !effect.is_null() {
+        unsafe { *effect = value };
+    }
+}
+
+impl IDropTarget_Impl for DropTarget_Impl {
+    fn DragEnter(
+        &self,
+        data: Ref<IDataObject>,
+        _keys: MODIFIERKEYS_FLAGS,
+        pt: &POINTL,
+        effect: *mut DROPEFFECT,
+    ) -> Result<()> {
+        let files = data.as_ref().is_some_and(offers_files);
+        self.has_files.set(files);
+        set_effect(
+            effect,
+            if files {
+                DROPEFFECT_COPY
+            } else {
+                DROPEFFECT_NONE
+            },
+        );
+        if files {
+            let ev = DragEvent {
+                x: pt.x,
+                y: pt.y,
+                paths: vec![],
+            };
+            self.send(WM_KILN_DRAG, DRAG_ENTER, &ev);
+        }
+        Ok(())
+    }
+
+    fn DragOver(
+        &self,
+        _keys: MODIFIERKEYS_FLAGS,
+        pt: &POINTL,
+        effect: *mut DROPEFFECT,
+    ) -> Result<()> {
+        let files = self.has_files.get();
+        set_effect(
+            effect,
+            if files {
+                DROPEFFECT_COPY
+            } else {
+                DROPEFFECT_NONE
+            },
+        );
+        if files {
+            let ev = DragEvent {
+                x: pt.x,
+                y: pt.y,
+                paths: vec![],
+            };
+            self.send(WM_KILN_DRAG, DRAG_OVER, &ev);
+        }
+        Ok(())
+    }
+
+    fn DragLeave(&self) -> Result<()> {
+        if self.has_files.replace(false) {
+            let ev = DragEvent {
+                x: 0,
+                y: 0,
+                paths: vec![],
+            };
+            self.send(WM_KILN_DRAG, DRAG_LEAVE, &ev);
+        }
+        Ok(())
+    }
+
+    fn Drop(
+        &self,
+        data: Ref<IDataObject>,
+        _keys: MODIFIERKEYS_FLAGS,
+        pt: &POINTL,
+        effect: *mut DROPEFFECT,
+    ) -> Result<()> {
+        self.has_files.set(false);
+        let paths = data.as_ref().map(dropped_paths).unwrap_or_default();
+        set_effect(
+            effect,
+            if paths.is_empty() {
+                DROPEFFECT_NONE
+            } else {
+                DROPEFFECT_COPY
+            },
+        );
+        let ev = DragEvent {
+            x: pt.x,
+            y: pt.y,
+            paths,
+        };
+        self.send(WM_KILN_DROP, 0, &ev);
+        Ok(())
+    }
+}
