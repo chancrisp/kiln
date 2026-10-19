@@ -1,0 +1,39 @@
+name: Bug report
+description: Something in Kiln doesn't work as it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what Kiln did instead.
+    validations:
+      required: true
+  - type: input
+    id: files
+    attributes:
+      label: File types involved
+      placeholder: "MP4 to WEBM, or Trim on a FLAC file"
+  - type: textarea
+    id: details
+    attributes:
+      label: Error details
+      description: If a row showed "Show details", paste what it said.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Kiln version
+      placeholder: "0.1.0, MSI or portable"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version and display scaling
+      placeholder: "Windows 11 24H2, 150%"
+  - type: input
+    id: engines
+    attributes:
+      label: Engine versions
+      description: Output of `ffmpeg -version` and `pandoc --version`, first line of each, if the problem involves them.

@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: fmt, clippy and tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The backend tests run the real engines. Chocolatey installs the
+      # upstream builds, which include the data Pandoc needs in --sandbox
+      # mode.
+      - name: Install FFmpeg and Pandoc
+        run: |
+          choco install ffmpeg pandoc --no-progress -y
+          "C:\Program Files\Pandoc" | Out-File -FilePath $env:GITHUB_PATH -Append
+          ffmpeg -version | Select-Object -First 1
+          pandoc --version | Select-Object -First 1
+
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace
+
+      - name: Release build size
+        shell: pwsh
+        run: |
+          cargo build --release -p kiln-app -p kiln-cli
+          $app = Get-Item target/release/kiln-app.exe
+          "kiln-app.exe is {0:N2} MB" -f ($app.Length / 1MB)
+          if ($app.Length -gt 10MB) { throw "kiln-app.exe is over the 10 MB budget." }

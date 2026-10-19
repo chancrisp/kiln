@@ -1,0 +1,63 @@
+<!--
+  Kiln's MSI, for WiX Toolset 5, installed as a dotnet global tool.
+  Built by packaging/package.ps1, which passes Version and StageDir.
+
+  A per-machine install into Program Files\Kiln, with a Start menu
+  shortcut and the folder added to PATH so `kiln` works in a terminal.
+  The UpgradeCode never changes: it is how newer versions find and
+  replace older ones.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Kiln"
+           Manufacturer="Kiln contributors"
+           Version="$(Version)"
+           UpgradeCode="b09becc6-3b59-4cbb-aa13-8b59ea7e77f6"
+           Scope="perMachine"
+           Compressed="yes">
+    <SummaryInformation Description="Kiln, a local file converter" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Kiln is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="KilnIcon" SourceFile="$(StageDir)\kiln.ico" />
+    <Property Id="ARPPRODUCTICON" Value="KilnIcon" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Kiln" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="KilnFiles" Directory="INSTALLFOLDER">
+      <Component>
+        <File Source="$(StageDir)\kiln-app.exe" KeyPath="yes">
+          <Shortcut Name="Kiln"
+                    Description="Convert files on this PC"
+                    Directory="ProgramMenuFolder"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Icon="KilnIcon"
+                    Advertise="yes" />
+        </File>
+      </Component>
+      <Component>
+        <File Source="$(StageDir)\kiln.exe" KeyPath="yes" />
+        <Environment Id="KilnPath" Name="PATH" Value="[INSTALLFOLDER]"
+                     Part="last" Action="set" System="yes" Permanent="no" />
+      </Component>
+      <Component>
+        <File Source="$(StageDir)\LICENSE" KeyPath="yes" />
+      </Component>
+      <Component>
+        <File Source="$(StageDir)\THIRD_PARTY_LICENSES" KeyPath="yes" />
+      </Component>
+      <Component>
+        <File Source="$(StageDir)\OFL.txt" KeyPath="yes" />
+      </Component>
+      <Component>
+        <File Source="$(StageDir)\README.md" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="Main">
+      <ComponentGroupRef Id="KilnFiles" />
+    </Feature>
+  </Package>
+</Wix>
