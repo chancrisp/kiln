@@ -170,6 +170,11 @@ struct WheelUi {
     pulse: Option<(Spot, Instant)>,
     /// Opened from the keyboard rather than during a drag.
     keyboard: bool,
+    /// What Kiln suggests on this wheel, once every file's facts are in.
+    suggestion: Option<Suggestion>,
+    /// When the suggestion arrived while the wheel was open, so its dot
+    /// fades in. `None` shows it fully.
+    dot_at: Option<Instant>,
 }
 
 impl WheelUi {
@@ -179,6 +184,13 @@ impl WheelUi {
 
     fn more_open(&self) -> bool {
         self.more.to > 0.5
+    }
+
+    /// Where the suggestion's dots go.
+    fn marks(&self) -> Vec<Spot> {
+        self.suggestion
+            .as_ref()
+            .map_or_else(Vec::new, |s| wheel::marks(&self.wheel, &s.action))
     }
 
     /// Point at `spot`. Pointing at More pours its ring; pointing at any
@@ -405,6 +417,7 @@ impl App {
                 || w.closing.is_some()
                 || w.pulse.is_some()
                 || w.more.running()
+                || w.dot_at.is_some_and(|t| within(t, FACTS_MS))
         });
         let sheet = self
             .sheet
@@ -537,6 +550,41 @@ impl App {
         if self.files.set_facts(&found.path, found.facts, suggestion) {
             self.animate();
         }
+        // An open wheel waiting on this file gets its suggestion now, and
+        // its dot fades in. Nothing else on it changes.
+        let waiting = self
+            .wheel
+            .as_ref()
+            .filter(|w| w.is_open() && w.suggestion.is_none() && w.paths.contains(&found.path))
+            .map(|w| (w.wheel.kind, w.paths.clone()));
+        let Some((kind, paths)) = waiting else {
+            return;
+        };
+        if let Some(s) = self.wheel_suggestion(kind, &paths) {
+            if let Some(w) = self.wheel.as_mut() {
+                w.suggestion = Some(s);
+                w.dot_at = Some(Instant::now());
+            }
+            self.animate();
+        }
+    }
+
+    /// What a wheel of `kind` suggests for `paths`, once every file's
+    /// facts are in: the conversion on Convert, the tool on Tools, nothing
+    /// on Actions.
+    fn wheel_suggestion(&self, kind: WheelKind, paths: &[PathBuf]) -> Option<Suggestion> {
+        if !self.settings.suggestions || kind == WheelKind::Actions {
+            return None;
+        }
+        let facts = self.files.facts_for(paths)?;
+        let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
+        let offered = self.kiln.offered(&refs, &self.settings.options());
+        let s = suggest(&facts, &offered, &self.settings.habits);
+        match kind {
+            WheelKind::Convert => s.convert,
+            WheelKind::Tools => s.tool,
+            WheelKind::Actions => None,
+        }
     }
 
     /// Habits changed: every row's suggestion follows from its facts,
@@ -586,7 +634,11 @@ impl App {
         };
         // Placed so the outer ring fits too, should More be opened.
         (wheel.center, wheel.scale) = wheel::place(at.0, at.1, w, h, wheel.extent());
-        let hover = (keyboard && wheel.segments() > 0).then_some(Spot::Inner(0));
+        let suggestion = self.wheel_suggestion(kind, &paths);
+        // From the keyboard it starts on the suggestion, or on More when
+        // the suggestion is in it.
+        let start = wheel::start_spot(&wheel, suggestion.as_ref().map(|s| &s.action));
+        let hover = (keyboard && wheel.segments() > 0).then_some(start);
         self.wheel = Some(WheelUi {
             wheel,
             paths,
@@ -596,6 +648,8 @@ impl App {
             closing: None,
             pulse: None,
             keyboard,
+            suggestion,
+            dot_at: None,
         });
         self.animate();
     }
@@ -622,17 +676,24 @@ impl App {
         }
     }
 
-    /// Choose `spot`: More pours its ring and moves in to its first
-    /// format; anything else pulses, and its job starts when the pulse
-    /// ends.
+    /// Choose `spot`: More pours its ring and moves in to the suggestion
+    /// when it is there, or else to its first format; anything else
+    /// pulses, and its job starts when the pulse ends.
     fn choose(&mut self, spot: Spot) {
         let Some(w) = self.wheel.as_mut().filter(|w| w.is_open()) else {
             return;
         };
         match spot {
             Spot::Inner(i) if w.wheel.is_more(i) => {
-                w.point(Some(spot));
-                w.hover = Some(Spot::Outer(0));
+                // The keyboard can start on More with its ring still shut,
+                // so pour it here rather than through `point`.
+                w.more.set(1.0, OPEN_MS);
+                let first = w
+                    .marks()
+                    .into_iter()
+                    .find(|m| matches!(m, Spot::Outer(_)))
+                    .unwrap_or(Spot::Outer(0));
+                w.hover = Some(first);
             }
             _ if w.wheel.item(spot).is_some() => {
                 w.pulse = Some((spot, Instant::now()));
@@ -667,9 +728,20 @@ impl App {
         (!knobs.is_empty()).then_some((from, to, knobs))
     }
 
-    /// The footer's hint while the wheel points at a format with options.
+    /// The footer's hint on the open wheel: the suggestion's reason while
+    /// nothing else is lit, or how to reach a lit format's options.
     fn wheel_hint(&self) -> Option<String> {
         let w = self.wheel.as_ref().filter(|w| w.is_open())?;
+        if let Some(s) = &w.suggestion {
+            let marks = w.marks();
+            if wheel::shows_suggestion(w.hover, &marks) {
+                // The label as the wheel shows it: the item itself, which
+                // is the last mark (its outer slot when it is in More).
+                if let Some(item) = marks.last().and_then(|&m| w.wheel.item(m)) {
+                    return Some(wheel::suggestion_footer(&item.label, &s.reason));
+                }
+            }
+        }
         let (_, to, _) = self.sheet_target(w.hover)?;
         Some(format!("Tab or right-click for {} options.", to.code()))
     }
@@ -716,6 +788,8 @@ impl App {
             pulse: w
                 .pulse
                 .map(|(s, t)| (s, t.elapsed().as_secs_f32() * 1000.0 / PULSE_MS as f32)),
+            marks: w.marks(),
+            dot: w.dot_at.map_or(1.0, |t| eased(t, FACTS_MS)),
         })
     }
 

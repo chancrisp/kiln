@@ -40,7 +40,17 @@ pub struct WheelView<'a> {
     pub fade: f32,
     /// The item pulsing after a drop, and how far through the pulse.
     pub pulse: Option<(Spot, f32)>,
+    /// Where the suggestion's dots go: its segment, or More and its slot.
+    pub marks: Vec<Spot>,
+    /// 0 to 1: the dots' fade in, when the suggestion arrived while the
+    /// wheel was open.
+    pub dot: f32,
 }
+
+/// The suggestion's dot: a radius of 2 DIPs (4 across), 6 DIPs above the
+/// icon or code it marks.
+const DOT_R: f32 = 2.0;
+const DOT_GAP: f32 = 6.0;
 
 /// The options sheet this frame.
 pub struct SheetView<'a> {
@@ -1098,7 +1108,11 @@ impl Draw<'_> {
                 Some(item) => (item.icon, item.label.as_str(), item.is_code),
                 None => ("more", "More", false),
             };
-            self.icon(icon, lx - 12.0, ly - 22.0, 1.0, p.text, 1.0);
+            let top = ly - 22.0;
+            self.icon(icon, lx - 12.0, top, 1.0, p.text, 1.0);
+            if wv.marks.contains(&Spot::Inner(i)) {
+                self.dot(lx, top - DOT_GAP, wv.dot, p);
+            }
             if is_code {
                 let r = Rect::new(lx - 40.0, ly + 4.0, 80.0, 16.0);
                 self.code(label, &r, p.text, 1.0)?;
@@ -1179,10 +1193,28 @@ impl Draw<'_> {
                 Some(j) => {
                     let r = Rect::new(x - 26.0, y - 8.0, 52.0, 16.0);
                     self.code(&w.more[j].label, &r, p.text, 1.0)?;
+                    if wv.marks.contains(&Spot::Outer(j)) {
+                        self.dot(x, r.y - DOT_GAP, wv.dot, p);
+                    }
                 }
             }
         }
         Ok(())
+    }
+
+    /// The suggestion's celadon dot, centred on `(x, y)`. It takes the
+    /// ring's own opacity, and never moves or changes size.
+    fn dot(&self, x: f32, y: f32, a: f32, p: &Palette) {
+        unsafe {
+            self.rt.FillEllipse(
+                &D2D1_ELLIPSE {
+                    point: pt(x, y),
+                    radiusX: DOT_R,
+                    radiusY: DOT_R,
+                },
+                self.paint(p.accent, a),
+            );
+        }
     }
 
     fn circle(&self, r: f32, c: Rgb, a: f32) -> Result<()> {

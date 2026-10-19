@@ -4,7 +4,7 @@
 use std::f32::consts::{PI, TAU};
 use std::path::{Path, PathBuf};
 
-use kiln_core::{Kiln, Kind, Tool};
+use kiln_core::{Kiln, Kind, Suggested, Tool};
 
 use crate::actions::FileAction;
 
@@ -378,6 +378,41 @@ pub fn hit(w: &Wheel, x: f32, y: f32, more_open: bool) -> Option<Spot> {
     None
 }
 
+/// Where a suggestion sits on the wheel: its inner segment, or More and
+/// its slot on the outer ring. Empty when the wheel doesn't offer it.
+pub fn marks(w: &Wheel, s: &Suggested) -> Vec<Spot> {
+    let action = match s {
+        Suggested::Convert(ext) => Action::Convert(ext.clone()),
+        Suggested::Tool(t) => Action::Tool(*t),
+    };
+    if let Some(i) = w.items.iter().position(|it| it.action == action) {
+        return vec![Spot::Inner(i)];
+    }
+    match w.more.iter().position(|it| it.action == action) {
+        Some(j) => vec![Spot::Inner(w.items.len()), Spot::Outer(j)],
+        None => vec![],
+    }
+}
+
+/// Where the keyboard starts on a wheel: on the suggestion, or More when
+/// the suggestion is in it, or else the first segment.
+pub fn start_spot(w: &Wheel, s: Option<&Suggested>) -> Spot {
+    s.and_then(|s| marks(w, s).first().copied())
+        .unwrap_or(Spot::Inner(0))
+}
+
+/// The footer while the suggestion shows: "Suggested: JPG. " and the
+/// reason.
+pub fn suggestion_footer(label: &str, reason: &str) -> String {
+    format!("Suggested: {label}. {reason}")
+}
+
+/// Whether the footer gives the suggestion's reason: while nothing is lit,
+/// or while a marked spot is.
+pub fn shows_suggestion(hover: Option<Spot>, marks: &[Spot]) -> bool {
+    !marks.is_empty() && hover.is_none_or(|h| marks.contains(&h))
+}
+
 /// Keyboard movement: +1 is clockwise.
 pub fn step(current: Option<usize>, delta: isize, n: usize) -> Option<usize> {
     if n == 0 {
@@ -620,6 +655,91 @@ mod tests {
         assert!(items
             .iter()
             .all(|i| crate::icons::ALL.iter().any(|ic| ic.name == i.icon)));
+    }
+
+    fn real(kind: WheelKind, path: &str) -> Wheel {
+        let kiln = Kiln::new();
+        let (items, more) = split_common(items_for(kind, &kiln, &[path.into()]));
+        Wheel {
+            kind,
+            items,
+            more,
+            ..wheel(0)
+        }
+    }
+
+    #[test]
+    fn the_dot_goes_on_an_inner_target() {
+        let w = real(WheelKind::Convert, "a.png");
+        let m = marks(&w, &Suggested::Convert("jpg".into()));
+        let Some(&Spot::Inner(i)) = m.first() else {
+            panic!("{m:?}");
+        };
+        assert_eq!(m.len(), 1);
+        assert_eq!(w.items[i].action, Action::Convert("jpg".into()));
+    }
+
+    #[test]
+    fn a_target_in_more_marks_more_and_its_slot() {
+        let w = real(WheelKind::Convert, "a.mp4");
+        let j = w
+            .more
+            .iter()
+            .position(|i| i.label == "SRT")
+            .expect("SRT is in More");
+        let m = marks(&w, &Suggested::Convert("srt".into()));
+        assert_eq!(m, [Spot::Inner(w.items.len()), Spot::Outer(j)]);
+    }
+
+    #[test]
+    fn a_tool_marks_its_segment() {
+        let w = real(WheelKind::Tools, "a.mp4");
+        let m = marks(&w, &Suggested::Tool(Tool::Crop));
+        assert_eq!(m.len(), 1);
+        let Spot::Inner(i) = m[0] else {
+            panic!("{m:?}");
+        };
+        assert_eq!(w.items[i].action, Action::Tool(Tool::Crop));
+    }
+
+    #[test]
+    fn a_suggestion_not_on_the_wheel_marks_nothing() {
+        let w = real(WheelKind::Convert, "a.png");
+        let s = Suggested::Convert("mp3".into());
+        assert_eq!(marks(&w, &s), []);
+        assert_eq!(start_spot(&w, Some(&s)), Spot::Inner(0));
+        assert_eq!(start_spot(&w, None), Spot::Inner(0));
+        // The file actions wheel never marks a tool.
+        let w = real(WheelKind::Actions, "a.png");
+        assert_eq!(marks(&w, &Suggested::Tool(Tool::Crop)), []);
+    }
+
+    #[test]
+    fn the_keyboard_starts_on_the_suggestion() {
+        let w = real(WheelKind::Convert, "a.png");
+        let s = Suggested::Convert("webp".into());
+        assert_eq!(start_spot(&w, Some(&s)), marks(&w, &s)[0]);
+        let w = real(WheelKind::Convert, "a.mp4");
+        let s = Suggested::Convert("srt".into());
+        assert_eq!(start_spot(&w, Some(&s)), Spot::Inner(w.items.len()));
+    }
+
+    #[test]
+    fn the_footer_gives_the_reason() {
+        assert_eq!(
+            suggestion_footer("JPG", "A photo. JPG keeps the look at about 2 MB."),
+            "Suggested: JPG. A photo. JPG keeps the look at about 2 MB."
+        );
+    }
+
+    #[test]
+    fn the_reason_shows_while_nothing_else_is_lit() {
+        use Spot::{Inner, Outer};
+        assert!(shows_suggestion(None, &[Inner(2)]));
+        assert!(shows_suggestion(Some(Inner(2)), &[Inner(2)]));
+        assert!(shows_suggestion(Some(Outer(5)), &[Inner(8), Outer(5)]));
+        assert!(!shows_suggestion(Some(Inner(1)), &[Inner(2)]));
+        assert!(!shows_suggestion(None, &[]));
     }
 
     #[test]
