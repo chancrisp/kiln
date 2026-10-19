@@ -275,6 +275,8 @@ pub const STEP_WIDTH: f32 = 96.0;
 pub const CHEVRON_ZONE: f32 = 28.0;
 /// The Check for updates button.
 pub const UPDATE_BUTTON_WIDTH: f32 = 136.0;
+/// The Forget picks button, wider than Choose to fit its label.
+pub const FORGET_BUTTON_WIDTH: f32 = 104.0;
 /// Rows on the fullest page. Every page keeps this height, so switching
 /// pages never moves the panel.
 const SETTINGS_ROWS: usize = 5;
@@ -381,7 +383,7 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
             }
             controls.push((
                 Control::ForgetPicks,
-                ctl(x0 + 2.0 * SEGMENT_WIDTH + 8.0, 3, BUTTON_WIDTH),
+                ctl(x0 + 2.0 * SEGMENT_WIDTH + 8.0, 3, FORGET_BUTTON_WIDTH),
             ));
             rows.push(row("Suggestions", 3, None));
         }
@@ -786,6 +788,11 @@ mod tests {
                 "{c:?} {r:?}"
             );
         }
+        let off = general.controls[keys + 2].1;
+        let forget = general.controls[keys + 3].1;
+        assert_eq!(forget.w, FORGET_BUTTON_WIDTH);
+        assert_eq!(forget.w, 104.0);
+        assert_eq!(forget.x, off.right() + 8.0);
         // The fourth row fits the panel height every page keeps.
         assert_eq!(general.panel, page(SettingsTab::Quality).panel);
         let n = general.controls.len();
