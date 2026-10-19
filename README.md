@@ -21,6 +21,7 @@ background, right on your PC.
 
 - **One gesture.** Hold Shift to convert, Ctrl for file tools and Alt for file actions. Every key can be reassigned.
 - **85 formats, 1,245 pairs.** Images, camera RAW, audio, video, subtitles, documents, e-books, PDF, office files, spreadsheets and slides.
+- **Suggestions.** Kiln looks inside the files you add and, when one choice clearly helps, points at it with a reason.
 - **Quality you can set.** Resolution, frame rate, bitrate and page DPI, offered only where they fit the file, with an estimate of the result.
 - **Offline.** Converting never touches the network. Nothing is uploaded, ever.
 - **Nothing is overwritten.** Results land next to the input, or in a folder you choose. A taken name becomes `name (1).jpg`.
@@ -56,6 +57,30 @@ first with every other format, grouped by kind.
 <div align="center">
 <img src="docs/screenshots/m8/wheel-more-dark-100.png" alt="The convert wheel with its More ring open" width="560">
 </div>
+
+## Suggestions
+
+When files are added, Kiln looks inside them on this PC and, when one choice
+clearly helps, says what it would do and why. A photo saved as PNG suggests
+JPG, a MOV suggests MP4, and a large video suggests Compress. When nothing
+clearly helps, Kiln says nothing.
+
+- **In the list.** Each row's second line says what Kiln found and what it suggests, as in `4032 × 3024 photo · 3.1 MB · Suggested: JPG, about 2 MB`.
+- **In the wheel.** A small celadon dot marks the suggested format or tool. Formats keep their places. Opened from the keyboard, the wheel starts on the suggestion, and the footer gives the reason.
+- **Your picks.** When you have picked the same format for a type of file at least three times, and it is the one you pick most, Kiln suggests it from then on.
+- **What it looks at.** The size and look of a picture, whether it has transparency or motion, the length and bitrate of audio and video, black bars, and whether a PDF has text. Images are read by Kiln itself, and audio and video by FFmpeg.
+
+Nothing is uploaded, and picks are counted only in `settings.toml`. Turn
+suggestions off with **Suggestions** in **Settings > General**. **Forget
+picks**, beside it, clears the picks Kiln has counted.
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/m9/row-hint-dark-100.png" alt="Two rows, each with what Kiln found and its suggestion" width="270"><br><b>IN THE LIST</b><br><sub>What Kiln found, and what it suggests</sub></td>
+    <td align="center"><img src="docs/screenshots/m9/wheel-dot-dark-100.png" alt="The convert wheel with a dot on JPG" width="270"><br><b>THE DOT</b><br><sub>On the suggestion, with the reason below</sub></td>
+    <td align="center"><img src="docs/screenshots/m9/wheel-more-dot-light-100.png" alt="The More ring with a dot on QOI and on More" width="270"><br><b>IN MORE</b><br><sub>On More and on its place in the ring</sub></td>
+  </tr>
+</table>
 
 ## A closer look
 
@@ -186,6 +211,7 @@ you can also edit by hand:
 ```toml
 output_folder = 'D:\Converted'   # leave out to write next to each file
 theme = "system"                 # system, dark or light
+suggestions = true               # false turns suggestions off
 
 [keys]                           # shift, ctrl or alt; one per wheel
 convert = "shift"
@@ -206,7 +232,13 @@ ffmpeg = 'C:\Tools\ffmpeg\bin\ffmpeg.exe'
 pandoc = 'C:\Program Files\Pandoc\pandoc.exe'
 libreoffice = 'D:\LibreOffice\program\soffice.exe'
 calibre = 'C:\Program Files\Calibre2\ebook-convert.exe'
+
+[habits]                         # picks per source type, counted by Kiln
+png = { jpg = 4, webp = 1 }
+heic = { png = 3 }
 ```
+
+**Forget picks** in **Settings > General** clears `[habits]`.
 
 A file Kiln can't read is left alone. The app starts with the defaults and
 says why in the footer.
@@ -218,10 +250,22 @@ kiln convert INPUT FORMAT [-o DIR] [-p small|high|best] [-q JPG_QUALITY] [--size
              [--audio-kbps N] [--dpi N] [--ffmpeg PATH] [--pandoc PATH] [--libreoffice PATH] [--calibre PATH]
 kiln tool TOOL INPUTS... [-o DIR]
 kiln formats FILE
+kiln suggest FILE...
 ```
 
 `kiln` exits with 0 on success, 2 when the request can't be done (an unknown
 format, or an unsupported pair or tool), and 1 when a conversion fails.
+
+`kiln suggest` prints each file's suggestion and its reason. For several
+files it adds an `(all)` line for a tool, or a conversion they share, when
+there is one. It ignores your picks, so its output is the same every time.
+It exits with 2 when a file doesn't exist.
+
+```text
+> kiln suggest photo.png sample.mov
+photo.png    JPG  A photo. JPG keeps the look at about 4.2 KB.
+sample.mov   MP4  Plays on any phone, PC or browser.
+```
 
 ## Build from source
 

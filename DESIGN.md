@@ -14,8 +14,8 @@ them changes, so a palette change is always a deliberate one.
    progress is a temperature line. A finished file cools into place, and an
    error is a crack. Don't add other metaphors: no rockets, sparkles or mascots.
 2. **Restraint.** The UI uses two neutrals and one accent. The accent marks
-   only the active selection, keyboard focus, the primary action and
-   progress. There are no gradients except the progress glow.
+   only the active selection, keyboard focus, the primary action,
+   progress and the suggestion dot. There are no gradients except the progress glow.
 3. **Material, not decoration.** Surfaces look like matte stoneware.
    - The window ground carries one faint grain at about 3%. It is
      pre-rendered and never animates.
@@ -106,6 +106,12 @@ test enforces this.
   - The 8 DIP groove between the dish and the ring is solid ground, so nothing behind shows through.
   - The centre reads `MP4 → AVI` while a target is lit, so the pair is always spelled out.
 - **Options.** Tab or right-click on a target opens its options sheet instead of converting. The footer says so while a target is lit: "Tab or right-click for MP3 options."
+- **Suggestion.** When Kiln has a suggestion for the files, the suggested segment gets a 4 px celadon dot centred 6 px above its icon. Places never change.
+  - When the suggestion is in More, the More segment and the suggestion's slot in the outer ring both get the dot. In the ring, where codes have no icon, the dot sits 6 px above the code.
+  - When facts arrive while the wheel is open, the dot fades in over 160 ms. Nothing moves or pulses.
+  - Opened from the keyboard, the wheel starts on the suggestion. When the suggestion is in More, it starts on More, and Enter opens the ring with the suggestion lit.
+  - While nothing is lit, or while the suggested segment is lit, the footer reads "Suggested: JPG. " followed by the reason, as in "Suggested: JPG. A photo. JPG keeps the look at about 2 MB."
+  - The Tools wheel marks Compress, Merge or Crop the same way.
 
 ## The options sheet
 
@@ -122,6 +128,12 @@ test enforces this.
 - One panel with three tabs: **General**, **Quality** and **Engines**. The tabs are a segmented control. The chosen tab's fill slides to it over 160 ms, and the page crossfades over 120 ms. Every page keeps the panel's height, so switching never moves it.
 - Every stepper and segmented group has its own label. When two share a line, the second sits in its own labelled column.
 - Changes save straight away. There is no Apply button.
+
+## The file list
+
+- Each row shows the file's name, and below it a muted second line: `folder · 3.1 MB · Converts to 12 formats`.
+- Once Kiln has looked inside the file, the second line says what it is and what Kiln suggests, as in `folder · 4032 × 3024 photo · 3.1 MB · Suggested: JPG, about 2 MB`. The new text fades in over 160 ms and stays muted.
+- With no suggestion, the description takes the place of "Converts to N formats" and nothing else is added.
 
 ## Progress and results
 
