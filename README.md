@@ -26,8 +26,11 @@ wheel. Everything happens on your PC. Nothing is uploaded.
   - Results go next to the input, or to a folder you choose. A taken name becomes `name (1).jpg`.
   - Names Windows reserves, such as `CON`, are made safe.
   - Temporary files live in a per-job folder under `%TEMP%\Kiln` and are removed when the job finishes or is cancelled.
-- **Offline.** Kiln makes no network calls.
-- **Small and quick.** The app is a single native executable of under 2 MB. It draws with Direct2D and DirectWrite, with no web view.
+- **Offline.** Converting never touches the network. The only network call is
+  **Check for updates** in Settings, which asks GitHub for the latest release
+  when you press it, and never on its own.
+- **Small and quick.** The app is a single native executable of under 3 MB. It draws with Direct2D and DirectWrite, with no web view.
+- **One window.** Dropping files on Kiln's icon while it's open adds them to the open window.
 - **Light and dark.** The theme follows the Windows app mode, or you can choose one. Kiln is per-monitor DPI aware.
 - **A command line too.** `kiln convert photo.png jpg` does the same work from a terminal.
 
@@ -140,6 +143,21 @@ MSI are signed with signtool. Without them, packages are built unsigned.
 A format that needs a new engine gets a new backend: implement the
 `Converter` trait in `kiln-core` and register it in `job.rs`. External
 programs are always run with separate arguments, never through a shell.
+
+## Known limitations
+
+- WEBP is written lossless only, so a WEBP made from a JPG can be larger than the JPG.
+- An animated GIF keeps only its first frame.
+- Compress works on PNG and JPG images, video, and audio other than WAV. Other image types have no tighter encoding to re-save with.
+- Trim on video cuts only stretches that are both black and silent, and the kept part is re-encoded.
+- Office files, PDF and documents have no tools other than Merge for documents.
+- The update check returns "No releases are published yet" until a release exists on GitHub.
+
+On the development PC (release build, Windows 11, NVIDIA GPU), the window
+appears about 215 ms after launch. Idle, Kiln uses about 13 MB of private
+memory, which is the figure Task Manager shows. Its working set is about
+53 MB, but most of that is graphics driver code shared with other apps.
+The MSI is 1.9 MB and the portable ZIP 2.4 MB.
 
 ## Project layout
 

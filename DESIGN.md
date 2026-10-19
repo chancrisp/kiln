@@ -82,7 +82,7 @@ test enforces this.
 - Icons sit on a 24 × 24 grid and use a 1.5 px stroke with round caps and joins.
 - They are built from simple geometric shapes and drawn as vector paths in [`icons.rs`](crates/kiln-app/src/icons.rs). There is no icon font.
 - Keep curves generous. A Bézier smaller than about 2 units strokes poorly in some Direct2D implementations, so draw tiny circles as short polygons.
-- Current set: vessel, vessel-solid, flame, cube, cross, image, audio, video, document, compress, crop, trim, split, merge, copy, move, terminal, dial.
+- Current set: vessel, vessel-solid, flame, cube, cross, image, audio, video, document, sheet, slides, compress, crop, trim, split, merge, copy, move, terminal, dial.
 - The app icon is the solid vessel in celadon on a soot tile with rounded corners, at 16, 32, 48 and 256 px. Regenerate it with `cargo run -p kiln-app --example gen_icon`.
 
 ## The glaze wheel
@@ -103,7 +103,7 @@ test enforces this.
 
 ## Progress and results
 
-- **Progress** is a 2 px line along the bottom of the job row, filled with celadon. Its leading edge glows slightly brighter, like a glaze taking heat. This is the only gradient in Kiln. When the engine can't report progress, the whole line holds a steady low glow. There are no spinners.
+- **Progress** is a 2 px line along the bottom of the job row, filled with celadon. Its leading edge glows slightly brighter, like a glaze taking heat. This is the only gradient in Kiln. While a job runs, the glow breathes slowly over 2.4 s, like coals. When the engine can't report progress, the whole line holds a low glow that breathes the same way. There are no spinners.
 - **Success:** the row settles and the output name appears in bone, fading in over 200 ms. There's no sound or confetti.
 - **Failure:** the row shows one plain line in brick, the first line the engine printed with log tags removed. When there's more, a "Show details" link opens the full engine output.
 

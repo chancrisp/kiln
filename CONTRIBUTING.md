@@ -66,7 +66,9 @@ Also:
   `--sandbox`.
 - Never overwrite a file. Claim output names with `create_new`, as
   `kiln_core::output` does.
-- Kiln makes no network calls.
+- Converting makes no network calls. The one exception is the update
+  check in `kiln-app/src/win/updates.rs`, which runs only when the user
+  presses Check for updates.
 - User-facing text follows the voice rules: calm, specific, no
   exclamation marks, and "convert" rather than "fire".
 

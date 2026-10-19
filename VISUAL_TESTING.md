@@ -39,6 +39,8 @@ window between them as well.
 - [ ] With more rows than fit, the wheel scrolls and a thin thumb appears on the right.
 - [ ] "Clear" shows a soft inner shadow while pressed and empties the list on release.
 - [ ] Dropping files on the app's icon in Explorer opens Kiln with them listed.
+- [ ] With Kiln already open, dropping more files on the icon adds them to that window and brings it forward. No second window opens.
+- [ ] The empty list's hint names the current wheel keys, and changes when they're reassigned in Settings. It isn't cut off at the smallest window size.
 
 ## Glaze wheel
 
@@ -55,7 +57,7 @@ window between them as well.
 
 ## Jobs
 
-- [ ] A running row shows "Converting to WEBM" and a thin celadon line along its bottom that brightens at its leading edge. No spinners anywhere.
+- [ ] A running row shows "Converting to WEBM" and a thin celadon line along its bottom that brightens at its leading edge. The glow breathes slowly; nothing flickers. No spinners anywhere.
 - [ ] Hovering or selecting a running row shows a cross; clicking it cancels the job and the row says "Cancelled.".
 - [ ] When a job finishes, the output name appears in bone, fading in over about 200 ms.
 - [ ] A failed job shows one plain line in brick and, when the engine said more, a "Show details" link. Clicking it, or pressing Space on the row, opens the details over a scrim. Escape, Enter or Close dismisses it.
@@ -79,6 +81,8 @@ window between them as well.
 
 - [ ] The dial in the header and Ctrl+, open Settings over a scrim. Escape, Close or a click on the scrim closes it.
 - [ ] Tab and Shift+Tab move a celadon focus ring through every control; Enter or Space presses.
+- [ ] Every button, key button, theme segment and the dialog's Close show a soft inner shadow while held, and act only when released over them.
+- [ ] Check for updates says "Checking for updates…", then the result in one calm line beside the button. With no network it says "Couldn't reach GitHub.". When a newer version exists, the button reads "Get the update" and opens the releases page.
 - [ ] Output folder: Choose picks a folder and results go there; Reset goes back to "Next to each file".
 - [ ] Wheel keys: pressing a key button moves that wheel to the next key and swaps with the wheel that had it. Dragging follows the new keys at once.
 - [ ] Engines shows "Found on PATH", "Not installed" or the chosen path for FFmpeg, Pandoc and LibreOffice. LibreOffice installed in Program Files shows its path without being chosen. Choose takes an .exe; jobs use it straight away.
