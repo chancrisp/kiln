@@ -21,9 +21,10 @@ use crate::registry::Kind;
 
 /// Pictures with more pixels than this keep only their header facts.
 const MAX_PIXELS: u64 = 50_000_000;
-/// The long side of the preview that look and estimates are taken from.
+/// The long side of the preview that look is judged on, and the largest
+/// side of the full-size crop that estimates are encoded from.
 const PREVIEW: u32 = 256;
-// The next three are first guesses, checked against the fixtures. Tune
+// The next two are first guesses, checked against the fixtures. Tune
 // them with `real_photos_and_screenshots_are_told_apart` (tests/facts.rs)
 // when real photos and screenshots are in KILN_EXTRA_SAMPLES.
 /// A preview with at most this many distinct colours is a graphic.
@@ -31,8 +32,6 @@ const GRAPHIC_COLOURS: usize = 64;
 /// A preview where at least this share of pixels equals its right-hand
 /// neighbour is a graphic.
 const GRAPHIC_FLAT: f32 = 0.5;
-/// How an encoded preview's size grows with the pixel count of the result.
-const ESTIMATE_EXP: f64 = 1.0;
 
 /// What `inspect` found in one file.
 #[derive(Debug, Clone, PartialEq)]
@@ -132,7 +131,10 @@ fn image_facts(kiln: &Kiln, path: &Path, opts: &Options, cancel: &CancelToken, f
             animated: false,
             look: Look::Graphic,
         });
-        facts.estimates = estimates(&preview, (w, h), opts);
+        // A vector has no full-size picture to crop, so the preview stands in.
+        let cap = opts.quality.size.resolve(None);
+        let result = crate::quality::scaled(w, h, cap, false);
+        facts.estimates = estimates(&preview, result, opts);
     } else if raster::RAW.contains(&ext) {
         facts.picture = raster::wic::size(path).ok().map(photo);
     } else if matches!(ext, "heic" | "avif" | "jxl") {
@@ -170,19 +172,24 @@ fn raster_facts(path: &Path, ext: &str, opts: &Options, cancel: &CancelToken, fa
     }
     let (w, h) = (img.width(), img.height());
     let alpha = any_transparent(&img);
-    let preview = if w.max(h) > PREVIEW {
-        img.thumbnail(PREVIEW, PREVIEW)
+    let look = if w.max(h) > PREVIEW {
+        look_of(&img.thumbnail(PREVIEW, PREVIEW).to_rgba8())
     } else {
-        img
+        look_of(&img.to_rgba8())
     };
     facts.picture = Some(Picture {
         width: w,
         height: h,
         alpha,
         animated: animated(path, ext),
-        look: look_of(&preview.to_rgba8()),
+        look,
     });
-    facts.estimates = estimates(&preview, (w, h), opts);
+    // The picture as the image backend would write it, size limit and all.
+    let result = raster::fit(img, opts.quality.size.resolve(None));
+    let (rw, rh) = (result.width(), result.height());
+    let (cw, ch) = (rw.min(PREVIEW), rh.min(PREVIEW));
+    let crop = result.crop_imm((rw - cw) / 2, (rh - ch) / 2, cw, ch);
+    facts.estimates = estimates(&crop, (rw, rh), opts);
 }
 
 /// Whether a `w` x `h` picture is small enough to decode.
@@ -247,17 +254,14 @@ fn animated(path: &Path, ext: &str) -> bool {
     }
 }
 
-/// Likely JPG and PNG sizes of a `full`-sized picture, from its preview:
-/// the preview is encoded as each, flattened onto white, and the byte
-/// count scaled by the ratio of the result's pixels to the preview's.
-fn estimates(preview: &DynamicImage, full: (u32, u32), opts: &Options) -> BTreeMap<String, u64> {
-    let (pw, ph) = (preview.width(), preview.height());
-    let rgb = raster::flatten_rgb(preview);
-    // The size limit applies as the image backend applies it.
-    let cap = opts.quality.size.resolve(None);
-    let (rw, rh) = crate::quality::scaled(full.0, full.1, cap, false);
-    let factor = ((f64::from(rw) * f64::from(rh)) / (f64::from(pw) * f64::from(ph)).max(1.0))
-        .powf(ESTIMATE_EXP);
+/// Likely JPG and PNG sizes of a `result`-sized picture, from a sample of
+/// it: the sample is encoded as each, flattened onto white, and the byte
+/// count scaled by the ratio of the result's pixels to the sample's.
+fn estimates(sample: &DynamicImage, result: (u32, u32), opts: &Options) -> BTreeMap<String, u64> {
+    let (pw, ph) = (sample.width(), sample.height());
+    let rgb = raster::flatten_rgb(sample);
+    let factor =
+        (f64::from(result.0) * f64::from(result.1)) / (f64::from(pw) * f64::from(ph)).max(1.0);
     let mut out = BTreeMap::new();
     let mut jpg = Vec::new();
     let quality = opts.jpeg_quality.clamp(1, 100);

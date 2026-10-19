@@ -46,15 +46,13 @@ fn inspect_temp_gif(frames: u8) -> Facts {
     inspect_at(&path)
 }
 
-/// A `w` x `h` smooth gradient with noise of up to 4 either way in each
-/// channel, from a fixed-seed LCG: about the grain of a camera sensor.
-/// Much stronger pixel noise is mostly averaged out of the preview, so
-/// JPG estimates for it come out low (about a third at 40 either way).
-fn smooth_plus_noise(w: u32, h: u32) -> RgbImage {
+/// A `w` x `h` smooth gradient with noise of up to `amp` either way in
+/// each channel, from a fixed-seed LCG.
+fn smooth_plus_noise(w: u32, h: u32, amp: u32) -> RgbImage {
     let mut seed: u32 = 0x5EED_0001;
     let mut noise = move || {
         seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-        ((seed >> 16) % 9) as i32 - 4
+        ((seed >> 16) % (2 * amp + 1)) as i32 - amp as i32
     };
     RgbImage::from_fn(w, h, |x, y| {
         let base = [
@@ -67,12 +65,13 @@ fn smooth_plus_noise(w: u32, h: u32) -> RgbImage {
 }
 
 /// The estimate `inspect` gives for `to`, and the size of a real
-/// conversion to it, for a 1024 x 768 smooth-plus-noise picture.
-fn estimate_and_real(to: &str) -> (u64, u64) {
+/// conversion to it, for a 1024 x 768 smooth picture with noise of up to
+/// `amp` either way.
+fn estimate_and_real(to: &str, amp: u32) -> (u64, u64) {
     let dir = tempfile::tempdir().unwrap();
     // BMP is lossless and converts to both JPG and PNG.
     let path = dir.path().join("picture.bmp");
-    smooth_plus_noise(1024, 768).save(&path).unwrap();
+    smooth_plus_noise(1024, 768, amp).save(&path).unwrap();
     let est = inspect_at(&path).estimates[to];
     let out = dir.path().join("out");
     fs::create_dir(&out).unwrap();
@@ -156,9 +155,16 @@ fn unknown_or_missing_files_give_nothing() {
 fn image_estimates_land_within_2x() {
     // A 1024 × 768 smooth-plus-noise picture drawn into a temp folder, then inspected.
     // Each estimate is compared with a real Kiln::convert to that target.
-    for to in ["jpg", "png"] {
-        let (est, real) = estimate_and_real(to);
-        assert!(est * 2 >= real && est <= real * 2, "{to}: {est} vs {real}");
+    // A detailed picture (noise of up to 40 either way) and a smooth one
+    // (up to 4, about the grain of a camera sensor).
+    for amp in [40, 4] {
+        for to in ["jpg", "png"] {
+            let (est, real) = estimate_and_real(to, amp);
+            assert!(
+                est * 2 >= real && est <= real * 2,
+                "±{amp} {to}: {est} vs {real}"
+            );
+        }
     }
 }
 
