@@ -41,4 +41,5 @@ pub use quality::{Knob, Limit, MediaInfo, Preset, Quality};
 pub use raster::ImageConverter;
 pub use registry::{Format, Kind, Registry};
 pub use runner::{JobError, JobEvent, JobId, JobKind, Runner};
+pub use suggest::{about, suggest, Habits, Offered, Suggested, Suggestion, Suggestions};
 pub use tools::Tool;
