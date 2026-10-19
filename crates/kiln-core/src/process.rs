@@ -58,6 +58,9 @@ pub(crate) fn run(
         }
         Err(e) => return Err(Error::io(cmd.get_program(), e)),
     };
+    // Dropped on every return below, which ends anything the engine
+    // started and left running.
+    let tree = ProcessTree::adopt(&child);
 
     let stdout = child.stdout.take().expect("stdout is piped");
     let stderr = child.stderr.take().expect("stderr is piped");
@@ -107,6 +110,7 @@ pub(crate) fn run(
 
     let status = loop {
         if cancel.is_cancelled() {
+            drop(tree);
             let _ = child.kill();
             let _ = child.wait();
             let _ = out_reader.join();
@@ -128,6 +132,8 @@ pub(crate) fn run(
         }
     };
 
+    // A helper the engine started may still hold the output pipes open.
+    drop(tree);
     let _ = out_reader.join();
     for line in rx.try_iter() {
         on_line(&line);
@@ -167,6 +173,69 @@ fn strip_tags(line: &str) -> &str {
         line
     } else {
         rest
+    }
+}
+
+/// An engine and every process it starts. Dropping it ends them all, so a
+/// cancelled job never leaves a helper behind, such as the soffice.bin
+/// that LibreOffice's launcher starts. A Windows job object with
+/// kill-on-close does the work; if one can't be made, only the engine
+/// itself is stopped.
+#[cfg(windows)]
+struct ProcessTree(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl ProcessTree {
+    fn adopt(child: &std::process::Child) -> Option<Self> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+            SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        };
+
+        // SAFETY: plain Win32 calls on a handle this function owns, and on
+        // the child's process handle, which outlives the call.
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() {
+                return None;
+            }
+            let tree = Self(job);
+            let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let set = SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+            if set == 0 || AssignProcessToJobObject(job, child.as_raw_handle()) == 0 {
+                // Dropping `tree` closes the handle.
+                return None;
+            }
+            Some(tree)
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ProcessTree {
+    fn drop(&mut self) {
+        // SAFETY: the handle came from CreateJobObjectW and is closed once.
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+struct ProcessTree;
+
+#[cfg(not(windows))]
+impl ProcessTree {
+    fn adopt(_child: &std::process::Child) -> Option<Self> {
+        Some(Self)
     }
 }
 
