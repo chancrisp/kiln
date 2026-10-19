@@ -425,7 +425,7 @@ fn trim_rate(f: f64) -> String {
 }
 
 /// "2:14" or "1:02:09".
-fn clock(secs: f64) -> String {
+pub(crate) fn clock(secs: f64) -> String {
     let s = secs.round() as u64;
     let (h, m, s) = (s / 3600, s / 60 % 60, s % 60);
     if h > 0 {

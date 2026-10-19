@@ -69,6 +69,9 @@ pub struct RowAnim {
     pub appear: f32,
     /// 0 to 1 after a job finished: the result cooling into place.
     pub settle: f32,
+    /// 0 to 1 after facts arrived: the second line crossing over to what
+    /// Kiln found.
+    pub facts: f32,
 }
 
 /// Everything the renderer needs to know about the app this frame.
@@ -712,13 +715,24 @@ impl Draw<'_> {
             Tone::Result => (p.text, a * anim.settle),
             Tone::Crack => (p.crack, a * anim.settle),
         };
-        self.label(
-            &line,
-            &self.text.caption,
-            &Rect::new(x, r.y + 28.0, w, 20.0),
-            c,
-            la,
-        );
+        let line_rect = Rect::new(x, r.y + 28.0, w, 20.0);
+        // When facts arrive, the line they replace fades out in place as
+        // the new one fades in, both muted.
+        let mut la = la;
+        if anim.facts < 1.0 && matches!(e.job, JobState::Idle) {
+            let before = e.plain_detail();
+            if before != line {
+                self.label(
+                    &before,
+                    &self.text.caption,
+                    &line_rect,
+                    p.text_muted,
+                    a * (1.0 - anim.facts),
+                );
+                la *= anim.facts;
+            }
+        }
+        self.label(&line, &self.text.caption, &line_rect, c, la);
 
         match &e.job {
             JobState::Running { fraction, .. } => {

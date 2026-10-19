@@ -2,8 +2,9 @@
 //! anywhere.
 
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
-use kiln_core::{Kiln, Tool};
+use kiln_core::{about, Facts, Kiln, Kind, Look, Suggested, Suggestion, Tool};
 
 use crate::actions::FileAction;
 use crate::wheel::Action;
@@ -147,6 +148,12 @@ pub struct Entry {
     /// Codes Kiln can convert this file to, from formats.toml.
     pub targets: Vec<String>,
     pub job: JobState,
+    /// What `inspect` found, once it has.
+    pub facts: Option<Facts>,
+    /// What Kiln puts forward for this file alone, from its facts.
+    pub suggestion: Option<Suggestion>,
+    /// When the facts arrived, for the second line's crossfade.
+    pub facts_at: Option<Instant>,
 }
 
 impl Entry {
@@ -183,14 +190,85 @@ impl Entry {
         }
     }
 
-    /// The secondary line under the file name, before any job.
+    /// The secondary line under the file name, before any job: what
+    /// Kiln found in the file and what it suggests, once it knows.
     pub fn detail(&self) -> String {
+        let description = self.facts.as_ref().and_then(describe);
+        if description.is_none() && self.suggestion.is_none() {
+            return self.plain_detail();
+        }
+        let mut parts = vec![self.folder.clone()];
+        parts.extend(description);
+        parts.push(human_size(self.size));
+        if let Some(s) = &self.suggestion {
+            let label = match &s.action {
+                Suggested::Convert(ext) => ext.to_ascii_uppercase(),
+                Suggested::Tool(t) => t.label().to_owned(),
+            };
+            parts.push(match s.estimate {
+                Some(bytes) => format!("Suggested: {label}, about {}", about(bytes)),
+                None => format!("Suggested: {label}"),
+            });
+        }
+        parts.join("  ·  ")
+    }
+
+    /// The secondary line before facts arrive: folder, size and how many
+    /// formats the file converts to.
+    pub fn plain_detail(&self) -> String {
         let reach = match self.targets.len() {
             0 => "No conversions for this type".to_owned(),
             1 => format!("Converts to {}", self.targets[0]),
             n => format!("Converts to {n} formats"),
         };
         format!("{}  ·  {}  ·  {reach}", self.folder, human_size(self.size))
+    }
+}
+
+/// What a file is, in a few words: "4032 × 3024 photo", "1280 × 720
+/// video, 1:30", "audio, 3:42", "12 pages, no text". `None` when the
+/// facts say nothing worth showing.
+pub fn describe(f: &Facts) -> Option<String> {
+    let duration = || {
+        f.media
+            .as_ref()
+            .and_then(|m| m.duration)
+            .filter(|d| *d > 0.0)
+            .map(crate::quality::clock)
+    };
+    match f.kind {
+        Kind::Image => {
+            let p = f.picture.as_ref()?;
+            let look = match p.look {
+                Look::Photo => "photo",
+                Look::Graphic => "graphic",
+            };
+            Some(format!("{} × {} {look}", p.width, p.height))
+        }
+        Kind::Video => {
+            let frame = f.picture.as_ref().map(|p| (p.width, p.height)).or_else(|| {
+                let m = f.media.as_ref()?;
+                Some((m.width?, m.height?))
+            });
+            match (frame, duration()) {
+                (Some((w, h)), Some(d)) => Some(format!("{w} × {h} video, {d}")),
+                (Some((w, h)), None) => Some(format!("{w} × {h} video")),
+                (None, Some(d)) => Some(format!("video, {d}")),
+                (None, None) => None,
+            }
+        }
+        Kind::Audio => duration().map(|d| format!("audio, {d}")),
+        _ => {
+            let pdf = f.pdf.as_ref()?;
+            let pages = match pdf.pages {
+                1 => "1 page".to_owned(),
+                n => format!("{n} pages"),
+            };
+            Some(match pdf.has_text {
+                Some(false) => format!("{pages}, no text"),
+                _ => pages,
+            })
+        }
     }
 }
 
@@ -302,6 +380,39 @@ impl FileList {
         self.entries.clear();
         self.selected = None;
     }
+
+    /// Store what `inspect` found for the row at `path`, and its
+    /// suggestion; its second line fades over from now. False, changing
+    /// nothing, when no row has that path.
+    pub fn set_facts(&mut self, path: &Path, facts: Facts, suggestion: Option<Suggestion>) -> bool {
+        let Some(i) = self.index_of(path) else {
+            return false;
+        };
+        let e = &mut self.entries[i];
+        e.facts = Some(facts);
+        e.suggestion = suggestion;
+        e.facts_at = Some(Instant::now());
+        true
+    }
+
+    /// Drop every row's facts and suggestion, as when Suggestions is
+    /// turned off.
+    pub fn forget_facts(&mut self) {
+        for e in &mut self.entries {
+            e.facts = None;
+            e.suggestion = None;
+            e.facts_at = None;
+        }
+    }
+
+    /// The facts of every file in `paths`, in order. `None` until each of
+    /// them is listed and has facts.
+    pub fn facts_for(&self, paths: &[PathBuf]) -> Option<Vec<Facts>> {
+        paths
+            .iter()
+            .map(|p| self.entries[self.index_of(p)?].facts.clone())
+            .collect()
+    }
 }
 
 fn entry_for(kiln: &Kiln, path: PathBuf, size: u64) -> Entry {
@@ -326,6 +437,9 @@ fn entry_for(kiln: &Kiln, path: PathBuf, size: u64) -> Entry {
         size,
         targets,
         job: JobState::Idle,
+        facts: None,
+        suggestion: None,
+        facts_at: None,
     }
 }
 
@@ -579,6 +693,185 @@ mod tests {
         ] {
             assert!(!s.contains('!'));
         }
+    }
+
+    fn facts(ext: &str, kind: Kind) -> Facts {
+        Facts {
+            ext: ext.to_owned(),
+            kind,
+            bytes: 3_100_000,
+            picture: None,
+            media: None,
+            pdf: None,
+            bars: None,
+            estimates: Default::default(),
+            compressed: None,
+        }
+    }
+
+    fn picture(mut f: Facts, width: u32, height: u32, look: Look) -> Facts {
+        f.picture = Some(kiln_core::Picture {
+            width,
+            height,
+            alpha: false,
+            animated: false,
+            look,
+        });
+        f
+    }
+
+    fn lasting(mut f: Facts, seconds: f64) -> Facts {
+        f.media = Some(kiln_core::MediaInfo {
+            duration: Some(seconds),
+            width: None,
+            height: None,
+            fps: None,
+            has_audio: true,
+        });
+        f
+    }
+
+    fn pages(pages: u32, has_text: Option<bool>) -> Facts {
+        let mut f = facts("pdf", Kind::Document);
+        f.pdf = Some(kiln_core::PdfFacts { pages, has_text });
+        f
+    }
+
+    fn photo() -> Facts {
+        picture(facts("png", Kind::Image), 4032, 3024, Look::Photo)
+    }
+
+    /// A row in "photos", 3.1 MB, that converts to 12 formats.
+    fn row(name: &str) -> Entry {
+        Entry {
+            path: PathBuf::from("photos").join(name),
+            name: name.to_owned(),
+            folder: "photos".to_owned(),
+            code: "PNG".to_owned(),
+            size: 3_100_000,
+            targets: (0..12).map(|i| format!("F{i}")).collect(),
+            job: JobState::Idle,
+            facts: None,
+            suggestion: None,
+            facts_at: None,
+        }
+    }
+
+    #[test]
+    fn describe_says_what_a_file_is() {
+        let video = lasting(
+            picture(facts("mp4", Kind::Video), 1280, 720, Look::Photo),
+            90.0,
+        );
+        let said: Vec<Option<String>> = [
+            photo(),
+            picture(facts("png", Kind::Image), 1200, 800, Look::Graphic),
+            video,
+            lasting(facts("mp3", Kind::Audio), 222.0),
+            pages(12, Some(true)),
+            pages(1, None),
+            pages(12, Some(false)),
+        ]
+        .iter()
+        .map(describe)
+        .collect();
+        assert_eq!(
+            said,
+            [
+                "4032 × 3024 photo",
+                "1200 × 800 graphic",
+                "1280 × 720 video, 1:30",
+                "audio, 3:42",
+                "12 pages",
+                "1 page",
+                "12 pages, no text",
+            ]
+            .map(|s| Some(s.to_owned()))
+        );
+        assert_eq!(describe(&facts("txt", Kind::Document)), None);
+    }
+
+    #[test]
+    fn row_line_before_and_after_facts() {
+        let mut e = row("a.png");
+        assert_eq!(e.detail(), "photos  ·  3.1 MB  ·  Converts to 12 formats");
+        e.facts = Some(photo());
+        e.suggestion = Some(Suggestion {
+            action: Suggested::Convert("jpg".into()),
+            reason: String::new(),
+            estimate: Some(2_040_000),
+        });
+        assert_eq!(
+            e.detail(),
+            "photos  ·  4032 × 3024 photo  ·  3.1 MB  ·  Suggested: JPG, about 2 MB"
+        );
+        assert_eq!(e.line(), (e.detail(), Tone::Muted));
+        assert_eq!(
+            e.plain_detail(),
+            "photos  ·  3.1 MB  ·  Converts to 12 formats"
+        );
+        e.suggestion = None;
+        assert_eq!(e.detail(), "photos  ·  4032 × 3024 photo  ·  3.1 MB");
+
+        let mut txt = row("notes.txt");
+        txt.facts = Some(facts("txt", Kind::Document));
+        assert_eq!(txt.detail(), "photos  ·  3.1 MB  ·  Converts to 12 formats");
+    }
+
+    #[test]
+    fn row_shows_tool_when_no_convert() {
+        let mut e = row("clip.mp4");
+        e.facts = Some(facts("mp4", Kind::Video));
+        e.suggestion = Some(Suggestion {
+            action: Suggested::Tool(Tool::Compress),
+            reason: String::new(),
+            estimate: Some(183_400_000),
+        });
+        assert!(
+            e.detail()
+                .ends_with("  ·  Suggested: Compress, about 180 MB"),
+            "{}",
+            e.detail()
+        );
+    }
+
+    #[test]
+    fn facts_for_a_removed_row_are_dropped() {
+        let (dir, kiln) = setup();
+        let a = dir.path().join("a.png");
+        fs::write(&a, b"x").unwrap();
+        let mut list = FileList::default();
+        list.add(&kiln, [a]);
+        let before = list.entries().to_vec();
+        assert!(!list.set_facts(&dir.path().join("gone.png"), photo(), None));
+        assert_eq!(list.entries(), before);
+    }
+
+    #[test]
+    fn facts_for_waits_for_every_file() {
+        let (dir, kiln) = setup();
+        let paths: Vec<PathBuf> = ["a.png", "b.png"]
+            .iter()
+            .map(|n| {
+                let p = dir.path().join(n);
+                fs::write(&p, b"x").unwrap();
+                p
+            })
+            .collect();
+        let mut list = FileList::default();
+        list.add(&kiln, paths);
+        let listed: Vec<PathBuf> = list.entries().iter().map(|e| e.path.clone()).collect();
+        assert_eq!(list.facts_for(&listed), None);
+        assert!(list.set_facts(&listed[0], photo(), None));
+        assert!(list.entries()[0].facts_at.is_some());
+        assert_eq!(list.facts_for(&listed), None);
+        let graphic = picture(facts("png", Kind::Image), 1200, 800, Look::Graphic);
+        assert!(list.set_facts(&listed[1], graphic.clone(), None));
+        assert_eq!(list.facts_for(&listed), Some(vec![photo(), graphic]));
+        assert_eq!(list.facts_for(&[dir.path().join("c.png")]), None);
+        list.forget_facts();
+        assert_eq!(list.facts_for(&listed), None);
+        assert!(list.entries().iter().all(|e| e.facts_at.is_none()));
     }
 
     #[test]

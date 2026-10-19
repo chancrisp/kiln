@@ -2,13 +2,14 @@
 
 mod drop;
 mod handoff;
+mod inspect;
 mod render;
 mod system;
 mod text;
 mod updates;
 
 use std::collections::{BTreeSet, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -30,7 +31,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use kiln_core::{
-    Format, JobEvent, JobId, JobKind, Kiln, Knob, MediaInfo, Progress, Quality, Runner, Tool,
+    suggest, Facts, Format, JobEvent, JobId, JobKind, Kiln, Knob, MediaInfo, Options, Progress,
+    Quality, Runner, Suggestion, Tool,
 };
 
 use crate::actions::{self, FileAction};
@@ -45,6 +47,7 @@ use crate::theme::{self, motion, Palette};
 use crate::update::{Reply, UpdateState};
 use crate::wheel::{self, Action, Spot, Wheel, WheelKind};
 use drop::{DragEvent, DropTarget, DRAG_ENTER, DRAG_LEAVE, DRAG_OVER, WM_KILN_DRAG, WM_KILN_DROP};
+use inspect::Inspector;
 use render::{Renderer, RowAnim, SettingsView, SheetView, View, WheelView};
 
 const ANIM_TIMER: usize = 1;
@@ -62,6 +65,11 @@ const WM_KILN_UPDATE: u32 = WM_APP + 5;
 /// Posted when the options sheet's files have been read; lparam is a
 /// `Box<Probed>`.
 const WM_KILN_PROBE: u32 = WM_APP + 6;
+/// Posted when the inspect thread has looked inside a listed file; lparam
+/// is a `Box<Inspected>`.
+const WM_KILN_FACTS: u32 = WM_APP + 7;
+/// How long a row's second line takes to cross over to what Kiln found.
+const FACTS_MS: u32 = 160;
 /// Most files the options sheet reads for its estimate.
 const PROBE_LIMIT: usize = 64;
 
@@ -245,6 +253,12 @@ struct Probed {
     infos: Vec<MediaInfo>,
 }
 
+/// What the inspect thread found in one listed file.
+struct Inspected {
+    path: PathBuf,
+    facts: Facts,
+}
+
 /// The result of moving files, from the thread that moved them.
 struct Moved {
     dest: PathBuf,
@@ -290,6 +304,8 @@ struct App {
     hwnd: HWND,
     kiln: Arc<Kiln>,
     runner: Runner,
+    /// Looks inside listed files for suggestions, one at a time.
+    inspector: Inspector,
     jobs: HashMap<JobId, JobInfo>,
     batches: HashMap<u64, Batch>,
     next_batch: u64,
@@ -379,7 +395,11 @@ impl App {
         let rows = self.rows.iter().any(|r| {
             within(r.added, motion::SETTLE_MS)
                 || r.settled.is_some_and(|t| within(t, motion::CONFIRM_MS))
-        });
+        }) || self
+            .files
+            .entries()
+            .iter()
+            .any(|e| e.facts_at.is_some_and(|t| within(t, FACTS_MS)));
         let wheel = self.wheel.as_ref().is_some_and(|w| {
             within(w.opened, OPEN_MS)
                 || w.closing.is_some()
@@ -398,14 +418,22 @@ impl App {
     }
 
     fn row_anim(&self, i: usize) -> RowAnim {
+        let facts = self
+            .files
+            .entries()
+            .get(i)
+            .and_then(|e| e.facts_at)
+            .map_or(1.0, |t| eased(t, FACTS_MS));
         match self.rows.get(i) {
             Some(r) => RowAnim {
                 appear: eased(r.added, motion::SETTLE_MS),
                 settle: r.settled.map_or(1.0, |t| eased(t, motion::CONFIRM_MS)),
+                facts,
             },
             None => RowAnim {
                 appear: 1.0,
                 settle: 1.0,
+                facts,
             },
         }
     }
@@ -420,6 +448,12 @@ impl App {
             });
         }
         self.status = status_line(self.files.len(), r.added, r.duplicates, r.skipped);
+        // New rows go on the end of the list.
+        let fresh: Vec<PathBuf> = self.files.entries()[self.files.len() - r.added..]
+            .iter()
+            .map(|e| e.path.clone())
+            .collect();
+        self.inspect(fresh);
         if r.added > 0 {
             self.files.select(Some(self.files.len() - 1));
             self.scroll_to_selection();
@@ -442,6 +476,7 @@ impl App {
         };
         let path = self.files.entries()[i].path.clone();
         self.cancel_jobs_for(&path);
+        self.inspector.cancel(&path);
         self.files.remove_selected();
         self.rows.remove(i);
         self.status = status_line(self.files.len(), 0, 0, 0);
@@ -453,12 +488,71 @@ impl App {
         // Stop what's running first, and forget it: results for files
         // that are no longer listed have nowhere to go.
         self.runner.cancel_all();
+        self.inspector.cancel_all();
         self.jobs.clear();
         self.batches.clear();
         self.files.clear();
         self.rows.clear();
         self.scroll = 0.0;
         self.status.clear();
+        self.invalidate();
+    }
+
+    // Suggestions.
+
+    /// Queue `paths` for inspecting, while suggestions are on. Each job
+    /// carries the options a conversion between files of its type would
+    /// run with, so the inspect thread never reads the app's state.
+    fn inspect(&mut self, paths: Vec<PathBuf>) {
+        if !self.settings.suggestions {
+            return;
+        }
+        for path in paths {
+            let opts = self.inspect_options(&path);
+            self.inspector.queue(path, opts);
+        }
+    }
+
+    fn inspect_options(&self, path: &Path) -> Options {
+        match self.kiln.registry().format_of(path) {
+            Some(f) => self.settings.options_for(f, f),
+            None => self.settings.options(),
+        }
+    }
+
+    /// What Kiln puts forward for one file: its conversion, or else its
+    /// tool.
+    fn suggestion_for(&self, path: &Path, facts: &Facts) -> Option<Suggestion> {
+        let offered = self.kiln.offered(&[path], &self.settings.options());
+        let s = suggest(std::slice::from_ref(facts), &offered, &self.settings.habits);
+        s.convert.or(s.tool)
+    }
+
+    fn on_inspected(&mut self, found: Inspected) {
+        // Posted before Suggestions was turned off.
+        if !self.settings.suggestions {
+            return;
+        }
+        let suggestion = self.suggestion_for(&found.path, &found.facts);
+        if self.files.set_facts(&found.path, found.facts, suggestion) {
+            self.animate();
+        }
+    }
+
+    /// Habits changed: every row's suggestion follows from its facts,
+    /// with no new fade.
+    fn habits_changed(&mut self) {
+        let fresh: Vec<Option<Option<Suggestion>>> = self
+            .files
+            .entries()
+            .iter()
+            .map(|e| e.facts.as_ref().map(|f| self.suggestion_for(&e.path, f)))
+            .collect();
+        for (e, s) in self.files.entries_mut().iter_mut().zip(fresh) {
+            if let Some(s) = s {
+                e.suggestion = s;
+            }
+        }
         self.invalidate();
     }
 
@@ -912,6 +1006,7 @@ impl App {
             self.settings.habits.record(from, to);
         }
         self.save_settings();
+        self.habits_changed();
     }
 
     fn on_job(&mut self, ev: JobEvent) {
@@ -1055,7 +1150,15 @@ impl App {
         let (mut ok, mut failed) = (0, 0);
         for (old, result) in m.results {
             let index = match &result {
-                Ok(new) => self.files.relocate(&self.kiln, &old, new.clone()),
+                Ok(new) => {
+                    let i = self.files.relocate(&self.kiln, &old, new.clone());
+                    // An inspect still under way read the old path.
+                    if i.is_some_and(|i| self.files.entries()[i].facts.is_none()) {
+                        self.inspector.cancel(&old);
+                        self.inspect(vec![new.clone()]);
+                    }
+                    i
+                }
                 Err(_) => self.files.index_of(&old),
             };
             let state = match result {
@@ -1234,6 +1337,7 @@ impl App {
                     return;
                 }
                 self.settings.habits.clear();
+                self.habits_changed();
             }
             Control::EngineChoose(e) => {
                 let title = format!("Choose {}.exe", e.program());
@@ -1281,8 +1385,22 @@ impl App {
     }
 
     /// Suggestions were turned on or off; the setting is already saved.
-    /// Task 7 fills this in: Off cancels and forgets inspects.
-    fn suggestions_changed(&mut self) {}
+    /// Off stops inspecting and forgets what was found; on looks inside
+    /// every row.
+    fn suggestions_changed(&mut self) {
+        if self.settings.suggestions {
+            let all = self
+                .files
+                .entries()
+                .iter()
+                .map(|e| e.path.clone())
+                .collect();
+            self.inspect(all);
+        } else {
+            self.inspector.cancel_all();
+            self.files.forget_facts();
+        }
+    }
 
     /// Whether a settings control can be used now. Forget picks is
     /// disabled while there are no picks.
@@ -1701,6 +1819,7 @@ impl App {
             anims.get(i).copied().unwrap_or(RowAnim {
                 appear: 1.0,
                 settle: 1.0,
+                facts: 1.0,
             })
         };
         let hint = self.settings.keys.hint();
@@ -1939,11 +2058,22 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
     let runner = Runner::new(kiln.clone(), Runner::default_workers(), move |ev| {
         target.post(WM_KILN_JOB, ev)
     });
+    // The inspect thread has its own Kiln and never touches the app's.
+    let inspect_kiln = Kiln::new();
+    let inspector = Inspector::new(
+        move |path, opts, cancel| kiln_core::inspect(&inspect_kiln, path, opts, cancel),
+        move |path, facts| {
+            if let Some(facts) = facts {
+                target.post(WM_KILN_FACTS, Inspected { path, facts });
+            }
+        },
+    );
 
     let app = Box::new(App {
         hwnd,
         kiln,
         runner,
+        inspector,
         jobs: HashMap::new(),
         batches: HashMap::new(),
         next_batch: 1,
@@ -2282,6 +2412,11 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             app.on_probed(*p);
             Some(LRESULT(0))
         }
+        WM_KILN_FACTS => {
+            let found = unsafe { Box::from_raw(lparam.0 as *mut Inspected) };
+            app.on_inspected(*found);
+            Some(LRESULT(0))
+        }
         WM_KILN_MOVED => {
             let m = unsafe { Box::from_raw(lparam.0 as *mut Moved) };
             app.on_moved(*m);
@@ -2321,6 +2456,9 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             Some(LRESULT(0))
         }
         WM_DESTROY => {
+            // Stop the inspect thread with the window: nothing is looked
+            // at or reported after this.
+            app.inspector.shutdown();
             unsafe {
                 let _ = RevokeDragDrop(hwnd);
                 PostQuitMessage(0);
