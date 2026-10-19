@@ -11,8 +11,9 @@ use std::time::Duration;
 use crate::converter::CancelToken;
 use crate::error::{Error, Result};
 
-/// Keep at most this much stderr, which is plenty for a details view.
-const STDERR_LIMIT: usize = 64 * 1024;
+/// Keep this much of the start and of the end of stderr. The start has
+/// the error; the end has the last word of analysis passes.
+const STDERR_KEEP: usize = 32 * 1024;
 const POLL: Duration = Duration::from_millis(25);
 
 /// The executable for an engine: the configured path, or its bare name so
@@ -33,7 +34,8 @@ pub(crate) fn sibling(configured: Option<&Path>, name: &str) -> PathBuf {
     }
 }
 
-/// Run `cmd` to completion, feeding each stdout line to `on_line`.
+/// Run `cmd` to completion, feeding each stdout line to `on_line`, and
+/// return its stderr.
 ///
 /// Kills the process and returns `Error::Cancelled` if `cancel` is set.
 /// A missing executable becomes `Error::EngineMissing`; a non-zero exit
@@ -43,7 +45,7 @@ pub(crate) fn run(
     mut cmd: Command,
     cancel: &CancelToken,
     mut on_line: impl FnMut(&str),
-) -> Result<()> {
+) -> Result<String> {
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -74,19 +76,33 @@ pub(crate) fn run(
         }
     });
     let err_reader = thread::spawn(move || {
-        // Keep the start, but keep draining so a chatty engine never
-        // blocks on a full pipe.
+        // Keep the start and the end, and keep draining so a chatty
+        // engine never blocks on a full pipe.
         let mut stderr = stderr;
-        let mut kept = Vec::new();
+        let mut head = Vec::new();
+        let mut tail = std::collections::VecDeque::new();
+        let mut dropped = false;
         let mut chunk = [0u8; 8192];
         while let Ok(n) = stderr.read(&mut chunk) {
             if n == 0 {
                 break;
             }
-            let room = STDERR_LIMIT.saturating_sub(kept.len());
-            kept.extend_from_slice(&chunk[..n.min(room)]);
+            let room = STDERR_KEEP.saturating_sub(head.len());
+            head.extend_from_slice(&chunk[..n.min(room)]);
+            for &b in &chunk[n.min(room)..n] {
+                if tail.len() == STDERR_KEEP {
+                    tail.pop_front();
+                    dropped = true;
+                }
+                tail.push_back(b);
+            }
         }
-        String::from_utf8_lossy(&kept).into_owned()
+        let mut text = String::from_utf8_lossy(&head).into_owned();
+        if dropped {
+            text.push_str("\n[...]\n");
+        }
+        text.push_str(&String::from_utf8_lossy(tail.make_contiguous()));
+        text
     });
 
     let status = loop {
@@ -119,7 +135,7 @@ pub(crate) fn run(
     let stderr = err_reader.join().unwrap_or_default();
 
     if status.success() {
-        return Ok(());
+        return Ok(stderr);
     }
     let summary = stderr
         .lines()

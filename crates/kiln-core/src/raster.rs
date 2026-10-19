@@ -59,6 +59,55 @@ impl Converter for ImageConverter {
     }
 }
 
+/// Decode a PNG or JPG, checking its signature first.
+pub(crate) fn decode(input: &Path, ext: &str) -> Result<DynamicImage> {
+    let format = match ext {
+        "png" => {
+            check_png(input)?;
+            ImageFormat::Png
+        }
+        "jpg" => ImageFormat::Jpeg,
+        other => {
+            return Err(Error::Registry(format!(
+                "The image backend can't read {}.",
+                other.to_ascii_uppercase()
+            )))
+        }
+    };
+    let file = File::open(input).map_err(|e| Error::io(input, e))?;
+    ImageReader::with_format(BufReader::new(file), format)
+        .decode()
+        .map_err(|e| Error::Decode {
+            path: input.to_path_buf(),
+            reason: e.to_string(),
+        })
+}
+
+/// Write `img` as `ext` ("png" or "jpg") to a new file at `output`.
+pub(crate) fn encode(img: &DynamicImage, output: &Path, ext: &str, quality: u8) -> Result<()> {
+    let out = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output)
+        .map_err(|e| Error::io(output, e))?;
+    match ext {
+        "jpg" => write_jpeg(out, img, quality),
+        _ => write_png(out, img),
+    }
+}
+
+fn write_png(file: File, img: &DynamicImage) -> Result<()> {
+    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+    let mut out = BufWriter::new(file);
+    let encoder =
+        PngEncoder::new_with_quality(&mut out, CompressionType::Best, FilterType::Adaptive);
+    img.write_with_encoder(encoder).map_err(|e| Error::Encode {
+        code: "PNG".to_owned(),
+        reason: e.to_string(),
+    })?;
+    out.flush().map_err(|e| Error::io("PNG", e))
+}
+
 /// Reject anything that isn't an existing file starting with the PNG
 /// signature. The extension alone is not trusted.
 fn check_png(input: &Path) -> Result<()> {

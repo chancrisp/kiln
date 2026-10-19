@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use kiln_core::{Engines, Error, Kiln, Options};
+use kiln_core::{Engines, Error, Kiln, Options, Tool};
 
 #[derive(Parser)]
 #[command(name = "kiln", version, about = "Convert files locally.")]
@@ -28,6 +28,24 @@ enum Command {
         /// JPG quality, 1 to 100.
         #[arg(short, long, default_value_t = 90, value_parser = clap::value_parser!(u8).range(1..=100))]
         quality: u8,
+        /// Path to the FFmpeg executable. Defaults to the one on PATH.
+        #[arg(long, value_name = "PATH")]
+        ffmpeg: Option<PathBuf>,
+        /// Path to the Pandoc executable. Defaults to the one on PATH.
+        #[arg(long, value_name = "PATH")]
+        pandoc: Option<PathBuf>,
+    },
+    /// Run a file tool: compress, crop, trim, split or merge. Results are
+    /// written next to the first input; originals are never changed.
+    Tool {
+        /// compress, crop, trim, split or merge.
+        tool: String,
+        /// The files to work on. Merge takes two or more of one type.
+        #[arg(required = true)]
+        inputs: Vec<PathBuf>,
+        /// Write results here instead of next to the input.
+        #[arg(short, long, value_name = "DIR")]
+        out_dir: Option<PathBuf>,
         /// Path to the FFmpeg executable. Defaults to the one on PATH.
         #[arg(long, value_name = "PATH")]
         ffmpeg: Option<PathBuf>,
@@ -71,6 +89,36 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Command::Tool {
+            tool,
+            inputs,
+            out_dir,
+            ffmpeg,
+            pandoc,
+        } => {
+            let Some(tool) = Tool::parse(&tool) else {
+                let names: Vec<&str> = Tool::ALL.iter().map(|t| t.id()).collect();
+                eprintln!("kiln: {tool} isn't a tool. Tools: {}.", names.join(", "));
+                return ExitCode::from(2);
+            };
+            let opts = Options {
+                out_dir,
+                engines: Engines { ffmpeg, pandoc },
+                ..Options::default()
+            };
+            match kiln.run_tool(tool, &inputs, &opts) {
+                Ok(outputs) => {
+                    for out in outputs {
+                        println!("{}", out.display());
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("kiln: {e}");
+                    ExitCode::from(exit_code(&e))
+                }
+            }
+        }
         Command::Formats { input } => {
             let targets = kiln.targets_for(&input);
             if targets.is_empty() {
@@ -92,7 +140,10 @@ fn main() -> ExitCode {
 /// 2 for requests Kiln can't take on, 1 for conversions that failed.
 fn exit_code(e: &Error) -> u8 {
     match e {
-        Error::UnsupportedInput(_) | Error::UnknownFormat(_) | Error::UnsupportedPair { .. } => 2,
+        Error::UnsupportedInput(_)
+        | Error::UnknownFormat(_)
+        | Error::UnsupportedPair { .. }
+        | Error::ToolUnavailable(_) => 2,
         _ => 1,
     }
 }

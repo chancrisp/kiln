@@ -51,6 +51,15 @@ pub enum Error {
         details: String,
     },
 
+    /// A tool that doesn't apply to these files. The message says why.
+    #[error("{0}")]
+    ToolUnavailable(String),
+
+    /// A tool that applies but has nothing to do, such as cropping an
+    /// image with no border.
+    #[error("{0}")]
+    NothingToDo(String),
+
     #[error("Cancelled.")]
     Cancelled,
 

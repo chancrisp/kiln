@@ -18,6 +18,8 @@ mod pandoc;
 mod process;
 mod raster;
 pub mod registry;
+mod runner;
+mod tools;
 
 pub use converter::{CancelToken, Context, Converter, Engines, Options, Progress, Request};
 pub use error::{Error, Result};
@@ -26,3 +28,5 @@ pub use job::Kiln;
 pub use pandoc::PandocConverter;
 pub use raster::ImageConverter;
 pub use registry::{Format, Kind, Registry};
+pub use runner::{JobError, JobEvent, JobId, JobKind, Runner};
+pub use tools::Tool;

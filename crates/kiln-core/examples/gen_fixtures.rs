@@ -41,6 +41,16 @@ fn main() {
     let bytes = std::fs::read(dir.join("rgb_gradient.png")).unwrap();
     std::fs::write(dir.join("truncated.png"), &bytes[..bytes.len() / 3]).unwrap();
 
+    // 48x36 with a plain light border around a darker 28x16 block.
+    let bordered = RgbImage::from_fn(48, 36, |x, y| {
+        if (10..38).contains(&x) && (10..26).contains(&y) {
+            Rgb([40, 60, 90])
+        } else {
+            Rgb([235, 230, 220])
+        }
+    });
+    bordered.save(dir.join("bordered.png")).unwrap();
+
     // Text with a .png extension.
     std::fs::write(dir.join("not_really.png"), b"this is plain text\n").unwrap();
 
@@ -150,6 +160,52 @@ fn media(dir: &Path) {
         "16k",
         "-shortest",
         "sample.webm",
+    ]);
+
+    // Letterboxed: 64x48 frame with 64x32 picture and black bars.
+    ff(&[
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=size=64x32:rate=10:duration=1",
+        "-f",
+        "lavfi",
+        "-i",
+        tone,
+        "-vf",
+        "pad=64:48:0:8:black",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-crf",
+        "30",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "32k",
+        "-shortest",
+        "letterbox.mp4",
+    ]);
+    // Half a second of silence either side of one second of tone.
+    ff(&[
+        "-f",
+        "lavfi",
+        "-i",
+        "anullsrc=r=22050:cl=mono:d=0.5",
+        "-f",
+        "lavfi",
+        "-i",
+        tone,
+        "-f",
+        "lavfi",
+        "-i",
+        "anullsrc=r=22050:cl=mono:d=0.5",
+        "-filter_complex",
+        "[0:a][1:a][2:a]concat=n=3:v=0:a=1",
+        "-c:a",
+        "pcm_s16le",
+        "padded.wav",
     ]);
 
     // Text with a media extension.

@@ -114,22 +114,8 @@ impl Kiln {
             })?;
         let converter = &self.converters[backend];
 
-        let out_dir = match &opts.out_dir {
-            Some(dir) => dir.clone(),
-            None => input
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| PathBuf::from(".")),
-        };
-        if !out_dir.is_dir() {
-            return Err(Error::OutputDirNotFound(out_dir));
-        }
-
-        let temp_root = opts
-            .temp_root
-            .clone()
-            .unwrap_or_else(|| std::env::temp_dir().join("Kiln"));
-        let work = WorkDir::create(&temp_root)?;
+        let out_dir = out_dir_for(&input, opts)?;
+        let work = WorkDir::for_options(opts)?;
         let temp_out = work.path().join(format!("output.{}", to.ext));
 
         let req = Request {
@@ -145,28 +131,48 @@ impl Kiln {
             return Err(Error::Cancelled);
         }
 
-        match fs::metadata(&temp_out) {
-            Ok(m) if m.len() > 0 => {}
-            _ => {
-                return Err(Error::EngineFailed {
-                    engine: engine_name(backend),
-                    summary: "it finished without writing a file.".to_owned(),
-                    details: String::new(),
-                })
-            }
-        }
-
-        let stem = input
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let final_path = place(&temp_out, &out_dir, &stem, &to.ext)?;
+        ensure_written(&temp_out, engine_name(backend))?;
+        let final_path = place(&temp_out, &out_dir, &stem_of(&input), &to.ext)?;
         (ctx.progress)(Progress::Fraction(1.0));
         Ok(final_path)
     }
 }
 
-fn engine_name(backend: &str) -> &'static str {
+/// Where outputs for `input` go: the configured folder, or next to it.
+pub(crate) fn out_dir_for(input: &Path, opts: &Options) -> Result<PathBuf> {
+    let dir = match &opts.out_dir {
+        Some(dir) => dir.clone(),
+        None => input
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from(".")),
+    };
+    if dir.is_dir() {
+        Ok(dir)
+    } else {
+        Err(Error::OutputDirNotFound(dir))
+    }
+}
+
+pub(crate) fn stem_of(path: &Path) -> String {
+    path.file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// An engine that exits cleanly but writes nothing is still a failure.
+pub(crate) fn ensure_written(path: &Path, engine: &'static str) -> Result<()> {
+    match fs::metadata(path) {
+        Ok(m) if m.len() > 0 => Ok(()),
+        _ => Err(Error::EngineFailed {
+            engine,
+            summary: "it finished without writing a file.".to_owned(),
+            details: String::new(),
+        }),
+    }
+}
+
+pub(crate) fn engine_name(backend: &str) -> &'static str {
     match backend {
         "ffmpeg" => "FFmpeg",
         "pandoc" => "Pandoc",
@@ -175,7 +181,7 @@ fn engine_name(backend: &str) -> &'static str {
 }
 
 /// The input as an absolute path to an existing file.
-fn checked_input(input: &Path) -> Result<PathBuf> {
+pub(crate) fn checked_input(input: &Path) -> Result<PathBuf> {
     let meta = match fs::metadata(input) {
         Ok(m) => m,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -192,7 +198,7 @@ fn checked_input(input: &Path) -> Result<PathBuf> {
 }
 
 /// Move the finished file from the working folder to a free name.
-fn place(temp: &Path, dir: &Path, stem: &str, ext: &str) -> Result<PathBuf> {
+pub(crate) fn place(temp: &Path, dir: &Path, stem: &str, ext: &str) -> Result<PathBuf> {
     let (placeholder, path) = output::create_unique(dir, stem, ext)?;
     // Close the placeholder first: Windows can't replace an open file.
     drop(placeholder);
@@ -216,9 +222,17 @@ fn place(temp: &Path, dir: &Path, stem: &str, ext: &str) -> Result<PathBuf> {
 }
 
 /// A private per-job folder, removed when dropped (finish, error or cancel).
-struct WorkDir(PathBuf);
+pub(crate) struct WorkDir(PathBuf);
 
 impl WorkDir {
+    pub(crate) fn for_options(opts: &Options) -> Result<Self> {
+        let root = opts
+            .temp_root
+            .clone()
+            .unwrap_or_else(|| std::env::temp_dir().join("Kiln"));
+        Self::create(&root)
+    }
+
     fn create(root: &Path) -> Result<Self> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         fs::create_dir_all(root).map_err(|e| Error::io(root, e))?;
@@ -237,7 +251,7 @@ impl WorkDir {
         }
     }
 
-    fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         &self.0
     }
 }

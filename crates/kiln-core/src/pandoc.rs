@@ -40,6 +40,6 @@ impl Converter for PandocConverter {
             // Paths are absolute, so they can't be mistaken for options.
             .arg(req.input);
 
-        process::run(ENGINE, cmd, ctx.cancel, |_| {})
+        process::run(ENGINE, cmd, ctx.cancel, |_| {}).map(|_| ())
     }
 }
