@@ -111,6 +111,20 @@ fn images(dir: &Path) {
 
     // Text with a .png extension.
     std::fs::write(dir.join("not_really.png"), b"this is plain text\n").unwrap();
+
+    // 64x48 photo stand-in: a smooth gradient in each channel plus noise
+    // of up to 40 either way, from a fixed-seed LCG, so it has many
+    // colours and few equal neighbours.
+    let mut seed: u32 = 0x4B49_4C4E;
+    let mut noise = move || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        ((seed >> 16) % 81) as i32 - 40
+    };
+    let photo = RgbImage::from_fn(64, 48, |x, y| {
+        let base = [x * 3 + 20, y * 4 + 20, (x + y) * 2 + 40];
+        Rgb(base.map(|b| (b as i32 + noise()).clamp(0, 255) as u8))
+    });
+    photo.save(dir.join("photo.png")).unwrap();
 }
 
 /// The fixture gradient as vector art: 64x48, with a shape and a word.

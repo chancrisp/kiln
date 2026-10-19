@@ -12,6 +12,7 @@
 mod calibre;
 pub mod converter;
 pub mod error;
+pub mod facts;
 mod ffmpeg;
 mod job;
 mod libreoffice;
@@ -29,6 +30,7 @@ mod tools;
 pub use calibre::{find_installed as find_calibre, CalibreConverter};
 pub use converter::{CancelToken, Context, Converter, Engines, Options, Progress, Request};
 pub use error::{Error, Result};
+pub use facts::{inspect, Facts, Look, PdfFacts, Picture};
 pub use ffmpeg::FfmpegConverter;
 pub use job::Kiln;
 pub use libreoffice::{find_installed as find_libreoffice, LibreOfficeConverter};

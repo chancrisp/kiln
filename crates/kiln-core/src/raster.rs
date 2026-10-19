@@ -21,7 +21,7 @@ const FORMATS: [&str; 10] = [
 ];
 
 /// Camera RAW types, read through WIC.
-const RAW: [&str; 10] = [
+pub(crate) const RAW: [&str; 10] = [
     "dng", "cr2", "cr3", "nef", "arw", "orf", "rw2", "raf", "pef", "srw",
 ];
 
@@ -88,6 +88,22 @@ pub(crate) fn fit(img: DynamicImage, cap: Option<u32>) -> DynamicImage {
 /// is asked for. Vector art scales up without loss, so unlike other
 /// images it may grow. Text uses the fonts installed in Windows.
 fn draw_svg(input: &Path, size: Option<u32>) -> Result<DynamicImage> {
+    render_svg(input, &svg_tree(input)?, size)
+}
+
+/// An SVG's own size, rounded, and a drawing of it with its long side at
+/// most `cap`. Unlike a conversion, the drawing never grows.
+pub(crate) fn svg_preview(input: &Path, cap: u32) -> Result<((u32, u32), DynamicImage)> {
+    let tree = svg_tree(input)?;
+    let natural = tree.size();
+    let (w, h) = (natural.width(), natural.height());
+    let own = ((w.round() as u32).max(1), (h.round() as u32).max(1));
+    let size = (w.max(h) > cap as f32).then_some(cap);
+    Ok((own, render_svg(input, &tree, size)?))
+}
+
+/// Parse an SVG, with the fonts installed in Windows for its text.
+fn svg_tree(input: &Path) -> Result<resvg::usvg::Tree> {
     let data = fs::read(input).map_err(|e| Error::io(input, e))?;
     let bad = |reason: String| Error::Decode {
         path: input.to_path_buf(),
@@ -110,7 +126,15 @@ fn draw_svg(input: &Path, size: Option<u32>) -> Result<DynamicImage> {
         ..Default::default()
     };
     opt.fontdb_mut().load_system_fonts();
-    let tree = resvg::usvg::Tree::from_data(&data, &opt).map_err(|e| bad(e.to_string()))?;
+    resvg::usvg::Tree::from_data(&data, &opt).map_err(|e| bad(e.to_string()))
+}
+
+/// Draw a parsed SVG at its own size, or with its long side at `size`.
+fn render_svg(input: &Path, tree: &resvg::usvg::Tree, size: Option<u32>) -> Result<DynamicImage> {
+    let bad = |reason: String| Error::Decode {
+        path: input.to_path_buf(),
+        reason,
+    };
     let natural = tree.size();
     let (nw, nh) = (natural.width(), natural.height());
     let scale = match size {
@@ -124,7 +148,7 @@ fn draw_svg(input: &Path, size: Option<u32>) -> Result<DynamicImage> {
     let mut pixmap = resvg::tiny_skia::Pixmap::new(w, h)
         .ok_or_else(|| bad("the drawing has no size.".to_owned()))?;
     let transform = resvg::tiny_skia::Transform::from_scale(w as f32 / nw, h as f32 / nh);
-    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    resvg::render(tree, transform, &mut pixmap.as_mut());
     // tiny-skia keeps colours premultiplied by alpha.
     let mut rgba = pixmap.take();
     for px in rgba.chunks_exact_mut(4) {
@@ -320,15 +344,16 @@ fn decode_raw(input: &Path) -> Result<DynamicImage> {
 }
 
 #[cfg(windows)]
-mod wic {
+pub(crate) mod wic {
     use std::path::Path;
 
     use image::{DynamicImage, ImageBuffer, Rgb};
     use windows::core::HSTRING;
     use windows::Win32::Foundation::GENERIC_READ;
     use windows::Win32::Graphics::Imaging::{
-        CLSID_WICImagingFactory, GUID_WICPixelFormat48bppRGB, IWICImagingFactory,
-        WICBitmapDitherTypeNone, WICBitmapPaletteTypeCustom, WICDecodeMetadataCacheOnDemand,
+        CLSID_WICImagingFactory, GUID_WICPixelFormat48bppRGB, IWICBitmapFrameDecode,
+        IWICImagingFactory, WICBitmapDitherTypeNone, WICBitmapPaletteTypeCustom,
+        WICDecodeMetadataCacheOnDemand,
     };
     use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
     use windows::Win32::System::Com::{
@@ -366,17 +391,7 @@ mod wic {
                 )
                 .map_err(fail)?;
             let frame = decoder.GetFrame(0).map_err(fail)?;
-            let orientation = frame
-                .GetMetadataQueryReader()
-                .ok()
-                .and_then(|reader| {
-                    let mut value = PROPVARIANT::default();
-                    reader
-                        .GetMetadataByName(&HSTRING::from("System.Photo.Orientation"), &mut value)
-                        .ok()?;
-                    u16::try_from(&value).ok()
-                })
-                .unwrap_or(1);
+            let orientation = orientation(&frame);
             let converter = factory.CreateFormatConverter().map_err(fail)?;
             converter
                 .Initialize(
@@ -405,6 +420,58 @@ mod wic {
         }
     }
 
+    /// The picture's size as it is shown, turned upright, read from the
+    /// file's header without developing it.
+    pub fn size(input: &Path) -> Result<(u32, u32)> {
+        let fail = |e: windows::core::Error| Error::Decode {
+            path: input.to_path_buf(),
+            reason: e.message().to_string(),
+        };
+        // SAFETY: plain COM calls on interfaces this function owns; no
+        // pixels are copied.
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            let factory: IWICImagingFactory =
+                CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)
+                    .map_err(fail)?;
+            let decoder = factory
+                .CreateDecoderFromFilename(
+                    &HSTRING::from(input.as_os_str()),
+                    None,
+                    GENERIC_READ,
+                    WICDecodeMetadataCacheOnDemand,
+                )
+                .map_err(fail)?;
+            let frame = decoder.GetFrame(0).map_err(fail)?;
+            let (mut w, mut h) = (0u32, 0u32);
+            frame.GetSize(&mut w, &mut h).map_err(fail)?;
+            // Orientations 5 to 8 turn the picture a quarter.
+            Ok(if (5..=8).contains(&orientation(&frame)) {
+                (h, w)
+            } else {
+                (w, h)
+            })
+        }
+    }
+
+    /// The frame's EXIF orientation, 1 when it has none.
+    fn orientation(frame: &IWICBitmapFrameDecode) -> u16 {
+        // SAFETY: reads one metadata value from a frame the caller owns.
+        unsafe {
+            frame
+                .GetMetadataQueryReader()
+                .ok()
+                .and_then(|reader| {
+                    let mut value = PROPVARIANT::default();
+                    reader
+                        .GetMetadataByName(&HSTRING::from("System.Photo.Orientation"), &mut value)
+                        .ok()?;
+                    u16::try_from(&value).ok()
+                })
+                .unwrap_or(1)
+        }
+    }
+
     /// Apply an EXIF orientation (1 to 8).
     fn upright(img: DynamicImage, orientation: u16) -> DynamicImage {
         match orientation {
@@ -421,7 +488,7 @@ mod wic {
 }
 
 #[cfg(not(windows))]
-mod wic {
+pub(crate) mod wic {
     use std::path::Path;
 
     use image::DynamicImage;
@@ -433,6 +500,10 @@ mod wic {
             path: input.to_path_buf(),
             reason: "camera RAW files can only be read on Windows.".to_owned(),
         })
+    }
+
+    pub fn size(input: &Path) -> Result<(u32, u32)> {
+        decode(input).map(|_| (0, 0))
     }
 }
 
@@ -516,7 +587,8 @@ fn blend(c: u8, a: u8, matte: u8) -> u8 {
     ((c * a + m * (255 - a) + 127) / 255) as u8
 }
 
-fn flatten_rgb(img: &DynamicImage) -> Vec<u8> {
+/// 8-bit RGB pixels, transparency flattened onto white.
+pub(crate) fn flatten_rgb(img: &DynamicImage) -> Vec<u8> {
     if !img.color().has_alpha() {
         return img.to_rgb8().into_raw();
     }
@@ -584,6 +656,15 @@ mod tests {
         let img = image::open(&big).unwrap();
         // 256 is stored as 0 in the directory and decodes as 256.
         assert_eq!((img.width(), img.height()), (256, 256));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn wic_reads_the_size_from_the_header() {
+        // WIC reads JPG too, so the gradient fixture stands in for RAW.
+        let jpg = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/sample.jpg");
+        assert_eq!(wic::size(&jpg).unwrap(), (64, 48));
+        assert!(wic::size(Path::new("no_such_file.dng")).is_err());
     }
 
     #[test]
