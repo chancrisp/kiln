@@ -27,6 +27,19 @@ kind = "image"
 kind = "image"
 aliases = ["jpeg"]
 
+[formats.webp]
+kind = "image"
+
+[formats.bmp]
+kind = "image"
+
+[formats.gif]
+kind = "image"
+
+[formats.tiff]
+kind = "image"
+aliases = ["tif"]
+
 # --- Audio ------------------------------------------------------------------
 
 [formats.wav]
@@ -164,8 +177,8 @@ libreoffice = "odp:impress8"
 
 [[route]]
 backend = "image"
-from = ["png"]
-to = ["jpg"]
+from = ["png", "jpg", "webp", "bmp", "gif", "tiff"]
+to = ["png", "jpg", "webp", "bmp", "gif", "tiff"]
 
 [[route]]
 backend = "ffmpeg"

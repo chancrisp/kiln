@@ -150,7 +150,7 @@ fn unsupported_target_names_the_options() {
         .assert()
         .code(2)
         .stdout("")
-        .stderr("kiln: Can't convert PNG to MP4. Supported formats: JPG.\n");
+        .stderr("kiln: Can't convert PNG to MP4. Supported formats: BMP, GIF, JPG, TIFF, WEBP.\n");
     assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
 }
 
@@ -160,10 +160,10 @@ fn unknown_target_is_a_usage_error() {
     kiln()
         .arg("convert")
         .arg(&input)
-        .arg("webp")
+        .arg("heic")
         .assert()
         .code(2)
-        .stderr("kiln: WEBP isn't a format Kiln knows.\n");
+        .stderr("kiln: HEIC isn't a format Kiln knows.\n");
 }
 
 #[test]

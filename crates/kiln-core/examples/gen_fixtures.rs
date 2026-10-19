@@ -35,6 +35,10 @@ fn images(dir: &Path) {
     // 64x48 RGB gradient.
     let rgb = RgbImage::from_fn(64, 48, |x, y| Rgb([(x * 4) as u8, (y * 5) as u8, 128]));
     rgb.save(dir.join("rgb_gradient.png")).unwrap();
+    // The same gradient in every other raster type the image backend reads.
+    for ext in ["jpg", "webp", "bmp", "gif", "tiff"] {
+        rgb.save(dir.join(format!("sample.{ext}"))).unwrap();
+    }
 
     // 32x32: left half fully transparent, right half opaque dark blue.
     let rgba = RgbaImage::from_fn(32, 32, |x, _| {

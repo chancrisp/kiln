@@ -72,7 +72,9 @@ impl Tool {
     /// Whether this tool can work on one file of this format.
     fn handles(self, f: &Format) -> bool {
         match (self, f.kind) {
-            (Tool::Compress, Kind::Image | Kind::Video) => true,
+            // Only these two have a lossy or tighter encoding to re-save with.
+            (Tool::Compress, Kind::Image) => matches!(f.ext.as_str(), "png" | "jpg"),
+            (Tool::Compress, Kind::Video) => true,
             (Tool::Compress, Kind::Audio) => f.ext != "wav",
             (Tool::Crop, Kind::Image | Kind::Video) => true,
             (Tool::Trim, Kind::Audio) => true,

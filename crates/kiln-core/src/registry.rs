@@ -239,7 +239,10 @@ mod tests {
         let png = r.format("png").unwrap();
         let jpg = r.format("jpg").unwrap();
         assert_eq!(r.backend(png, jpg), Some("image"));
-        assert_eq!(r.targets(png), vec![jpg]);
+        let codes: Vec<&str> = r.targets(png).iter().map(|f| f.ext.as_str()).collect();
+        assert_eq!(codes, ["bmp", "gif", "jpg", "tiff", "webp"]);
+        assert_eq!(r.backend(jpg, png), Some("image"));
+        assert_eq!(r.format("tif").unwrap().ext, "tiff");
         assert!(r
             .backends()
             .eq(["ffmpeg", "image", "libreoffice", "pandoc"]));

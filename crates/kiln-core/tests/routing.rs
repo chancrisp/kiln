@@ -17,8 +17,8 @@ fn targets_come_from_the_registry() {
             .map(|f| f.code())
             .collect()
     };
-    assert_eq!(codes("a.png"), ["JPG"]);
-    assert_eq!(codes("a.jpg"), Vec::<String>::new());
+    assert_eq!(codes("a.png"), ["BMP", "GIF", "JPG", "TIFF", "WEBP"]);
+    assert_eq!(codes("a.jpeg"), ["BMP", "GIF", "PNG", "TIFF", "WEBP"]);
     assert!(codes("a.MP4").contains(&"MP3".to_owned()));
     assert!(!codes("a.mp3").contains(&"MP4".to_owned()));
     assert!(codes("a.docx").contains(&"EPUB".to_owned()));
@@ -33,7 +33,7 @@ fn unsupported_pair_lists_what_is_possible() {
         .unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Can't convert PNG to MP4. Supported formats: JPG."
+        "Can't convert PNG to MP4. Supported formats: BMP, GIF, JPG, TIFF, WEBP."
     );
 }
 

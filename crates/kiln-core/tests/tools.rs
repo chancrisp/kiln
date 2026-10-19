@@ -43,6 +43,8 @@ fn tools_offered_match_the_files() {
     assert_eq!(t(&["a.mp3"]), [Compress, Trim, Split]);
     assert_eq!(t(&["a.wav"]), [Trim, Split]);
     assert_eq!(t(&["a.mp4"]), [Compress, Crop, Split]);
+    assert_eq!(t(&["a.jpg"]), [Compress, Crop]);
+    assert_eq!(t(&["a.gif"]), [Crop]);
     assert_eq!(t(&["a.mp3", "b.mp3"]), [Compress, Trim, Split, Merge]);
     assert_eq!(t(&["a.mp3", "b.wav"]), [Trim, Split]);
     assert_eq!(t(&["a.docx", "b.docx"]), [Merge]);

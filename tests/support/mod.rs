@@ -95,8 +95,18 @@ pub fn assert_output(path: &Path, ext: &str) {
     assert!(!bytes.is_empty(), "{} is empty", path.display());
     let ctx = path.display();
     match ext {
-        "jpg" => {
-            assert_eq!(&bytes[..3], &[0xFF, 0xD8, 0xFF], "{ctx}");
+        "png" | "jpg" | "webp" | "bmp" | "gif" | "tiff" => {
+            let format = match ext {
+                "png" => image::ImageFormat::Png,
+                "jpg" => image::ImageFormat::Jpeg,
+                "webp" => image::ImageFormat::WebP,
+                "bmp" => image::ImageFormat::Bmp,
+                "gif" => image::ImageFormat::Gif,
+                _ => image::ImageFormat::Tiff,
+            };
+            assert_eq!(image::guess_format(&bytes).ok(), Some(format), "{ctx}");
+            let img = image::load_from_memory_with_format(&bytes, format).unwrap();
+            assert_eq!((img.width(), img.height()), (64, 48), "{ctx}");
         }
         "wav" | "mp3" | "flac" | "ogg" | "opus" | "m4a" => {
             match ext {

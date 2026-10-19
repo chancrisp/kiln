@@ -238,3 +238,103 @@ fn error_messages_follow_the_voice_rules() {
         assert!(msg.ends_with('.'), "{msg:?}");
     }
 }
+
+fn convert(input: &Path, to: &str) -> kiln_core::Result<PathBuf> {
+    Kiln::new().convert(input, to, &Options::default())
+}
+
+#[test]
+fn every_raster_type_converts_to_every_other_keeping_pixels() {
+    let types = [
+        ("png", ImageFormat::Png),
+        ("jpg", ImageFormat::Jpeg),
+        ("webp", ImageFormat::WebP),
+        ("bmp", ImageFormat::Bmp),
+        ("gif", ImageFormat::Gif),
+        ("tiff", ImageFormat::Tiff),
+    ];
+    for (from, _) in types {
+        let (_dir, input) = staged(
+            &support::sample_for(from)
+                .file_name()
+                .unwrap()
+                .to_string_lossy(),
+        );
+        for (to, format) in types {
+            if to == from {
+                continue;
+            }
+            let out = convert(&input, to).unwrap();
+            let bytes = fs::read(&out).unwrap();
+            assert_eq!(
+                image::guess_format(&bytes).unwrap(),
+                format,
+                "{from} -> {to}"
+            );
+            let img = image::load_from_memory_with_format(&bytes, format).unwrap();
+            assert_eq!(img.dimensions(), (64, 48), "{from} -> {to}");
+            // The gradient is (x*4, y*5, 128); lossy steps stay close.
+            let p = img.to_rgb8().get_pixel(40, 20).0;
+            assert!(
+                close(p[0], 160, 24) && close(p[1], 100, 24) && close(p[2], 128, 24),
+                "{from} -> {to}: {p:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn lossless_types_keep_exact_pixels() {
+    let (_dir, input) = staged("rgb_gradient.png");
+    let src = image::open(&input).unwrap().to_rgb8();
+    for to in ["webp", "bmp", "tiff"] {
+        let out = convert(&input, to).unwrap();
+        assert_eq!(image::open(&out).unwrap().to_rgb8(), src, "{to}");
+    }
+}
+
+#[test]
+fn transparency_survives_where_the_target_has_alpha() {
+    let (_dir, input) = staged("rgba_half_transparent.png");
+    for to in ["webp", "gif", "tiff", "bmp"] {
+        let out = convert(&input, to).unwrap();
+        let img = image::open(&out).unwrap().to_rgba8();
+        assert_eq!(img.get_pixel(2, 2).0[3], 0, "{to} lost the clear half");
+        assert_eq!(img.get_pixel(30, 2).0[3], 255, "{to}");
+    }
+}
+
+#[test]
+fn sixteen_bit_png_becomes_eight_bit_where_needed() {
+    let (_dir, input) = staged("rgb16.png");
+    for to in ["webp", "bmp", "gif"] {
+        let out = convert(&input, to).unwrap();
+        let p = image::open(&out).unwrap().to_rgb8().get_pixel(5, 5).0;
+        assert!(close(p[1], 155, 4), "{to}: {p:?}");
+    }
+    let tiff = convert(&input, "tiff").unwrap();
+    assert_eq!(image::open(&tiff).unwrap().color(), ColorType::Rgb16);
+}
+
+#[test]
+fn the_tif_spelling_is_read_and_tiff_is_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("scan.tif");
+    fs::copy(fixture("sample.tiff"), &input).unwrap();
+    let out = convert(&input, "png").unwrap();
+    assert_eq!(out.file_name().unwrap(), "scan.png");
+    let back = convert(&out, "tif").unwrap();
+    assert_eq!(back.file_name().unwrap(), "scan.tiff");
+}
+
+#[test]
+fn content_must_match_the_extension_for_every_type() {
+    let dir = tempfile::tempdir().unwrap();
+    for ext in ["jpg", "webp", "bmp", "gif", "tiff"] {
+        let input = dir.path().join(format!("fake.{ext}"));
+        fs::copy(fixture("rgb_gradient.png"), &input).unwrap();
+        let err = convert(&input, "png").unwrap_err();
+        assert!(matches!(err, Error::WrongContent { .. }), "{ext}: {err:?}");
+    }
+    assert_eq!(files_in(dir.path()).len(), 5, "no outputs were written");
+}

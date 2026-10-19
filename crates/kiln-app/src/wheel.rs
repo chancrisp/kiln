@@ -303,9 +303,9 @@ mod tests {
     fn convert_offers_formats_every_file_shares() {
         let kiln = Kiln::new();
         let items = items_for(WheelKind::Convert, &kiln, &["a.png".into()]);
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].label, "JPG");
-        assert_eq!(items[0].icon, "image");
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, ["BMP", "GIF", "JPG", "TIFF", "WEBP"]);
+        assert!(items.iter().all(|i| i.icon == "image"));
 
         let both = items_for(WheelKind::Convert, &kiln, &["a.mp4".into(), "b.mkv".into()]);
         let labels: Vec<&str> = both.iter().map(|i| i.label.as_str()).collect();

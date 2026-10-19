@@ -35,7 +35,7 @@ wheel. Everything happens on your PC. Nothing is uploaded.
 
 | Kind | Reads | Converts to | Engine |
 |---|---|---|---|
-| Image | PNG | JPG | built in |
+| Image | PNG, JPG, WEBP, BMP, GIF, TIFF | any other of those | built in |
 | Audio | WAV, MP3, FLAC, OGG, OPUS, M4A | any other audio format | FFmpeg |
 | Video | MP4, MOV, MKV, WEBM | any other video format, or audio (WAV, MP3, FLAC, OGG, OPUS, M4A) | FFmpeg |
 | Document | MD, HTML, DOCX, ODT, EPUB, RST, TEX | any other of those, plus RTF and TXT | Pandoc |
@@ -44,13 +44,13 @@ wheel. Everything happens on your PC. Nothing is uploaded.
 | Spreadsheet | XLSX, XLS, ODS, CSV | any other of those, plus PDF | LibreOffice |
 | Presentation | PPTX, PPT, ODP | any other of those, plus PDF | LibreOffice |
 
-Aliases are accepted on input: JPEG, OGA, M4V, MARKDOWN and HTM. The full
+Aliases are accepted on input: JPEG, TIF, OGA, M4V, MARKDOWN and HTM. The full
 list lives in [`crates/kiln-core/formats.toml`](crates/kiln-core/formats.toml),
 and `kiln formats FILE` prints what a given file can become.
 
 | Tool | Works on | What it does |
 |---|---|---|
-| Compress | images, video, audio (not WAV) | Re-encodes smaller, and keeps the original if the result isn't smaller |
+| Compress | PNG and JPG images, video, audio (not WAV) | Re-encodes smaller, and keeps the original if the result isn't smaller |
 | Crop | images, video | Removes plain borders from images and black bars from video |
 | Trim | audio | Cuts silence from the start and end |
 | Split | audio, video | Cuts the file into two halves |
