@@ -1,10 +1,13 @@
 //! `kiln convert <input> <format>`: the command-line front end for kiln-core.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use kiln_core::{CancelToken, Engines, Error, Kiln, Limit, Options, Preset, Quality, Tool};
+use kiln_core::{
+    inspect, suggest, CancelToken, Engines, Error, Habits, Kiln, Limit, Options, Preset, Quality,
+    Suggested, Suggestion, Tool,
+};
 
 #[derive(Parser)]
 #[command(name = "kiln", version, about = "Convert files locally.")]
@@ -54,6 +57,28 @@ enum Command {
         /// Write results here instead of next to the input.
         #[arg(short, long, value_name = "DIR")]
         out_dir: Option<PathBuf>,
+        /// Path to the FFmpeg executable. Defaults to the one on PATH.
+        #[arg(long, value_name = "PATH")]
+        ffmpeg: Option<PathBuf>,
+        /// Path to the Pandoc executable. Defaults to the one on PATH.
+        #[arg(long, value_name = "PATH")]
+        pandoc: Option<PathBuf>,
+        /// Path to LibreOffice's soffice.exe. Defaults to the one on PATH,
+        /// then its default install folder.
+        #[arg(long, value_name = "PATH")]
+        libreoffice: Option<PathBuf>,
+        /// Path to Calibre's ebook-convert.exe. Defaults to the one on PATH,
+        /// then its default install folder.
+        #[arg(long, value_name = "PATH")]
+        calibre: Option<PathBuf>,
+    },
+    /// Suggest a conversion for each file, then a tool for the whole set
+    /// and, for several files, a conversion they share. Picks made in the
+    /// app are ignored, so the output is the same every time.
+    Suggest {
+        /// The files to look at.
+        #[arg(required = true)]
+        inputs: Vec<PathBuf>,
         /// Path to the FFmpeg executable. Defaults to the one on PATH.
         #[arg(long, value_name = "PATH")]
         ffmpeg: Option<PathBuf>,
@@ -210,6 +235,31 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Command::Suggest {
+            inputs,
+            ffmpeg,
+            pandoc,
+            libreoffice,
+            calibre,
+        } => {
+            if let Some(missing) = inputs.iter().find(|p| !p.exists()) {
+                eprintln!("kiln: {} doesn't exist.", missing.display());
+                return ExitCode::from(2);
+            }
+            let opts = Options {
+                engines: Engines {
+                    ffmpeg,
+                    pandoc,
+                    libreoffice,
+                    calibre,
+                },
+                ..Options::default()
+            };
+            for (name, label, reason) in suggest_rows(&kiln, &inputs, &opts) {
+                println!("{name}{label}{reason}");
+            }
+            ExitCode::SUCCESS
+        }
         Command::Formats { input } => {
             let targets = kiln.targets_for(&input);
             if targets.is_empty() {
@@ -226,6 +276,78 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
     }
+}
+
+/// The rows `kiln suggest` prints, already padded: one per file, then
+/// `(all)` with the set's tool suggestion, then, for several files,
+/// `(all)` with the conversion they share. Set rows appear only when there
+/// is a suggestion.
+fn suggest_rows(kiln: &Kiln, inputs: &[PathBuf], opts: &Options) -> Vec<(String, String, String)> {
+    let cancel = CancelToken::new();
+    let habits = Habits::default();
+    let label = |s: &Suggestion| match &s.action {
+        Suggested::Convert(ext) => kiln
+            .registry()
+            .format(ext)
+            .map(|f| f.code())
+            .unwrap_or_else(|| ext.to_uppercase()),
+        Suggested::Tool(tool) => tool.label().to_string(),
+    };
+
+    // (name, Some((label, reason))) or (name, None) for "No suggestion."
+    let mut rows: Vec<(String, Option<(String, String)>)> = Vec::new();
+    let mut all_facts = Vec::new();
+    for path in inputs {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        let facts = inspect(kiln, path, opts, &cancel);
+        let row = facts.as_ref().and_then(|f| {
+            let offered = kiln.offered(&[path.as_path()], opts);
+            suggest(std::slice::from_ref(f), &offered, &habits).convert
+        });
+        rows.push((name, row.map(|s| (label(&s), s.reason))));
+        all_facts.push(facts);
+    }
+
+    // The set's suggestions need facts for every file.
+    let set: Option<Vec<_>> = all_facts.into_iter().collect();
+    if let Some(set) = set {
+        let paths: Vec<&Path> = inputs.iter().map(PathBuf::as_path).collect();
+        let offered = kiln.offered(&paths, opts);
+        let both = suggest(&set, &offered, &habits);
+        if let Some(tool) = both.tool {
+            rows.push(("(all)".into(), Some((label(&tool), tool.reason))));
+        }
+        if inputs.len() > 1 {
+            if let Some(convert) = both.convert {
+                rows.push(("(all)".into(), Some((label(&convert), convert.reason))));
+            }
+        }
+    }
+
+    let name_width = rows
+        .iter()
+        .map(|(n, _)| n.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 3;
+    let label_width = rows
+        .iter()
+        .filter_map(|(_, r)| r.as_ref().map(|(l, _)| l.chars().count()))
+        .max()
+        .unwrap_or(0)
+        + 2;
+    rows.into_iter()
+        .map(|(name, row)| {
+            let name = format!("{name:<name_width$}");
+            match row {
+                Some((label, reason)) => (name, format!("{label:<label_width$}"), reason),
+                None => (name, String::new(), "No suggestion.".to_string()),
+            }
+        })
+        .collect()
 }
 
 /// 2 for requests Kiln can't take on, 1 for conversions that failed.
