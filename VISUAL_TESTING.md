@@ -40,6 +40,27 @@ window between them as well.
 - [ ] "Clear" shows a soft inner shadow while pressed and empties the list on release.
 - [ ] Dropping files on the app's icon in Explorer opens Kiln with them listed.
 
+## Glaze wheel
+
+- [ ] Holding Shift while dragging files over the window pours the convert wheel open at the cursor in about 160 ms. Ctrl opens the tools wheel instead.
+- [ ] The wheel stays fully inside the window near every edge and corner.
+- [ ] The centre shows "Convert" or "Tools" in the serif, with the source type (PNG, or MIXED) muted below it.
+- [ ] Hovering a segment fills it with celadon at 18% and draws a fine celadon arc on its outer edge. Icons and labels keep their colour.
+- [ ] A single-item wheel lights the whole ring as one smooth circle.
+- [ ] Letting go of the key mid-drag, or pressing Escape, fades the wheel out over about 120 ms.
+- [ ] Dropping on an item pulses it once, then the job starts and the wheel fades. Dropping on the centre just adds the files.
+- [ ] Enter on a row opens the convert wheel, Ctrl+Enter the tools wheel, and the Apps key or Shift+F10 the convert wheel. Arrows move round it, Enter applies, Escape closes.
+- [ ] Tools offered match the file: Merge appears only for two or more files of one type, Crop never for audio.
+
+## Jobs
+
+- [ ] A running row shows "Converting to WEBM" and a thin celadon line along its bottom that brightens at its leading edge. No spinners anywhere.
+- [ ] Hovering or selecting a running row shows a cross; clicking it cancels the job and the row says "Cancelled.".
+- [ ] When a job finishes, the output name appears in bone, fading in over about 200 ms.
+- [ ] A failed job shows one plain line in brick and, when the engine said more, a "Show details" link. Clicking it, or pressing Space on the row, opens the details over a scrim. Escape, Enter or Close dismisses it.
+- [ ] The footer sums up each batch calmly: "Converted 3 files to JPG.", "Couldn't convert the file to FLAC.". No exclamation marks.
+- [ ] Clear and Delete cancel running jobs first and leave no partial files behind.
+
 ## App icon
 
 - [ ] Explorer, the taskbar and Alt+Tab show the celadon vessel on a soot tile at 16, 32, 48 and 256 px.

@@ -25,6 +25,8 @@ pub const DRAG_LEAVE: usize = 3;
 /// Sent with `WM_KILN_DRAG` and `WM_KILN_DROP`; lparam points at it for
 /// the duration of the SendMessage call.
 pub struct DragEvent {
+    /// Modifier and mouse-button state (MK_SHIFT, MK_CONTROL, MK_ALT).
+    pub keys: MODIFIERKEYS_FLAGS,
     /// Screen coordinates, physical pixels.
     pub x: i32,
     pub y: i32,
@@ -98,29 +100,33 @@ fn set_effect(effect: *mut DROPEFFECT, value: DROPEFFECT) {
     }
 }
 
+fn effect_for(files: bool) -> DROPEFFECT {
+    if files {
+        DROPEFFECT_COPY
+    } else {
+        DROPEFFECT_NONE
+    }
+}
+
 impl IDropTarget_Impl for DropTarget_Impl {
     fn DragEnter(
         &self,
         data: Ref<IDataObject>,
-        _keys: MODIFIERKEYS_FLAGS,
+        keys: MODIFIERKEYS_FLAGS,
         pt: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
         let files = data.as_ref().is_some_and(offers_files);
         self.has_files.set(files);
-        set_effect(
-            effect,
-            if files {
-                DROPEFFECT_COPY
-            } else {
-                DROPEFFECT_NONE
-            },
-        );
+        set_effect(effect, effect_for(files));
         if files {
+            // Read the paths now, so the wheel can offer the right items
+            // before anything is dropped.
             let ev = DragEvent {
+                keys,
                 x: pt.x,
                 y: pt.y,
-                paths: vec![],
+                paths: data.as_ref().map(dropped_paths).unwrap_or_default(),
             };
             self.send(WM_KILN_DRAG, DRAG_ENTER, &ev);
         }
@@ -129,21 +135,15 @@ impl IDropTarget_Impl for DropTarget_Impl {
 
     fn DragOver(
         &self,
-        _keys: MODIFIERKEYS_FLAGS,
+        keys: MODIFIERKEYS_FLAGS,
         pt: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
         let files = self.has_files.get();
-        set_effect(
-            effect,
-            if files {
-                DROPEFFECT_COPY
-            } else {
-                DROPEFFECT_NONE
-            },
-        );
+        set_effect(effect, effect_for(files));
         if files {
             let ev = DragEvent {
+                keys,
                 x: pt.x,
                 y: pt.y,
                 paths: vec![],
@@ -156,6 +156,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
     fn DragLeave(&self) -> Result<()> {
         if self.has_files.replace(false) {
             let ev = DragEvent {
+                keys: MODIFIERKEYS_FLAGS(0),
                 x: 0,
                 y: 0,
                 paths: vec![],
@@ -168,21 +169,15 @@ impl IDropTarget_Impl for DropTarget_Impl {
     fn Drop(
         &self,
         data: Ref<IDataObject>,
-        _keys: MODIFIERKEYS_FLAGS,
+        keys: MODIFIERKEYS_FLAGS,
         pt: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
         self.has_files.set(false);
         let paths = data.as_ref().map(dropped_paths).unwrap_or_default();
-        set_effect(
-            effect,
-            if paths.is_empty() {
-                DROPEFFECT_NONE
-            } else {
-                DROPEFFECT_COPY
-            },
-        );
+        set_effect(effect, effect_for(!paths.is_empty()));
         let ev = DragEvent {
+            keys,
             x: pt.x,
             y: pt.y,
             paths,

@@ -9,6 +9,9 @@ use crate::theme::{fonts, type_scale};
 pub struct Text {
     pub factory: IDWriteFactory,
     pub display: IDWriteTextFormat,
+    pub display_center: IDWriteTextFormat,
+    /// Wrapping monospace for engine output in the details dialog.
+    pub mono_block: IDWriteTextFormat,
     pub lead_center: IDWriteTextFormat,
     pub body: IDWriteTextFormat,
     pub body_center: IDWriteTextFormat,
@@ -78,6 +81,27 @@ impl Text {
                 type_scale::TITLE,
                 false,
             )?,
+            display_center: make(
+                &display_family,
+                display_collection.as_ref(),
+                DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                type_scale::TITLE,
+                true,
+            )?,
+            mono_block: {
+                let f = make(
+                    mono,
+                    None,
+                    DWRITE_FONT_WEIGHT_NORMAL,
+                    type_scale::CAPTION,
+                    false,
+                )?;
+                unsafe {
+                    f.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
+                    f.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
+                }
+                f
+            },
             lead_center: make(
                 ui,
                 None,
@@ -132,6 +156,26 @@ impl Text {
         let mut m = DWRITE_TEXT_METRICS::default();
         unsafe { layout.GetMetrics(&mut m)? };
         Ok((layout, m.widthIncludingTrailingWhitespace))
+    }
+}
+
+impl Text {
+    /// Width of `s` in `format`, for placing text after other text.
+    pub fn measure(&self, s: &str, format: &IDWriteTextFormat) -> f32 {
+        let wide: Vec<u16> = s.encode_utf16().collect();
+        unsafe {
+            let Ok(layout) = self
+                .factory
+                .CreateTextLayout(&wide, format, 10_000.0, 100.0)
+            else {
+                return 0.0;
+            };
+            let mut m = DWRITE_TEXT_METRICS::default();
+            if layout.GetMetrics(&mut m).is_err() {
+                return 0.0;
+            }
+            m.widthIncludingTrailingWhitespace
+        }
     }
 }
 

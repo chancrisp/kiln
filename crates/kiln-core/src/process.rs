@@ -141,7 +141,7 @@ pub(crate) fn run(
         .lines()
         .map(str::trim)
         .find(|l| !l.is_empty())
-        .map(str::to_owned)
+        .map(|l| strip_tags(l).to_owned())
         .unwrap_or_else(|| match status.code() {
             Some(code) => format!("it stopped with exit code {code}."),
             None => "it was stopped by the system.".to_owned(),
@@ -151,6 +151,23 @@ pub(crate) fn run(
         summary,
         details: stderr,
     })
+}
+
+/// Drop the "[in#0 @ 0x55d0]" style prefixes engines put on log lines:
+/// they mean nothing to the person reading the error.
+fn strip_tags(line: &str) -> &str {
+    let mut rest = line;
+    while let Some(after) = rest.strip_prefix('[') {
+        match after.find("] ") {
+            Some(end) => rest = after[end + 2..].trim_start(),
+            None => break,
+        }
+    }
+    if rest.is_empty() {
+        line
+    } else {
+        rest
+    }
 }
 
 #[cfg(windows)]
@@ -165,6 +182,18 @@ fn hide_console(_cmd: &mut Command) {}
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn engine_tags_are_dropped_from_the_summary() {
+        use super::strip_tags;
+        assert_eq!(
+            strip_tags("[in#0 @ 0000021f] Error opening input: Invalid data"),
+            "Error opening input: Invalid data"
+        );
+        assert_eq!(strip_tags("[a] [b @ 0x1] Plain"), "Plain");
+        assert_eq!(strip_tags("No tags here"), "No tags here");
+        assert_eq!(strip_tags("[unclosed"), "[unclosed");
+    }
+
     use super::*;
 
     #[test]

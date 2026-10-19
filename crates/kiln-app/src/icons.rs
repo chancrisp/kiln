@@ -80,6 +80,133 @@ pub const CROSS_PATH: &[Cmd] = &[
     Line(7.0, 17.0),
 ];
 
+/// A picture: frame, hills and a sun.
+pub const IMAGE_PATH: &[Cmd] = &[
+    Move(4.5, 5.0),
+    Line(19.5, 5.0),
+    Line(19.5, 19.0),
+    Line(4.5, 19.0),
+    Close,
+    Move(6.5, 17.0),
+    Line(10.5, 11.5),
+    Line(13.5, 14.75),
+    Line(15.5, 12.5),
+    Line(17.5, 17.0),
+    // The sun: an octagon. At this size it reads as a circle, and short
+    // straight segments stroke cleanly on every Direct2D implementation.
+    Move(17.0, 8.75),
+    Line(16.56, 9.81),
+    Line(15.5, 10.25),
+    Line(14.44, 9.81),
+    Line(14.0, 8.75),
+    Line(14.44, 7.69),
+    Line(15.5, 7.25),
+    Line(16.56, 7.69),
+    Close,
+];
+
+/// Sound: five bars of a level meter.
+pub const AUDIO_PATH: &[Cmd] = &[
+    Move(6.0, 10.0),
+    Line(6.0, 14.0),
+    Move(9.0, 7.0),
+    Line(9.0, 17.0),
+    Move(12.0, 4.5),
+    Line(12.0, 19.5),
+    Move(15.0, 8.0),
+    Line(15.0, 16.0),
+    Move(18.0, 10.5),
+    Line(18.0, 13.5),
+];
+
+/// Moving picture: a camera body and lens.
+pub const VIDEO_PATH: &[Cmd] = &[
+    Move(3.5, 6.5),
+    Line(15.5, 6.5),
+    Line(15.5, 17.5),
+    Line(3.5, 17.5),
+    Close,
+    Move(15.5, 10.5),
+    Line(20.5, 7.5),
+    Line(20.5, 16.5),
+    Line(15.5, 13.5),
+];
+
+/// A page with a folded corner.
+pub const DOCUMENT_PATH: &[Cmd] = &[
+    Move(6.5, 3.5),
+    Line(14.0, 3.5),
+    Line(18.0, 7.5),
+    Line(18.0, 20.5),
+    Line(6.5, 20.5),
+    Close,
+    Move(14.0, 3.5),
+    Line(14.0, 7.5),
+    Line(18.0, 7.5),
+    Move(9.5, 12.0),
+    Line(15.0, 12.0),
+    Move(9.5, 15.5),
+    Line(15.0, 15.5),
+];
+
+/// Compress: two arrows meeting at a line.
+pub const COMPRESS_PATH: &[Cmd] = &[
+    Move(12.0, 3.5),
+    Line(12.0, 9.5),
+    Move(9.0, 6.5),
+    Line(12.0, 9.5),
+    Line(15.0, 6.5),
+    Move(12.0, 20.5),
+    Line(12.0, 14.5),
+    Move(9.0, 17.5),
+    Line(12.0, 14.5),
+    Line(15.0, 17.5),
+    Move(5.0, 12.0),
+    Line(19.0, 12.0),
+];
+
+/// Crop: two interlocking corners.
+pub const CROP_PATH: &[Cmd] = &[
+    Move(7.0, 3.5),
+    Line(7.0, 17.0),
+    Line(20.5, 17.0),
+    Move(3.5, 7.0),
+    Line(17.0, 7.0),
+    Line(17.0, 20.5),
+];
+
+/// Trim: brackets closing in on a line.
+pub const TRIM_PATH: &[Cmd] = &[
+    Move(8.0, 5.0),
+    Line(5.0, 5.0),
+    Line(5.0, 19.0),
+    Line(8.0, 19.0),
+    Move(16.0, 5.0),
+    Line(19.0, 5.0),
+    Line(19.0, 19.0),
+    Line(16.0, 19.0),
+    Move(9.5, 12.0),
+    Line(14.5, 12.0),
+];
+
+/// Split: one line becoming two.
+pub const SPLIT_PATH: &[Cmd] = &[
+    Move(12.0, 3.5),
+    Line(12.0, 10.5),
+    Line(6.0, 20.5),
+    Move(12.0, 10.5),
+    Line(18.0, 20.5),
+];
+
+/// Merge: two lines becoming one.
+pub const MERGE_PATH: &[Cmd] = &[
+    Move(6.0, 3.5),
+    Line(12.0, 13.5),
+    Line(12.0, 20.5),
+    Move(18.0, 3.5),
+    Line(12.0, 13.5),
+];
+
 pub const VESSEL: Icon = Icon {
     name: "vessel",
     style: Style::Stroke,
@@ -106,7 +233,30 @@ pub const CROSS: Icon = Icon {
     path: CROSS_PATH,
 };
 
-pub const ALL: [Icon; 5] = [VESSEL, VESSEL_SOLID, FLAME, CUBE, CROSS];
+const fn stroke(name: &'static str, path: &'static [Cmd]) -> Icon {
+    Icon {
+        name,
+        style: Style::Stroke,
+        path,
+    }
+}
+
+pub const ALL: [Icon; 14] = [
+    VESSEL,
+    VESSEL_SOLID,
+    FLAME,
+    CUBE,
+    CROSS,
+    stroke("image", IMAGE_PATH),
+    stroke("audio", AUDIO_PATH),
+    stroke("video", VIDEO_PATH),
+    stroke("document", DOCUMENT_PATH),
+    stroke("compress", COMPRESS_PATH),
+    stroke("crop", CROP_PATH),
+    stroke("trim", TRIM_PATH),
+    stroke("split", SPLIT_PATH),
+    stroke("merge", MERGE_PATH),
+];
 
 /// The app icon's geometry at a given pixel size: the tile's corner radius
 /// and the scale and offset that centre the vessel on it.

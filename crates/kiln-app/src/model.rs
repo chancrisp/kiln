@@ -3,9 +3,130 @@
 
 use std::path::{Path, PathBuf};
 
-use kiln_core::Kiln;
+use kiln_core::{Kiln, Tool};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+use crate::wheel::Action;
+
+/// Where a file's latest job stands.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum JobState {
+    #[default]
+    Idle,
+    Running {
+        action: Action,
+        /// `None` while the engine can't say how far along it is.
+        fraction: Option<f32>,
+    },
+    Done {
+        action: Action,
+        outputs: Vec<PathBuf>,
+    },
+    Failed {
+        message: String,
+        details: String,
+    },
+    Cancelled,
+}
+
+/// How a row's second line is coloured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tone {
+    Muted,
+    /// The output name after a job: primary text.
+    Result,
+    /// Errors, in brick.
+    Crack,
+}
+
+/// "Converting to JPG", "Trimming".
+pub fn doing(action: &Action) -> String {
+    match action {
+        Action::Convert(ext) => format!("Converting to {}", ext.to_ascii_uppercase()),
+        Action::Tool(t) => match t {
+            Tool::Compress => "Compressing",
+            Tool::Crop => "Cropping",
+            Tool::Trim => "Trimming",
+            Tool::Split => "Splitting",
+            Tool::Merge => "Merging",
+        }
+        .to_owned(),
+    }
+}
+
+/// "Converted to JPG", "Trimmed".
+pub fn done(action: &Action) -> String {
+    match action {
+        Action::Convert(ext) => format!("Converted to {}", ext.to_ascii_uppercase()),
+        Action::Tool(t) => past(*t).to_owned(),
+    }
+}
+
+fn past(t: Tool) -> &'static str {
+    match t {
+        Tool::Compress => "Compressed",
+        Tool::Crop => "Cropped",
+        Tool::Trim => "Trimmed",
+        Tool::Split => "Split",
+        Tool::Merge => "Merged",
+    }
+}
+
+/// The status line once a batch of jobs has finished.
+pub fn batch_summary(
+    action: &Action,
+    files: usize,
+    ok: usize,
+    failed: usize,
+    cancelled: usize,
+) -> String {
+    let n = |k: usize| format!("{k} file{}", if k == 1 { "" } else { "s" });
+    let merge = matches!(action, Action::Tool(Tool::Merge));
+    if ok == 0 && !merge {
+        if failed == 0 {
+            return "Cancelled.".to_owned();
+        }
+        let what = if files == 1 {
+            "the file".to_owned()
+        } else {
+            n(failed)
+        };
+        let mut s = match action {
+            Action::Convert(ext) => {
+                format!("Couldn't convert {what} to {}.", ext.to_ascii_uppercase())
+            }
+            Action::Tool(t) => format!("Couldn't {} {what}.", t.id()),
+        };
+        if cancelled > 0 {
+            s.push_str(&format!(" {cancelled} cancelled."));
+        }
+        return s;
+    }
+    let mut s = match action {
+        Action::Tool(Tool::Merge) if ok > 0 => format!("Merged {} into one.", n(files)),
+        Action::Tool(Tool::Merge) => "Couldn't merge the files.".to_owned(),
+        Action::Convert(ext) if ok == files => {
+            format!("Converted {} to {}.", n(ok), ext.to_ascii_uppercase())
+        }
+        Action::Convert(ext) => format!(
+            "Converted {ok} of {} to {}.",
+            n(files),
+            ext.to_ascii_uppercase()
+        ),
+        Action::Tool(t) if ok == files => format!("{} {}.", past(*t), n(ok)),
+        Action::Tool(t) => format!("{} {ok} of {}.", past(*t), n(files)),
+    };
+    if !merge {
+        if failed > 0 {
+            s.push_str(&format!(" {failed} didn't work."));
+        }
+        if cancelled > 0 {
+            s.push_str(&format!(" {cancelled} cancelled."));
+        }
+    }
+    s
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Entry {
     pub path: PathBuf,
     pub name: String,
@@ -15,10 +136,34 @@ pub struct Entry {
     pub size: u64,
     /// Codes Kiln can convert this file to, from formats.toml.
     pub targets: Vec<String>,
+    pub job: JobState,
 }
 
 impl Entry {
-    /// The secondary line under the file name.
+    /// The second line of the row and its tone, following the job.
+    pub fn line(&self) -> (String, Tone) {
+        match &self.job {
+            JobState::Idle => (self.detail(), Tone::Muted),
+            JobState::Running { action, .. } => (doing(action), Tone::Muted),
+            JobState::Done { outputs, .. } => {
+                let first = outputs
+                    .first()
+                    .and_then(|p| p.file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let more = match outputs.len() {
+                    0 | 1 => String::new(),
+                    2 => " and 1 more".to_owned(),
+                    k => format!(" and {} more", k - 1),
+                };
+                (format!("{first}{more}"), Tone::Result)
+            }
+            JobState::Failed { message, .. } => (message.clone(), Tone::Crack),
+            JobState::Cancelled => ("Cancelled.".to_owned(), Tone::Muted),
+        }
+    }
+
+    /// The secondary line under the file name, before any job.
     pub fn detail(&self) -> String {
         let reach = match self.targets.len() {
             0 => "No conversions for this type".to_owned(),
@@ -113,6 +258,14 @@ impl FileList {
         Some(removed)
     }
 
+    pub fn entries_mut(&mut self) -> &mut [Entry] {
+        &mut self.entries
+    }
+
+    pub fn index_of(&self, path: &Path) -> Option<usize> {
+        self.entries.iter().position(|e| same_path(&e.path, path))
+    }
+
     pub fn clear(&mut self) {
         self.entries.clear();
         self.selected = None;
@@ -140,6 +293,7 @@ fn entry_for(kiln: &Kiln, path: PathBuf, size: u64) -> Entry {
         code,
         size,
         targets,
+        job: JobState::Idle,
     }
 }
 
@@ -312,6 +466,79 @@ mod tests {
             "2 files were already in the list. Skipped 2 items that aren't files."
         );
         for s in [status_line(0, 0, 0, 0), status_line(9, 9, 9, 9)] {
+            assert!(!s.contains('!'));
+        }
+    }
+
+    #[test]
+    fn rows_follow_their_job() {
+        let (dir, kiln) = setup();
+        let f = dir.path().join("a.png");
+        fs::write(&f, b"x").unwrap();
+        let mut list = FileList::default();
+        list.add(&kiln, [f]);
+        let e = &mut list.entries_mut()[0];
+        let jpg = Action::Convert("jpg".into());
+        e.job = JobState::Running {
+            action: jpg.clone(),
+            fraction: Some(0.5),
+        };
+        assert_eq!(e.line(), ("Converting to JPG".to_owned(), Tone::Muted));
+        e.job = JobState::Done {
+            action: jpg,
+            outputs: vec![dir.path().join("a.jpg")],
+        };
+        assert_eq!(e.line(), ("a.jpg".to_owned(), Tone::Result));
+        e.job = JobState::Done {
+            action: Action::Tool(Tool::Split),
+            outputs: vec!["a part 1.wav".into(), "a part 2.wav".into()],
+        };
+        assert_eq!(e.line().0, "a part 1.wav and 1 more");
+        e.job = JobState::Failed {
+            message: "FFmpeg isn't installed. Get it from Settings > Engines.".into(),
+            details: String::new(),
+        };
+        assert_eq!(e.line().1, Tone::Crack);
+    }
+
+    #[test]
+    fn batch_summaries_are_calm_and_specific() {
+        let jpg = Action::Convert("jpg".into());
+        assert_eq!(batch_summary(&jpg, 3, 3, 0, 0), "Converted 3 files to JPG.");
+        assert_eq!(batch_summary(&jpg, 1, 1, 0, 0), "Converted 1 file to JPG.");
+        assert_eq!(
+            batch_summary(&jpg, 3, 2, 1, 0),
+            "Converted 2 of 3 files to JPG. 1 didn't work."
+        );
+        assert_eq!(
+            batch_summary(&jpg, 1, 0, 1, 0),
+            "Couldn't convert the file to JPG."
+        );
+        assert_eq!(
+            batch_summary(&jpg, 3, 0, 2, 1),
+            "Couldn't convert 2 files to JPG. 1 cancelled."
+        );
+        assert_eq!(batch_summary(&jpg, 2, 0, 0, 2), "Cancelled.");
+        let trim = Action::Tool(Tool::Trim);
+        assert_eq!(batch_summary(&trim, 2, 2, 0, 0), "Trimmed 2 files.");
+        assert_eq!(batch_summary(&trim, 1, 0, 1, 0), "Couldn't trim the file.");
+        assert_eq!(
+            batch_summary(&trim, 2, 1, 0, 1),
+            "Trimmed 1 of 2 files. 1 cancelled."
+        );
+        let merge = Action::Tool(Tool::Merge);
+        assert_eq!(
+            batch_summary(&merge, 3, 1, 0, 0),
+            "Merged 3 files into one."
+        );
+        assert_eq!(
+            batch_summary(&merge, 3, 0, 1, 0),
+            "Couldn't merge the files."
+        );
+        for s in [
+            batch_summary(&jpg, 9, 0, 9, 0),
+            batch_summary(&merge, 2, 1, 0, 0),
+        ] {
             assert!(!s.contains('!'));
         }
     }

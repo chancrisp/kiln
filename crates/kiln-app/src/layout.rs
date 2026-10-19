@@ -128,6 +128,58 @@ pub fn layout(w: f32, h: f32, rows: usize) -> Layout {
     }
 }
 
+/// Width of the "Show details" link at the right of a failed row.
+pub const LINK_WIDTH: f32 = 88.0;
+
+/// The cancel control on a running row, in the row's coordinates.
+pub fn row_cancel(row: &Rect) -> Rect {
+    Rect::new(row.right() - 16.0 - 24.0, row.y + 16.0, 24.0, 24.0)
+}
+
+/// The "Show details" link on a failed row.
+pub fn row_link(row: &Rect) -> Rect {
+    Rect::new(
+        row.right() - 16.0 - LINK_WIDTH,
+        row.y + 28.0,
+        LINK_WIDTH,
+        20.0,
+    )
+}
+
+/// The details dialog: panel, title, body and close button.
+pub struct Dialog {
+    pub panel: Rect,
+    pub title: Rect,
+    pub body: Rect,
+    pub close: Rect,
+}
+
+pub fn dialog(w: f32, h: f32) -> Dialog {
+    let pw = (w - 64.0).clamp(0.0, 560.0);
+    let ph = (h - 64.0).clamp(0.0, 360.0);
+    let panel = Rect::new(((w - pw) / 2.0).round(), ((h - ph) / 2.0).round(), pw, ph);
+    let p = PANEL_PADDING;
+    let title = Rect::new(panel.x + p, panel.y + p, panel.w - 2.0 * p, 32.0);
+    let close = Rect::new(
+        panel.right() - p - BUTTON_WIDTH,
+        panel.bottom() - p - BUTTON_HEIGHT,
+        BUTTON_WIDTH,
+        BUTTON_HEIGHT,
+    );
+    let body = Rect::new(
+        panel.x + p,
+        title.bottom() + 8.0,
+        panel.w - 2.0 * p,
+        (close.y - 16.0 - title.bottom() - 8.0).max(0.0),
+    );
+    Dialog {
+        panel,
+        title,
+        body,
+        close,
+    }
+}
+
 /// Largest scroll offset for a list of `rows` inside a panel `panel_h` tall.
 pub fn max_scroll(rows: usize, panel_h: f32) -> f32 {
     (rows as f32 * ROW_HEIGHT - panel_h).max(0.0)
@@ -215,6 +267,27 @@ mod tests {
         assert_eq!(l.rows[0].y, l.panel.y);
         assert_eq!(l.rows[2].y, l.panel.y + 2.0 * ROW_HEIGHT);
         assert!(l.panel.bottom() <= l.footer.unwrap().y);
+    }
+
+    #[test]
+    fn row_controls_sit_inside_the_row() {
+        let l = layout(720.0, 480.0, 1);
+        let r = l.rows[0];
+        for c in [row_cancel(&r), row_link(&r)] {
+            assert!(c.x >= r.x && c.right() <= r.right() - 16.0);
+            assert!(c.y >= r.y && c.bottom() <= r.bottom());
+        }
+    }
+
+    #[test]
+    fn dialog_fits_and_keeps_padding() {
+        for (w, h) in [(480.0, 360.0), (720.0, 480.0), (1600.0, 1000.0)] {
+            let d = dialog(w, h);
+            assert!(d.panel.x >= 32.0 && d.panel.right() <= w - 32.0);
+            assert_eq!(d.title.x - d.panel.x, 16.0);
+            assert_eq!(d.panel.bottom() - d.close.bottom(), 16.0);
+            assert!(d.body.bottom() <= d.close.y);
+        }
     }
 
     #[test]
