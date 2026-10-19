@@ -145,10 +145,21 @@ pub mod motion {
     pub const SETTLE_MS: u32 = 180;
     pub const CONFIRM_MS: u32 = 200;
 
+    /// One slow breath of a running progress line's heat.
+    pub const HEAT_PERIOD_MS: u32 = 2400;
+
     /// Cubic ease-out: fast start, gentle stop, never past 1.
     pub fn ease_out(t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
         1.0 - (1.0 - t).powi(3)
+    }
+
+    /// How hot a running progress line burns, `ms` into the job: rises
+    /// from 0 to 1 and falls back over each `HEAT_PERIOD_MS`, smoothly,
+    /// like a glaze taking heat. Never outside 0 to 1.
+    pub fn heat(ms: f32) -> f32 {
+        let phase = (ms / HEAT_PERIOD_MS as f32).fract();
+        0.5 - 0.5 * (std::f32::consts::TAU * phase).cos()
     }
 }
 
@@ -266,6 +277,22 @@ pub fn describe() -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn heat_breathes_smoothly_within_range() {
+        use super::motion::{heat, HEAT_PERIOD_MS};
+        let period = HEAT_PERIOD_MS as f32;
+        assert!(heat(0.0).abs() < 1e-6);
+        assert!((heat(period / 2.0) - 1.0).abs() < 1e-6);
+        assert!(heat(period).abs() < 1e-4);
+        let mut last = heat(0.0);
+        for step in 1..=480 {
+            let h = heat(step as f32 * period / 240.0);
+            assert!((0.0..=1.0).contains(&h));
+            assert!((h - last).abs() < 0.02, "jumped at step {step}");
+            last = h;
+        }
+    }
     use super::*;
 
     fn all_colours() -> Vec<Rgb> {

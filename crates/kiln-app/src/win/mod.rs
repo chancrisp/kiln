@@ -1,9 +1,11 @@
 //! The Win32 window: creation, the message loop, input and animation.
 
 mod drop;
+mod handoff;
 mod render;
 mod system;
 mod text;
+mod updates;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -34,17 +36,23 @@ use crate::layout::{self, Control, SettingsLayout, SettingsShape, ROW_HEIGHT};
 use crate::model::{batch_summary, status_line, FileList, JobState};
 use crate::settings::{self, Engine, Settings};
 use crate::theme::{self, motion, Palette};
+use crate::update::{Reply, UpdateState};
 use crate::wheel::{self, Action, Wheel, WheelKind};
 use drop::{DragEvent, DropTarget, DRAG_ENTER, DRAG_LEAVE, DRAG_OVER, WM_KILN_DRAG, WM_KILN_DROP};
 use render::{Renderer, RowAnim, SettingsView, View, WheelView};
 
 const ANIM_TIMER: usize = 1;
 const FRAME_MS: u32 = 16;
+/// Frame time when only progress lines are glowing: slow enough to stay
+/// cheap, fast enough to look smooth.
+const HEAT_FRAME_MS: u32 = 50;
 
 /// Posted by the worker threads; lparam is a `Box<JobEvent>`.
 const WM_KILN_JOB: u32 = WM_APP + 3;
 /// Posted when a move finishes; lparam is a `Box<Moved>`.
 const WM_KILN_MOVED: u32 = WM_APP + 4;
+/// Posted when the update check is answered; lparam is a `Box<Reply>`.
+const WM_KILN_UPDATE: u32 = WM_APP + 5;
 
 /// Drag modifier flags (MK_SHIFT, MK_CONTROL, MK_ALT).
 const MK_SHIFT_FLAG: u32 = 0x0004;
@@ -101,6 +109,14 @@ fn eased(t: Instant, ms: u32) -> f32 {
 
 fn within(t: Instant, ms: u32) -> bool {
     t.elapsed() < Duration::from_millis(ms as u64)
+}
+
+/// The heat of running progress lines now. Every line shares one clock so
+/// they breathe together.
+fn heat_now() -> f32 {
+    static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    let ms = EPOCH.get_or_init(Instant::now).elapsed().as_secs_f32() * 1000.0;
+    motion::heat(ms)
 }
 
 /// An HWND the worker threads can post to.
@@ -210,6 +226,10 @@ struct App {
     status: String,
     clear_hover: bool,
     clear_pressed: bool,
+    /// The settings control the pointer went down on; it acts on release.
+    settings_pressed: Option<usize>,
+    dialog_close_pressed: bool,
+    update: UpdateState,
     tracking_mouse: bool,
     dpi: f32,
 }
@@ -248,6 +268,19 @@ impl App {
     }
 
     fn animating(&self) -> bool {
+        self.moving() || self.burning()
+    }
+
+    /// Whether any job is running, so its progress line glows.
+    fn burning(&self) -> bool {
+        self.files
+            .entries()
+            .iter()
+            .any(|e| matches!(e.job, JobState::Running { .. }))
+    }
+
+    /// Whether anything is in motion that needs full frame rate.
+    fn moving(&self) -> bool {
         let rows = self.rows.iter().any(|r| {
             within(r.added, motion::SETTLE_MS)
                 || r.settled.is_some_and(|t| within(t, motion::CONFIRM_MS))
@@ -494,7 +527,7 @@ impl App {
         }
         let n = paths.len();
         self.status = format!("Working on {n} file{}.", if n == 1 { "" } else { "s" });
-        self.invalidate();
+        self.animate();
     }
 
     fn on_job(&mut self, ev: JobEvent) {
@@ -617,6 +650,7 @@ impl App {
                 self.rows[i].settled = None;
             }
         }
+        self.animate();
         // Across drives a move is a copy, which can take a while: keep it
         // off the UI thread.
         let target = PostTarget(self.hwnd.0 as usize);
@@ -750,6 +784,21 @@ impl App {
     }
 
     /// Press a settings control. Choices save at once.
+    /// The one network call, and only on request. Once a newer version
+    /// is known the same button opens its page instead.
+    fn check_updates(&mut self) {
+        match self.update {
+            UpdateState::Checking => {}
+            UpdateState::Available(_) => updates::open_releases_page(),
+            _ => {
+                self.update = UpdateState::Checking;
+                let target = PostTarget(self.hwnd.0 as usize);
+                std::thread::spawn(move || target.post(WM_KILN_UPDATE, updates::fetch()));
+            }
+        }
+        self.invalidate();
+    }
+
     fn activate(&mut self, c: Control) {
         let hwnd = self.hwnd;
         match c {
@@ -776,6 +825,10 @@ impl App {
                 }
             }
             Control::EngineReset(e) => self.settings.engines.set(e, None),
+            Control::CheckUpdates => {
+                self.check_updates();
+                return;
+            }
         }
         self.save_settings();
         let (output_line, engine_lines) = self.settings_lines();
@@ -926,11 +979,41 @@ impl App {
         }
     }
 
+    /// A pressed button acts when the pointer is released over it, so a
+    /// press can be taken back by sliding off.
+    fn mouse_up(&mut self, x: f32, y: f32) {
+        let clear = std::mem::take(&mut self.clear_pressed);
+        let setting = self.settings_pressed.take();
+        let close = std::mem::take(&mut self.dialog_close_pressed);
+        unsafe {
+            let _ = ReleaseCapture();
+        }
+        if !clear && setting.is_none() && !close {
+            return;
+        }
+        if clear && self.layout().clear_button.is_some_and(|b| b.contains(x, y)) {
+            self.clear();
+        }
+        if let Some(i) = setting {
+            if self.settings_ui.is_some() && self.settings_hit(x, y) == Some(i) {
+                let c = self.settings_layout().controls[i].0;
+                self.activate(c);
+            }
+        }
+        if close && self.details.is_some() {
+            let (w, h) = self.renderer.size_dips();
+            if layout::dialog(w, h).close.contains(x, y) {
+                self.details = None;
+            }
+        }
+        self.invalidate();
+    }
+
     fn mouse_down(&mut self, x: f32, y: f32) {
         if self.settings_ui.is_some() {
             if let Some(i) = self.settings_hit(x, y) {
-                let c = self.settings_layout().controls[i].0;
-                self.activate(c);
+                self.settings_pressed = Some(i);
+                unsafe { SetCapture(self.hwnd) };
             } else if !self.settings_layout().panel.contains(x, y) {
                 // A click on the scrim closes the panel.
                 self.settings_ui = None;
@@ -941,7 +1024,8 @@ impl App {
         if self.details.is_some() {
             let (w, h) = self.renderer.size_dips();
             if layout::dialog(w, h).close.contains(x, y) {
-                self.details = None;
+                self.dialog_close_pressed = true;
+                unsafe { SetCapture(self.hwnd) };
             }
             self.invalidate();
             return;
@@ -1108,6 +1192,8 @@ impl App {
                 settle: 1.0,
             })
         };
+        let hint = self.settings.keys.hint();
+        let update_note = self.update.note();
         let view = View {
             palette: self.palette,
             entries: self.files.entries(),
@@ -1117,10 +1203,13 @@ impl App {
             hover_link: self.hover_link,
             scroll: self.scroll,
             drag: self.drag.value().clamp(0.0, 1.0),
+            heat: heat_now(),
             row_anim: &anim,
             status: &self.status,
+            hint: &hint,
             clear_hover: self.clear_hover,
             clear_pressed: self.clear_pressed,
+            dialog_close_pressed: self.dialog_close_pressed,
             wheel: Self::wheel_view(self.wheel.as_ref()),
             details: self.details.as_deref(),
             dialog_close_hover: self.dialog_close_hover,
@@ -1132,6 +1221,9 @@ impl App {
                 keys: self.settings.keys,
                 engines: ui.engine_lines.each_ref().map(|(s, m)| (s.as_str(), *m)),
                 hover: ui.hover,
+                pressed: self.settings_pressed,
+                update: (update_note.0.as_str(), update_note.1),
+                update_button: self.update.button(),
                 focus: ui.focus,
             }),
         };
@@ -1163,14 +1255,25 @@ pub fn run() -> Result<()> {
         // The manifest already asks for per-monitor v2; this covers runs
         // without it (for example under a debugger that strips resources).
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
+    // Files dropped on the app icon arrive as arguments. With Kiln already
+    // open they go to that window instead.
+    let files: Vec<PathBuf> = std::env::args_os()
+        .skip(1)
+        .map(|a| std::path::absolute(&a).unwrap_or_else(|_| PathBuf::from(a)))
+        .collect();
+    let Some(_first) = handoff::claim(&files) else {
+        return Ok(());
+    };
+    unsafe {
         OleInitialize(None)?;
     }
-    let result = run_window();
+    let result = run_window(files);
     unsafe { OleUninitialize() };
     result
 }
 
-fn run_window() -> Result<()> {
+fn run_window(files: Vec<PathBuf>) -> Result<()> {
     // The first frame follows the Windows app mode; settings.toml, read
     // once the window is up, can override it.
     let system_light = system::system_light();
@@ -1180,7 +1283,7 @@ fn run_window() -> Result<()> {
         &theme::DARK
     };
     let instance: HINSTANCE = unsafe { GetModuleHandleW(None)? }.into();
-    let class = w!("KilnWindow");
+    let class = handoff::CLASS;
     let icon = unsafe { LoadIconW(Some(instance), PCWSTR(1 as _)) }.unwrap_or_default();
     let wc = WNDCLASSW {
         style: CS_HREDRAW | CS_VREDRAW,
@@ -1253,6 +1356,9 @@ fn run_window() -> Result<()> {
         status: String::new(),
         clear_hover: false,
         clear_pressed: false,
+        settings_pressed: None,
+        dialog_close_pressed: false,
+        update: UpdateState::default(),
         tracking_mouse: false,
         dpi,
     });
@@ -1275,10 +1381,8 @@ fn run_window() -> Result<()> {
         (*app).load_settings();
     }
 
-    // Files dropped on the app icon arrive as arguments.
-    let args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
-    if !args.is_empty() {
-        unsafe { (*app).add(args) };
+    if !files.is_empty() {
+        unsafe { (*app).add(files) };
     }
 
     let mut msg = MSG::default();
@@ -1383,6 +1487,14 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             Some(LRESULT(0))
         }
         WM_ERASEBKGND => Some(LRESULT(1)),
+        // Files from a second launch, such as a drop on the app icon.
+        WM_COPYDATA => {
+            let files = unsafe { handoff::received(lparam) }?;
+            if !files.is_empty() {
+                app.add(files);
+            }
+            Some(LRESULT(1))
+        }
         WM_SIZE => {
             app.renderer.resize();
             app.clamp_scroll();
@@ -1422,6 +1534,10 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             if !app.animating() {
                 unsafe {
                     let _ = KillTimer(Some(hwnd), ANIM_TIMER);
+                }
+            } else if !app.moving() {
+                unsafe {
+                    SetTimer(Some(hwnd), ANIM_TIMER, HEAT_FRAME_MS, None);
                 }
             }
             app.invalidate();
@@ -1468,17 +1584,8 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             Some(LRESULT(0))
         }
         WM_LBUTTONUP => {
-            if app.clear_pressed {
-                app.clear_pressed = false;
-                unsafe {
-                    let _ = ReleaseCapture();
-                }
-                let (x, y) = app.dips(lo(lparam), hi(lparam));
-                if app.layout().clear_button.is_some_and(|b| b.contains(x, y)) {
-                    app.clear();
-                }
-                app.invalidate();
-            }
+            let (x, y) = app.dips(lo(lparam), hi(lparam));
+            app.mouse_up(x, y);
             Some(LRESULT(0))
         }
         WM_MOUSEWHEEL => {
@@ -1532,6 +1639,12 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
                 app.apply_theme();
             }
             None
+        }
+        WM_KILN_UPDATE => {
+            let reply = unsafe { Box::from_raw(lparam.0 as *mut Reply) };
+            app.update = UpdateState::from_reply(&reply);
+            app.invalidate();
+            Some(LRESULT(0))
         }
         WM_KILN_MOVED => {
             let m = unsafe { Box::from_raw(lparam.0 as *mut Moved) };

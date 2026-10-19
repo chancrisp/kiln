@@ -17,6 +17,8 @@ pub struct Text {
     pub body_center: IDWriteTextFormat,
     pub caption: IDWriteTextFormat,
     pub caption_center: IDWriteTextFormat,
+    /// Captions that may take two lines, centred on their box's height.
+    pub caption_wrap: IDWriteTextFormat,
     pub code: IDWriteTextFormat,
     /// True if the bundled serif loaded; false means the fallback is used.
     pub display_bundled: bool,
@@ -118,6 +120,17 @@ impl Text {
                 type_scale::CAPTION,
                 false,
             )?,
+            caption_wrap: {
+                let f = make(
+                    ui,
+                    None,
+                    DWRITE_FONT_WEIGHT_NORMAL,
+                    type_scale::CAPTION,
+                    false,
+                )?;
+                unsafe { f.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)? };
+                f
+            },
             caption_center: make(
                 ui,
                 None,

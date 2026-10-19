@@ -76,6 +76,15 @@ impl Modifier {
         }
     }
 
+    /// As written in a sentence: "Shift".
+    pub fn name(self) -> &'static str {
+        match self {
+            Modifier::Shift => "Shift",
+            Modifier::Ctrl => "Ctrl",
+            Modifier::Alt => "Alt",
+        }
+    }
+
     fn next(self) -> Modifier {
         match self {
             Modifier::Shift => Modifier::Ctrl,
@@ -146,6 +155,16 @@ impl KeyMap {
     /// Move `wheel` to the next key, swapping as `assign` does.
     pub fn cycle(&mut self, wheel: WheelKind) {
         self.assign(wheel, self.key_for(wheel).next());
+    }
+
+    /// The empty window's hint, naming the keys as they are now set.
+    pub fn hint(&self) -> String {
+        format!(
+            "Hold {} while dropping to convert, {} for tools, or {} for file actions.",
+            self.convert.name(),
+            self.tools.name(),
+            self.actions.name()
+        )
     }
 
     fn is_valid(&self) -> bool {
@@ -385,6 +404,20 @@ mod opt_path {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_hint_follows_the_keys() {
+        let mut keys = KeyMap::default();
+        assert_eq!(
+            keys.hint(),
+            "Hold Shift while dropping to convert, Ctrl for tools, or Alt for file actions."
+        );
+        keys.assign(WheelKind::Convert, Modifier::Alt);
+        assert_eq!(
+            keys.hint(),
+            "Hold Alt while dropping to convert, Ctrl for tools, or Shift for file actions."
+        );
+    }
 
     #[test]
     fn an_empty_file_means_defaults() {

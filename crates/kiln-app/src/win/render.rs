@@ -57,14 +57,19 @@ pub struct View<'a> {
     pub scroll: f32,
     /// 0 to 1: how far the drag-over highlight has faded in.
     pub drag: f32,
+    /// 0 to 1: how hot running progress lines burn this frame.
+    pub heat: f32,
     pub row_anim: &'a dyn Fn(usize) -> RowAnim,
     pub status: &'a str,
+    /// The empty window's hint, which names the current wheel keys.
+    pub hint: &'a str,
     pub clear_hover: bool,
     pub clear_pressed: bool,
     pub wheel: Option<WheelView<'a>>,
     /// Engine output shown in the details dialog.
     pub details: Option<&'a str>,
     pub dialog_close_hover: bool,
+    pub dialog_close_pressed: bool,
     pub settings_hover: bool,
     pub settings: Option<SettingsView<'a>>,
 }
@@ -80,6 +85,10 @@ pub struct SettingsView<'a> {
     pub engines: [(&'a str, bool); 3],
     /// Indexes into `layout.controls`.
     pub hover: Option<usize>,
+    pub pressed: Option<usize>,
+    /// The update check's note, whether it is muted, and the button label.
+    pub update: (&'a str, bool),
+    pub update_button: &'a str,
     pub focus: Option<usize>,
 }
 
@@ -503,7 +512,7 @@ impl Draw<'_> {
         );
         y += 20.0 + 12.0;
         self.label(
-            "Hold Shift while dropping to convert, or Ctrl for tools.",
+            v.hint,
             &self.text.caption_center,
             &row(y, 16.0),
             p.text_muted,
@@ -648,7 +657,7 @@ impl Draw<'_> {
 
         match &e.job {
             JobState::Running { fraction, .. } => {
-                self.progress(r, *fraction, p, a)?;
+                self.progress(r, *fraction, v.heat, p, a)?;
                 if hovered || v.selected == Some(i) {
                     let b = layout::row_cancel(r);
                     let hot = hovered && v.hover_cancel;
@@ -663,7 +672,7 @@ impl Draw<'_> {
                 // The finished line fades as the result settles.
                 let fade = 1.0 - anim.settle;
                 if fade > 0.0 {
-                    self.progress(r, Some(1.0), p, a * fade)?;
+                    self.progress(r, Some(1.0), 0.0, p, a * fade)?;
                 }
             }
             JobState::Failed { details, .. } if !details.is_empty() => {
@@ -688,14 +697,22 @@ impl Draw<'_> {
 
     /// The temperature line along the bottom of a job row. While running it
     /// burns a little brighter at its leading edge, like a glaze taking
-    /// heat. This glow is the only gradient in the app.
-    fn progress(&self, r: &Rect, fraction: Option<f32>, p: &Palette, a: f32) -> Result<()> {
+    /// heat, and that glow slowly rises and falls with `heat`. This glow is
+    /// the only gradient in the app.
+    fn progress(
+        &self,
+        r: &Rect,
+        fraction: Option<f32>,
+        heat: f32,
+        p: &Palette,
+        a: f32,
+    ) -> Result<()> {
         let y = r.bottom() - PROGRESS_HEIGHT;
         let track = Rect::new(r.x, y, r.w, PROGRESS_HEIGHT);
         self.fill(&track, 0.0, p.line, a);
         let Some(f) = fraction else {
-            // Unknown length: the whole line holds a low, steady heat.
-            self.fill(&track, 0.0, p.accent, 0.4 * a);
+            // Unknown length: the whole line holds a low heat that breathes.
+            self.fill(&track, 0.0, p.accent, (0.3 + 0.25 * heat) * a);
             return Ok(());
         };
         let end = r.x + r.w * f.clamp(0.0, 1.0);
@@ -706,7 +723,7 @@ impl Draw<'_> {
             a,
         );
         if f < 1.0 && end > r.x {
-            let hot = mix(p.accent, p.text, 0.35);
+            let hot = mix(p.accent, p.text, 0.2 + 0.25 * heat);
             let glow_w = 40.0f32.min(end - r.x);
             let stops = [
                 D2D1_GRADIENT_STOP {
@@ -777,13 +794,18 @@ impl Draw<'_> {
             self.fill(b, shape::RADIUS_CONTROL, p.accent, effects::HOVER_FILL);
         }
         if pressed {
-            for (k, alpha) in [(1.0, 0.35), (2.0, 0.2), (3.0, 0.1)] {
-                let inner = Rect::new(b.x + 1.0, b.y + k, b.w - 2.0, 1.0);
-                self.fill(&inner, 0.0, p.ground, alpha);
-            }
+            self.press_shadow(b, p);
         }
         let edge = if selected { p.accent } else { p.line };
         self.border(b, shape::RADIUS_CONTROL, edge, 1.0, shape::BORDER);
+    }
+
+    /// The soft inner shadow of a pressed control, along its top edge.
+    fn press_shadow(&self, b: &Rect, p: &Palette) {
+        for (k, alpha) in [(1.0, 0.35), (2.0, 0.2), (3.0, 0.1)] {
+            let inner = Rect::new(b.x + 1.0, b.y + k, b.w - 2.0, 1.0);
+            self.fill(&inner, 0.0, p.ground, alpha);
+        }
     }
 
     /// The keyboard focus ring: a celadon line just outside the control.
@@ -1003,7 +1025,13 @@ impl Draw<'_> {
                 DWRITE_MEASURING_MODE_NATURAL,
             );
         }
-        self.button("Close", &d.close, v.dialog_close_hover, false, p);
+        self.button(
+            "Close",
+            &d.close,
+            v.dialog_close_hover,
+            v.dialog_close_pressed,
+            p,
+        );
         Ok(())
     }
 
@@ -1036,14 +1064,16 @@ impl Draw<'_> {
 
         for (k, (control, r)) in l.controls.iter().enumerate() {
             let hover = sv.hover == Some(k);
+            let pressed = sv.pressed == Some(k);
             match control {
                 Control::OutputChoose | Control::EngineChoose(_) => {
-                    self.button("Choose", r, hover, false, p)
+                    self.button("Choose", r, hover, pressed, p)
                 }
                 Control::OutputReset | Control::EngineReset(_) => {
-                    self.button("Reset", r, hover, false, p)
+                    self.button("Reset", r, hover, pressed, p)
                 }
-                Control::Close => self.button("Close", r, hover, false, p),
+                Control::Close => self.button("Close", r, hover, pressed, p),
+                Control::CheckUpdates => self.button(sv.update_button, r, hover, pressed, p),
                 Control::Theme(t) => {
                     // One segmented control: fills here, one shared
                     // border below, so neighbours never double up.
@@ -1052,10 +1082,13 @@ impl Draw<'_> {
                     if *t == sv.theme {
                         self.fill(r, shape::RADIUS_CONTROL, p.accent, effects::HOVER_FILL);
                     }
+                    if pressed {
+                        self.press_shadow(r, p);
+                    }
                     self.label(t.label(), &self.text.body_center, r, p.text, 1.0);
                 }
                 Control::Key(wheel) => {
-                    self.button_face(r, hover, false, false, p);
+                    self.button_face(r, hover, pressed, false, p);
                     let name = Rect::new(r.x + 12.0, r.y, r.w - 12.0, r.h);
                     self.label(wheel.title(), &self.text.body, &name, p.text, 1.0);
                     let code = sv.keys.key_for(*wheel).code();
@@ -1068,6 +1101,9 @@ impl Draw<'_> {
                 self.focus_ring(r, p);
             }
         }
+        let (note, muted) = sv.update;
+        let c = if muted { p.text_muted } else { p.text };
+        self.label(note, &self.text.caption_wrap, &l.update_note, c, 1.0);
         self.segment_edges(l, sv, p);
         Ok(())
     }

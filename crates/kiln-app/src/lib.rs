@@ -8,6 +8,7 @@ pub mod layout;
 pub mod model;
 pub mod settings;
 pub mod theme;
+pub mod update;
 pub mod wheel;
 
 #[cfg(windows)]

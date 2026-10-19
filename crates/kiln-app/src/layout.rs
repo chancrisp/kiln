@@ -196,6 +196,7 @@ pub enum Control {
     Key(WheelKind),
     EngineChoose(Engine),
     EngineReset(Engine),
+    CheckUpdates,
     Close,
 }
 
@@ -213,12 +214,16 @@ pub struct SettingsLayout {
     pub rows: Vec<SettingsRow>,
     /// Every control, in Tab order.
     pub controls: Vec<(Control, Rect)>,
+    /// Beside the update button: what the update check found.
+    pub update_note: Rect,
 }
 
 pub const SETTINGS_ROW: f32 = 40.0;
 pub const SETTINGS_LABEL: f32 = 112.0;
 /// Theme segments and key buttons.
 pub const SEGMENT_WIDTH: f32 = 72.0;
+/// The Check for updates button.
+pub const UPDATE_BUTTON_WIDTH: f32 = 136.0;
 
 /// What the settings panel needs to know to lay itself out: which values
 /// are set, since those rows grow a Reset button.
@@ -312,6 +317,15 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
         BUTTON_WIDTH,
         BUTTON_HEIGHT,
     );
+    let check = Rect::new(panel.x + p, close.y, UPDATE_BUTTON_WIDTH, BUTTON_HEIGHT);
+    let note_x = check.right() + 8.0;
+    let update_note = Rect::new(
+        note_x,
+        close.y,
+        (close.x - 8.0 - note_x).max(0.0),
+        BUTTON_HEIGHT,
+    );
+    controls.push((Control::CheckUpdates, check));
     controls.push((Control::Close, close));
 
     SettingsLayout {
@@ -319,6 +333,7 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
         title,
         rows,
         controls,
+        update_note,
     }
 }
 
@@ -480,11 +495,21 @@ mod tests {
                         assert!(v.x > row.label_rect.right());
                     }
                 }
+                let note = s.update_note;
+                assert!(note.w >= 120.0, "update note too narrow at {w}x{h}");
+                for (c, r) in &s.controls {
+                    let apart = note.right() <= r.x
+                        || r.right() <= note.x
+                        || note.bottom() <= r.y
+                        || r.bottom() <= note.y;
+                    assert!(apart, "update note overlaps {c:?}");
+                }
             }
         }
         let s = settings(720.0, 480.0, SettingsShape::default());
         assert_eq!(s.rows.len(), 6);
-        assert_eq!(s.controls.len(), 1 + 3 + 3 + 3 + 1);
+        assert_eq!(s.controls.len(), 1 + 3 + 3 + 3 + 1 + 1);
+        assert_eq!(s.controls[s.controls.len() - 2].0, Control::CheckUpdates);
         assert_eq!(s.controls.last().unwrap().0, Control::Close);
     }
 
