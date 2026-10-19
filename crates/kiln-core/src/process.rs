@@ -1,6 +1,7 @@
 //! Running external engines. Arguments are always passed one by one to
 //! `std::process::Command`; nothing is ever assembled into a shell string.
 
+use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -15,6 +16,19 @@ use crate::error::{Error, Result};
 /// the error; the end has the last word of analysis passes.
 const STDERR_KEEP: usize = 32 * 1024;
 const POLL: Duration = Duration::from_millis(25);
+
+/// Look for `program` (adding `.exe` on Windows) in each folder of a
+/// PATH-style list.
+pub fn find_on_path(path_var: &OsStr, program: &str) -> Option<PathBuf> {
+    let name = if cfg!(windows) {
+        format!("{program}.exe")
+    } else {
+        program.to_owned()
+    };
+    std::env::split_paths(path_var)
+        .map(|dir| dir.join(&name))
+        .find(|p| p.is_file())
+}
 
 /// The executable for an engine: the configured path, or its bare name so
 /// the OS searches PATH.

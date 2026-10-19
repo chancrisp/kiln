@@ -16,8 +16,10 @@ use crate::libreoffice::LibreOfficeConverter;
 use crate::output;
 use crate::pandoc::PandocConverter;
 use crate::pdf::PdfConverter;
+use crate::process::find_on_path;
 use crate::raster::ImageConverter;
 use crate::registry::{Format, Kind, Registry};
+use crate::suggest::Offered;
 
 /// The registry plus the backends its routes name.
 pub struct Kiln {
@@ -69,6 +71,79 @@ impl Kiln {
             .format_of(input)
             .map(|f| self.registry.targets(f))
             .unwrap_or_default()
+    }
+
+    /// The targets and tools Kiln can run on all of `paths` with the
+    /// engines installed now. Targets are the extensions every file can
+    /// reach, in the first file's order, through routes whose engines are
+    /// all available. Tools need FFmpeg when any input is audio or video.
+    pub fn offered(&self, paths: &[&Path], opts: &Options) -> Offered {
+        let Some(first) = paths.first() else {
+            return Offered::default();
+        };
+        let available: HashMap<&str, bool> = self
+            .converters
+            .keys()
+            .map(|&b| (b, self.available(opts, b)))
+            .collect();
+        let routable = |from: &Format, to: &Format| {
+            self.registry.route(from, to).is_some_and(|steps| {
+                steps
+                    .iter()
+                    .all(|s| available.get(s.backend.as_str()).copied().unwrap_or(false))
+            })
+        };
+        let froms: Option<Vec<&Format>> =
+            paths.iter().map(|p| self.registry.format_of(p)).collect();
+        let froms = froms.unwrap_or_default();
+        let targets = if froms.len() == paths.len() {
+            self.targets_for(first)
+                .into_iter()
+                .filter(|to| {
+                    froms.iter().all(|from| {
+                        self.registry.targets(from).iter().any(|t| t.ext == to.ext)
+                            && routable(from, to)
+                    })
+                })
+                .map(|to| to.ext.clone())
+                .collect()
+        } else {
+            vec![]
+        };
+        let media = froms
+            .iter()
+            .any(|f| matches!(f.kind, Kind::Audio | Kind::Video));
+        let tools = if media && !available["ffmpeg"] {
+            vec![]
+        } else {
+            self.tools_for(paths)
+        };
+        Offered { targets, tools }
+    }
+
+    /// Whether a backend's engine is installed: the configured path, or
+    /// where Kiln looks when none is set.
+    fn available(&self, opts: &Options, backend: &str) -> bool {
+        let e = &opts.engines;
+        let path_var = std::env::var_os("PATH").unwrap_or_default();
+        let found = |configured: Option<&Path>, name: &str| match configured {
+            Some(p) => p.is_file(),
+            None => find_on_path(&path_var, name).is_some(),
+        };
+        match backend {
+            "image" | "pdf" => true,
+            "ffmpeg" => found(e.ffmpeg.as_deref(), "ffmpeg"),
+            "pandoc" => found(e.pandoc.as_deref(), "pandoc"),
+            "libreoffice" => match e.libreoffice.as_deref() {
+                Some(p) => p.is_file(),
+                None => crate::find_libreoffice().is_some(),
+            },
+            "calibre" => match e.calibre.as_deref() {
+                Some(p) => p.exists(),
+                None => crate::find_calibre().is_some(),
+            },
+            _ => false,
+        }
     }
 
     /// What FFprobe can say about a picture, sound or video: its size,

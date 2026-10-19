@@ -23,6 +23,7 @@ pub mod quality;
 mod raster;
 pub mod registry;
 mod runner;
+pub mod suggest;
 mod tools;
 
 pub use calibre::{find_installed as find_calibre, CalibreConverter};
@@ -33,6 +34,7 @@ pub use job::Kiln;
 pub use libreoffice::{find_installed as find_libreoffice, LibreOfficeConverter};
 pub use pandoc::PandocConverter;
 pub use pdf::PdfConverter;
+pub use process::find_on_path;
 pub use quality::{Knob, Limit, MediaInfo, Preset, Quality};
 pub use raster::ImageConverter;
 pub use registry::{Format, Kind, Registry};

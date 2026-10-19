@@ -273,18 +273,7 @@ impl EngineStatus {
     }
 }
 
-/// Look for `program` (adding `.exe` on Windows) in each folder of a
-/// PATH-style list.
-pub fn find_on_path(path_var: &OsStr, program: &str) -> Option<PathBuf> {
-    let name = if cfg!(windows) {
-        format!("{program}.exe")
-    } else {
-        program.to_owned()
-    };
-    std::env::split_paths(path_var)
-        .map(|dir| dir.join(&name))
-        .find(|p| p.is_file())
-}
+pub use kiln_core::find_on_path;
 
 pub fn engine_status(settings: &Settings, e: Engine, path_var: &OsStr) -> EngineStatus {
     match settings.engines.get(e) {
