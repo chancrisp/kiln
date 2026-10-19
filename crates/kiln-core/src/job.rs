@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::converter::{CancelToken, Context, Converter, Options, Progress, Request};
 use crate::error::{Error, Result};
 use crate::ffmpeg::FfmpegConverter;
+use crate::libreoffice::LibreOfficeConverter;
 use crate::output;
 use crate::pandoc::PandocConverter;
 use crate::raster::ImageConverter;
@@ -36,10 +37,11 @@ impl Kiln {
 
     /// Use a custom registry. Fails if a route names an unknown backend.
     pub fn with_registry(registry: Registry) -> Result<Self> {
-        let backends: [Box<dyn Converter>; 3] = [
+        let backends: [Box<dyn Converter>; 4] = [
             Box::new(ImageConverter),
             Box::new(FfmpegConverter),
             Box::new(PandocConverter),
+            Box::new(LibreOfficeConverter),
         ];
         let converters: HashMap<_, _> = backends.into_iter().map(|c| (c.id(), c)).collect();
         if let Some(unknown) = registry.backends().find(|b| !converters.contains_key(b)) {
@@ -176,6 +178,7 @@ pub(crate) fn engine_name(backend: &str) -> &'static str {
     match backend {
         "ffmpeg" => "FFmpeg",
         "pandoc" => "Pandoc",
+        "libreoffice" => "LibreOffice",
         _ => "Kiln",
     }
 }

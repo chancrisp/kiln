@@ -152,7 +152,7 @@ struct SettingsUi {
     hover: Option<usize>,
     focus: Option<usize>,
     output_line: (String, bool),
-    engine_lines: [(String, bool); 2],
+    engine_lines: [(String, bool); 3],
 }
 
 struct RowTimes {
@@ -712,13 +712,17 @@ impl App {
             h,
             SettingsShape {
                 output_custom: self.settings.output_folder.is_some(),
-                engine_custom: [e.ffmpeg.is_some(), e.pandoc.is_some()],
+                engine_custom: [
+                    e.ffmpeg.is_some(),
+                    e.pandoc.is_some(),
+                    e.libreoffice.is_some(),
+                ],
             },
         )
     }
 
     /// The text beside each chooser, refreshed whenever settings change.
-    fn settings_lines(&self) -> ((String, bool), [(String, bool); 2]) {
+    fn settings_lines(&self) -> ((String, bool), [(String, bool); 3]) {
         let output = match &self.settings.output_folder {
             Some(p) => (p.display().to_string(), false),
             None => ("Next to each file".to_owned(), true),
@@ -729,7 +733,7 @@ impl App {
             let muted = !matches!(st, settings::EngineStatus::Chosen { .. });
             (format!("{}  ·  {}", e.label(), st.describe()), muted)
         };
-        (output, [line(Engine::Ffmpeg), line(Engine::Pandoc)])
+        (output, Engine::ALL.map(line))
     }
 
     fn open_settings(&mut self) {
@@ -1126,10 +1130,7 @@ impl App {
                 output: (ui.output_line.0.as_str(), ui.output_line.1),
                 theme: self.settings.theme,
                 keys: self.settings.keys,
-                engines: [
-                    (ui.engine_lines[0].0.as_str(), ui.engine_lines[0].1),
-                    (ui.engine_lines[1].0.as_str(), ui.engine_lines[1].1),
-                ],
+                engines: ui.engine_lines.each_ref().map(|(s, m)| (s.as_str(), *m)),
                 hover: ui.hover,
                 focus: ui.focus,
             }),

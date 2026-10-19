@@ -77,7 +77,7 @@ pub struct SettingsView<'a> {
     pub theme: ThemeChoice,
     pub keys: KeyMap,
     /// Each engine's line, and whether it is muted.
-    pub engines: [(&'a str, bool); 2],
+    pub engines: [(&'a str, bool); 3],
     /// Indexes into `layout.controls`.
     pub hover: Option<usize>,
     pub focus: Option<usize>,
@@ -1027,8 +1027,8 @@ impl Draw<'_> {
             let Some(r) = row.value else { continue };
             let (text, muted) = match i {
                 0 => sv.output,
-                3 => sv.engines[0],
-                _ => sv.engines[1],
+                // Rows 1 and 2, theme and keys, have no value text.
+                n => sv.engines[n - 3],
             };
             let c = if muted { p.text_muted } else { p.text };
             self.label(text, &self.text.body, &r, c, 1.0);

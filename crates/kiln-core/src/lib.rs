@@ -13,6 +13,7 @@ pub mod converter;
 pub mod error;
 mod ffmpeg;
 mod job;
+mod libreoffice;
 pub mod output;
 mod pandoc;
 mod process;
@@ -25,6 +26,7 @@ pub use converter::{CancelToken, Context, Converter, Engines, Options, Progress,
 pub use error::{Error, Result};
 pub use ffmpeg::FfmpegConverter;
 pub use job::Kiln;
+pub use libreoffice::{find_installed as find_libreoffice, LibreOfficeConverter};
 pub use pandoc::PandocConverter;
 pub use raster::ImageConverter;
 pub use registry::{Format, Kind, Registry};

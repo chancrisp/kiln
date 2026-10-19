@@ -34,6 +34,10 @@ enum Command {
         /// Path to the Pandoc executable. Defaults to the one on PATH.
         #[arg(long, value_name = "PATH")]
         pandoc: Option<PathBuf>,
+        /// Path to LibreOffice's soffice.exe. Defaults to the one on PATH,
+        /// then its default install folder.
+        #[arg(long, value_name = "PATH")]
+        libreoffice: Option<PathBuf>,
     },
     /// Run a file tool: compress, crop, trim, split or merge. Results are
     /// written next to the first input; originals are never changed.
@@ -52,6 +56,10 @@ enum Command {
         /// Path to the Pandoc executable. Defaults to the one on PATH.
         #[arg(long, value_name = "PATH")]
         pandoc: Option<PathBuf>,
+        /// Path to LibreOffice's soffice.exe. Defaults to the one on PATH,
+        /// then its default install folder.
+        #[arg(long, value_name = "PATH")]
+        libreoffice: Option<PathBuf>,
     },
     /// List the formats a file can be converted to.
     Formats {
@@ -71,11 +79,16 @@ fn main() -> ExitCode {
             quality,
             ffmpeg,
             pandoc,
+            libreoffice,
         } => {
             let opts = Options {
                 out_dir,
                 jpeg_quality: quality,
-                engines: Engines { ffmpeg, pandoc },
+                engines: Engines {
+                    ffmpeg,
+                    pandoc,
+                    libreoffice,
+                },
                 ..Options::default()
             };
             match kiln.convert(&input, &format, &opts) {
@@ -95,6 +108,7 @@ fn main() -> ExitCode {
             out_dir,
             ffmpeg,
             pandoc,
+            libreoffice,
         } => {
             let Some(tool) = Tool::parse(&tool) else {
                 let names: Vec<&str> = Tool::ALL.iter().map(|t| t.id()).collect();
@@ -103,7 +117,11 @@ fn main() -> ExitCode {
             };
             let opts = Options {
                 out_dir,
-                engines: Engines { ffmpeg, pandoc },
+                engines: Engines {
+                    ffmpeg,
+                    pandoc,
+                    libreoffice,
+                },
                 ..Options::default()
             };
             match kiln.run_tool(tool, &inputs, &opts) {

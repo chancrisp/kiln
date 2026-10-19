@@ -20,6 +20,7 @@ External engines (not bundled; found on PATH or set in Settings)
 ------------------------------------------------------------------------
 FFmpeg   https://ffmpeg.org        LGPL 2.1+ or GPL 2+, depending on the build
 Pandoc   https://pandoc.org        GPL 2+
+LibreOffice  https://www.libreoffice.org  MPL 2.0 (optional)
 
 ------------------------------------------------------------------------
 Rust crates compiled into kiln-app.exe and kiln.exe

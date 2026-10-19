@@ -207,6 +207,39 @@ pub const DOCUMENT_PATH: &[Cmd] = &[
     Line(15.0, 15.5),
 ];
 
+/// A spreadsheet: a table with a header row and a label column.
+pub const SHEET_PATH: &[Cmd] = &[
+    Move(3.5, 4.5),
+    Line(20.5, 4.5),
+    Line(20.5, 19.5),
+    Line(3.5, 19.5),
+    Close,
+    Move(3.5, 9.5),
+    Line(20.5, 9.5),
+    Move(3.5, 14.5),
+    Line(20.5, 14.5),
+    Move(9.5, 4.5),
+    Line(9.5, 19.5),
+];
+
+/// Slides: a screen with two lines of text, on a stand.
+pub const SLIDES_PATH: &[Cmd] = &[
+    Move(3.5, 4.0),
+    Line(20.5, 4.0),
+    Line(20.5, 15.0),
+    Line(3.5, 15.0),
+    Close,
+    Move(7.0, 8.0),
+    Line(13.0, 8.0),
+    Move(7.0, 11.0),
+    Line(17.0, 11.0),
+    Move(12.0, 15.0),
+    Line(12.0, 17.5),
+    Move(8.5, 20.5),
+    Line(12.0, 17.5),
+    Line(15.5, 20.5),
+];
+
 /// Compress: two arrows meeting at a line.
 pub const COMPRESS_PATH: &[Cmd] = &[
     Move(12.0, 3.5),
@@ -299,7 +332,7 @@ const fn stroke(name: &'static str, path: &'static [Cmd]) -> Icon {
     }
 }
 
-pub const ALL: [Icon; 18] = [
+pub const ALL: [Icon; 20] = [
     VESSEL,
     VESSEL_SOLID,
     FLAME,
@@ -309,6 +342,8 @@ pub const ALL: [Icon; 18] = [
     stroke("audio", AUDIO_PATH),
     stroke("video", VIDEO_PATH),
     stroke("document", DOCUMENT_PATH),
+    stroke("sheet", SHEET_PATH),
+    stroke("slides", SLIDES_PATH),
     stroke("compress", COMPRESS_PATH),
     stroke("crop", CROP_PATH),
     stroke("trim", TRIM_PATH),

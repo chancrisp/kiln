@@ -12,7 +12,9 @@ The first version.
 
 - `kiln-core`:
   - A format registry in `formats.toml` that rejects duplicate types, aliases and pairs when it loads.
-  - Converters for images (built in), audio and video (FFmpeg), and documents (Pandoc). That makes 123 format pairs.
+  - Converters for images (built in), audio and video (FFmpeg), documents (Pandoc), and office documents, spreadsheets, slides and PDF output (LibreOffice, optional). That makes 160 format pairs.
+  - LibreOffice runs with a fresh, locked-down profile per job: no macros, no active content, no update check, and no wait on a sleeping default printer.
+  - Cancelling a job stops the engine and every process it started.
   - File tools: compress, crop, trim, split and merge.
   - A worker pool with per-job progress and cancel.
   - Per-job temporary folders, output names that never replace anything, and safe handling of reserved Windows names.
@@ -21,7 +23,7 @@ The first version.
   - A drop target and file list.
   - The glaze wheel, with Convert, Tools and Actions.
   - Progress, results and errors shown in each row, plus a details dialog.
-  - A settings panel and `%APPDATA%\Kiln\settings.toml`, covering the output folder, wheel keys, theme and engine paths.
+  - A settings panel and `%APPDATA%\Kiln\settings.toml`, covering the output folder, wheel keys, theme and engine paths for FFmpeg, Pandoc and LibreOffice.
   - Light and dark themes that follow Windows.
   - Per-monitor DPI awareness and full keyboard control.
 - Packaging: an MSI installer, a portable ZIP and optional code signing.

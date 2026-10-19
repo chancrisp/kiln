@@ -160,6 +160,8 @@ pub struct EnginePaths {
     pub ffmpeg: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none", with = "opt_path")]
     pub pandoc: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none", with = "opt_path")]
+    pub libreoffice: Option<PathBuf>,
 }
 
 /// The engines Kiln runs as separate programs.
@@ -167,15 +169,17 @@ pub struct EnginePaths {
 pub enum Engine {
     Ffmpeg,
     Pandoc,
+    LibreOffice,
 }
 
 impl Engine {
-    pub const ALL: [Engine; 2] = [Engine::Ffmpeg, Engine::Pandoc];
+    pub const ALL: [Engine; 3] = [Engine::Ffmpeg, Engine::Pandoc, Engine::LibreOffice];
 
     pub fn label(self) -> &'static str {
         match self {
             Engine::Ffmpeg => "FFmpeg",
             Engine::Pandoc => "Pandoc",
+            Engine::LibreOffice => "LibreOffice",
         }
     }
 
@@ -184,6 +188,7 @@ impl Engine {
         match self {
             Engine::Ffmpeg => "ffmpeg",
             Engine::Pandoc => "pandoc",
+            Engine::LibreOffice => "soffice",
         }
     }
 }
@@ -193,6 +198,7 @@ impl EnginePaths {
         match e {
             Engine::Ffmpeg => self.ffmpeg.as_deref(),
             Engine::Pandoc => self.pandoc.as_deref(),
+            Engine::LibreOffice => self.libreoffice.as_deref(),
         }
     }
 
@@ -200,6 +206,7 @@ impl EnginePaths {
         match e {
             Engine::Ffmpeg => self.ffmpeg = path,
             Engine::Pandoc => self.pandoc = path,
+            Engine::LibreOffice => self.libreoffice = path,
         }
     }
 }
@@ -214,6 +221,9 @@ pub enum EngineStatus {
     },
     /// Not set, but on PATH.
     OnPath(PathBuf),
+    /// Not set and not on PATH, but in the engine's default install
+    /// folder. Only LibreOffice is looked for this way.
+    Installed(PathBuf),
     Missing,
 }
 
@@ -224,6 +234,7 @@ impl EngineStatus {
             EngineStatus::Chosen { path, exists: true } => path.display().to_string(),
             EngineStatus::Chosen { path, .. } => format!("Not found at {}", path.display()),
             EngineStatus::OnPath(_) => "Found on PATH".to_owned(),
+            EngineStatus::Installed(path) => path.display().to_string(),
             EngineStatus::Missing => "Not installed".to_owned(),
         }
     }
@@ -250,7 +261,11 @@ pub fn engine_status(settings: &Settings, e: Engine, path_var: &OsStr) -> Engine
         },
         None => match find_on_path(path_var, e.program()) {
             Some(p) => EngineStatus::OnPath(p),
-            None => EngineStatus::Missing,
+            None => match e {
+                Engine::LibreOffice => kiln_core::find_libreoffice()
+                    .map_or(EngineStatus::Missing, EngineStatus::Installed),
+                _ => EngineStatus::Missing,
+            },
         },
     }
 }
@@ -272,7 +287,8 @@ const HEADER: &str = "\
 # output_folder = 'C:\\Users\\you\\Converted'   # unset: next to each file
 # theme = 'system'                            # system, dark or light
 # [keys]                                      # shift, ctrl or alt, one each
-# [engines]                                   # full paths to ffmpeg.exe, pandoc.exe
+# [engines]                                   # full paths to ffmpeg.exe, pandoc.exe,
+#                                             # soffice.exe (libreoffice)
 
 ";
 
@@ -334,6 +350,7 @@ impl Settings {
             engines: Engines {
                 ffmpeg: self.engines.ffmpeg.clone(),
                 pandoc: self.engines.pandoc.clone(),
+                libreoffice: self.engines.libreoffice.clone(),
             },
             ..Options::default()
         }

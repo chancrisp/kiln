@@ -73,6 +73,8 @@ pub fn icon_for_kind(kind: Kind) -> &'static str {
         Kind::Audio => "audio",
         Kind::Video => "video",
         Kind::Document => "document",
+        Kind::Spreadsheet => "sheet",
+        Kind::Presentation => "slides",
     }
 }
 

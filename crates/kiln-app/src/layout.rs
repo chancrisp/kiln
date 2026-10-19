@@ -225,12 +225,12 @@ pub const SEGMENT_WIDTH: f32 = 72.0;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SettingsShape {
     pub output_custom: bool,
-    pub engine_custom: [bool; 2],
+    pub engine_custom: [bool; 3],
 }
 
 pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
     let p = PANEL_PADDING;
-    let rows_n = 5.0;
+    let rows_n = 3.0 + Engine::ALL.len() as f32;
     let ph = p + 32.0 + 8.0 + rows_n * SETTINGS_ROW + p + BUTTON_HEIGHT + p;
     let pw = snap((w - 32.0).clamp(0.0, 560.0));
     let panel = Rect::new(
@@ -300,7 +300,7 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
             Control::EngineChoose(e),
             shape.engine_custom[k].then_some(Control::EngineReset(e)),
         );
-        // Both engines sit under one "Engines" label, the name error
+        // The engines sit under one "Engines" label, the name error
         // messages point to.
         let label = if k == 0 { "Engines" } else { "" };
         rows.push(row(label, 3 + k, Some(v)));
@@ -451,7 +451,7 @@ mod tests {
             SettingsShape::default(),
             SettingsShape {
                 output_custom: true,
-                engine_custom: [true, true],
+                engine_custom: [true, true, true],
             },
         ];
         for (w, h) in [(480.0, 400.0), (720.0, 480.0), (1600.0, 1000.0)] {
@@ -483,8 +483,8 @@ mod tests {
             }
         }
         let s = settings(720.0, 480.0, SettingsShape::default());
-        assert_eq!(s.rows.len(), 5);
-        assert_eq!(s.controls.len(), 1 + 3 + 3 + 2 + 1);
+        assert_eq!(s.rows.len(), 6);
+        assert_eq!(s.controls.len(), 1 + 3 + 3 + 3 + 1);
         assert_eq!(s.controls.last().unwrap().0, Control::Close);
     }
 

@@ -17,6 +17,8 @@ pub enum Kind {
     Audio,
     Video,
     Document,
+    Spreadsheet,
+    Presentation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,6 +31,11 @@ pub struct Format {
     /// Pandoc's name for this type.
     pub pandoc: Option<String>,
     pub standalone: bool,
+    /// LibreOffice's `--convert-to` value for writing this type.
+    pub libreoffice: Option<String>,
+    /// LibreOffice's `--infilter` value for reading this type, when it
+    /// can't tell on its own.
+    pub libreoffice_infilter: Option<String>,
 }
 
 impl Format {
@@ -65,6 +72,8 @@ struct RawFormat {
     pandoc: Option<String>,
     #[serde(default)]
     standalone: bool,
+    libreoffice: Option<String>,
+    libreoffice_infilter: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -121,6 +130,8 @@ impl Registry {
                     ffmpeg: f.ffmpeg,
                     pandoc: f.pandoc,
                     standalone: f.standalone,
+                    libreoffice: f.libreoffice,
+                    libreoffice_infilter: f.libreoffice_infilter,
                 },
             );
         }
@@ -229,7 +240,9 @@ mod tests {
         let jpg = r.format("jpg").unwrap();
         assert_eq!(r.backend(png, jpg), Some("image"));
         assert_eq!(r.targets(png), vec![jpg]);
-        assert!(r.backends().eq(["ffmpeg", "image", "pandoc"]));
+        assert!(r
+            .backends()
+            .eq(["ffmpeg", "image", "libreoffice", "pandoc"]));
     }
 
     #[test]
@@ -256,6 +269,30 @@ mod tests {
         let mp3 = r.format("mp3").unwrap();
         assert_eq!(r.backend(mp4, mp3), Some("ffmpeg"));
         assert_eq!(r.backend(mp3, mp4), None);
+    }
+
+    #[test]
+    fn office_pairs_leave_pandoc_its_own() {
+        let r = Registry::builtin();
+        let pair = |a: &str, b: &str| r.backend(r.format(a).unwrap(), r.format(b).unwrap());
+        assert_eq!(pair("docx", "odt"), Some("pandoc"));
+        assert_eq!(pair("docx", "pdf"), Some("libreoffice"));
+        assert_eq!(pair("doc", "docx"), Some("libreoffice"));
+        assert_eq!(pair("xlsx", "csv"), Some("libreoffice"));
+        assert_eq!(pair("pptx", "odp"), Some("libreoffice"));
+        // PDF is written, never read.
+        assert!(r.targets(r.format("pdf").unwrap()).is_empty());
+        // Every type LibreOffice writes says how.
+        for (_, to, backend) in r.pairs() {
+            if backend == "libreoffice" {
+                assert!(
+                    to.libreoffice.is_some(),
+                    "{} has no libreoffice filter",
+                    to.ext
+                );
+            }
+        }
+        assert_eq!(r.pairs().filter(|p| p.2 == "libreoffice").count(), 37);
     }
 
     #[test]

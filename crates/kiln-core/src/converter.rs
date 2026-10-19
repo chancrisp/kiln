@@ -12,6 +12,9 @@ use crate::registry::Format;
 pub struct Engines {
     pub ffmpeg: Option<PathBuf>,
     pub pandoc: Option<PathBuf>,
+    /// soffice.exe or soffice.com. `None` also looks in LibreOffice's
+    /// default install folder, since its installer doesn't touch PATH.
+    pub libreoffice: Option<PathBuf>,
 }
 
 /// Settings that apply to one conversion.

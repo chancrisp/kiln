@@ -1,9 +1,10 @@
 //! Regenerates the fixtures in tests/fixtures.
 //!
-//! cargo run -p kiln-core --example gen_fixtures
+//! cargo run -p kiln-core --example gen_fixtures [images|media|documents|office]...
 //!
-//! Images are made with the image crate. Audio, video and documents need
-//! `ffmpeg` and `pandoc` on PATH.
+//! With no arguments every group is made. Images are made with the image
+//! crate. Audio, video and documents need `ffmpeg` and `pandoc` on PATH;
+//! office files need LibreOffice, and are made from sample.docx.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -14,6 +15,23 @@ fn main() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
     std::fs::create_dir_all(&dir).unwrap();
 
+    let groups: Vec<String> = std::env::args().skip(1).collect();
+    let wanted = |g: &str| groups.is_empty() || groups.iter().any(|a| a == g);
+    if wanted("images") {
+        images(&dir);
+    }
+    if wanted("media") {
+        media(&dir);
+    }
+    if wanted("documents") {
+        documents(&dir);
+    }
+    if wanted("office") {
+        office(&dir);
+    }
+}
+
+fn images(dir: &Path) {
     // 64x48 RGB gradient.
     let rgb = RgbImage::from_fn(64, 48, |x, y| Rgb([(x * 4) as u8, (y * 5) as u8, 128]));
     rgb.save(dir.join("rgb_gradient.png")).unwrap();
@@ -53,9 +71,6 @@ fn main() {
 
     // Text with a .png extension.
     std::fs::write(dir.join("not_really.png"), b"this is plain text\n").unwrap();
-
-    media(&dir);
-    documents(&dir);
 }
 
 fn run(program: &str, args: &[&str], cwd: &Path) {
@@ -255,4 +270,101 @@ fn documents(dir: &Path) {
             dir,
         );
     }
+}
+
+const CSV: &str = "Cone,Temperature,Glaze\n06,999,clay\n6,1222,glaze\n";
+
+/// Two slides in flat ODF, the source for the presentation fixtures.
+const SLIDES: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<office:document xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+  xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"
+  xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+  xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"
+  xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"
+  xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"
+  xmlns:presentation="urn:oasis:names:tc:opendocument:xmlns:presentation:1.0"
+  office:version="1.3" office:mimetype="application/vnd.oasis.opendocument.presentation">
+ <office:automatic-styles>
+  <style:page-layout style:name="PM1">
+   <style:page-layout-properties fo:page-width="28cm" fo:page-height="15.75cm" style:print-orientation="landscape"/>
+  </style:page-layout>
+ </office:automatic-styles>
+ <office:master-styles>
+  <style:master-page style:name="Default" style:page-layout-name="PM1"/>
+ </office:master-styles>
+ <office:body>
+  <office:presentation>
+   <draw:page draw:name="Kiln" draw:master-page-name="Default">
+    <draw:frame svg:x="2cm" svg:y="2cm" svg:width="24cm" svg:height="3cm">
+     <draw:text-box><text:p>Kiln fixture</text:p></draw:text-box>
+    </draw:frame>
+    <draw:frame svg:x="2cm" svg:y="6cm" svg:width="24cm" svg:height="6cm">
+     <draw:text-box><text:p>clay, glaze, fire</text:p></draw:text-box>
+    </draw:frame>
+   </draw:page>
+   <draw:page draw:name="Cones" draw:master-page-name="Default">
+    <draw:frame svg:x="2cm" svg:y="2cm" svg:width="24cm" svg:height="3cm">
+     <draw:text-box><text:p>Cone 6 is 1222 C</text:p></draw:text-box>
+    </draw:frame>
+   </draw:page>
+  </office:presentation>
+ </office:body>
+</office:document>
+"#;
+
+/// Word, spreadsheet and slide fixtures, written by LibreOffice.
+fn office(dir: &Path) {
+    let soffice = kiln_core::find_libreoffice().expect("LibreOffice is installed");
+    let scratch = std::env::temp_dir().join(format!("kiln-office-fixtures-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).unwrap();
+    std::fs::write(dir.join("sample.csv"), CSV).unwrap();
+    std::fs::write(scratch.join("sample.fodp"), SLIDES).unwrap();
+
+    let profile = format!(
+        "-env:UserInstallation=file:///{}",
+        scratch
+            .join("profile")
+            .to_string_lossy()
+            .replace('\\', "/")
+            .replace(' ', "%20")
+    );
+    let convert = |input: &Path, to: &str, infilter: Option<&str>| {
+        let mut cmd = Command::new(&soffice);
+        cmd.arg(&profile)
+            .args(["--headless", "--norestore", "--nolockcheck"])
+            .env("SAL_DISABLE_DEFAULTPRINTER", "1")
+            .env("SAL_DISABLE_PRINTERLIST", "1");
+        if let Some(f) = infilter {
+            cmd.arg(format!("--infilter={f}"));
+        }
+        let status = cmd
+            .args(["--convert-to", to, "--outdir"])
+            .arg(dir)
+            .arg(input)
+            .status()
+            .expect("LibreOffice starts");
+        assert!(status.success(), "LibreOffice couldn't write {to}");
+    };
+
+    let docx = dir.join("sample.docx");
+    convert(&docx, "doc:MS Word 97", None);
+    convert(&docx, "rtf:Rich Text Format", None);
+    let csv = dir.join("sample.csv");
+    for to in [
+        "xlsx:Calc MS Excel 2007 XML",
+        "xls:MS Excel 97",
+        "ods:calc8",
+    ] {
+        convert(&csv, to, Some("CSV:44,34,76,1"));
+    }
+    let slides = scratch.join("sample.fodp");
+    for to in [
+        "pptx:Impress MS PowerPoint 2007 XML",
+        "ppt:MS PowerPoint 97",
+        "odp:impress8",
+    ] {
+        convert(&slides, to, None);
+    }
+    // The scratch folder in %TEMP% holds only what this function wrote.
+    let _ = std::fs::remove_dir_all(&scratch);
 }

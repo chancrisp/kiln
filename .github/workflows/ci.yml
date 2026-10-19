@@ -26,13 +26,15 @@ jobs:
 
       # The backend tests run the real engines. Chocolatey installs the
       # upstream builds, which include the data Pandoc needs in --sandbox
-      # mode.
-      - name: Install FFmpeg and Pandoc
+      # mode. LibreOffice stays off PATH, as a normal install does; Kiln
+      # finds it in Program Files.
+      - name: Install FFmpeg, Pandoc and LibreOffice
         run: |
-          choco install ffmpeg pandoc --no-progress -y
+          choco install ffmpeg pandoc libreoffice-fresh --no-progress -y
           "C:\Program Files\Pandoc" | Out-File -FilePath $env:GITHUB_PATH -Append
           ffmpeg -version | Select-Object -First 1
           pandoc --version | Select-Object -First 1
+          & "C:\Program Files\LibreOffice\program\soffice.com" --version
 
       - name: cargo fmt
         run: cargo fmt --all --check

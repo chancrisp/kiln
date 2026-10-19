@@ -39,6 +39,10 @@ wheel. Everything happens on your PC. Nothing is uploaded.
 | Audio | WAV, MP3, FLAC, OGG, OPUS, M4A | any other audio format | FFmpeg |
 | Video | MP4, MOV, MKV, WEBM | any other video format, or audio (WAV, MP3, FLAC, OGG, OPUS, M4A) | FFmpeg |
 | Document | MD, HTML, DOCX, ODT, EPUB, RST, TEX | any other of those, plus RTF and TXT | Pandoc |
+| Office document | DOC, RTF | DOC, DOCX, ODT, RTF, PDF | LibreOffice |
+| | DOCX, ODT | DOC, PDF | LibreOffice |
+| Spreadsheet | XLSX, XLS, ODS, CSV | any other of those, plus PDF | LibreOffice |
+| Presentation | PPTX, PPT, ODP | any other of those, plus PDF | LibreOffice |
 
 Aliases are accepted on input: JPEG, OGA, M4V, MARKDOWN and HTM. The full
 list lives in [`crates/kiln-core/formats.toml`](crates/kiln-core/formats.toml),
@@ -57,7 +61,9 @@ and `kiln formats FILE` prints what a given file can become.
 - **Installer.** `Kiln-<version>-x64.msi` installs into Program Files and adds a Start menu entry. It also puts `kiln` on PATH.
 - **Portable.** Unzip `Kiln-<version>-x64-portable.zip` anywhere and run `kiln-app.exe`.
 
-Images convert out of the box. Audio and video need [FFmpeg](https://ffmpeg.org/download.html), and documents need [Pandoc](https://pandoc.org/installing.html). Kiln doesn't bundle or download either one. Install them, and Kiln finds them on PATH. You can also choose the executables in **Settings > Engines**.
+Images convert out of the box. Audio and video need [FFmpeg](https://ffmpeg.org/download.html), and documents need [Pandoc](https://pandoc.org/installing.html). Office files, spreadsheets, slides and PDF output need [LibreOffice](https://www.libreoffice.org/download/), which is optional. Kiln doesn't bundle or download any of them. Install them, and Kiln finds them on PATH, or LibreOffice in its default install folder. You can also choose the executables in **Settings > Engines**.
+
+Each LibreOffice job runs with a fresh profile inside its temporary folder, with macros and active content (OLE objects, DDE and other self-updating links) turned off and no update check.
 
 ## Settings
 
@@ -76,6 +82,7 @@ actions = "alt"
 [engines]                        # leave out to use the ones on PATH
 ffmpeg = 'C:\Tools\ffmpeg\bin\ffmpeg.exe'
 pandoc = 'C:\Program Files\Pandoc\pandoc.exe'
+libreoffice = 'D:\LibreOffice\program\soffice.exe'
 ```
 
 A file Kiln can't read is left alone. The app starts with the defaults and
@@ -84,7 +91,7 @@ says why in the footer.
 ## Command line
 
 ```text
-kiln convert INPUT FORMAT [-o DIR] [-q QUALITY] [--ffmpeg PATH] [--pandoc PATH]
+kiln convert INPUT FORMAT [-o DIR] [-q QUALITY] [--ffmpeg PATH] [--pandoc PATH] [--libreoffice PATH]
 kiln tool TOOL INPUTS... [-o DIR]
 kiln formats FILE
 ```
@@ -98,7 +105,7 @@ You need Rust (stable, 1.82 or newer) with the MSVC toolchain on Windows 10 or 1
 
 ```powershell
 cargo build --release          # target\release\kiln-app.exe and kiln.exe
-cargo test --workspace         # backend tests need ffmpeg, ffprobe and pandoc on PATH
+cargo test --workspace         # backend tests need ffmpeg, ffprobe, pandoc and LibreOffice
 .\packaging\package.ps1        # dist\ MSI and portable ZIP (needs WiX 5 for the MSI)
 ```
 

@@ -51,6 +51,7 @@ window between them as well.
 - [ ] Dropping on an item pulses it once, then the job starts and the wheel fades. Dropping on the centre just adds the files.
 - [ ] Enter on a row opens the convert wheel, Ctrl+Enter the tools wheel, and the Apps key or Shift+F10 the convert wheel. Arrows move round it, Enter applies, Escape closes.
 - [ ] Tools offered match the file: Merge appears only for two or more files of one type, Crop never for audio.
+- [ ] Office types use their own icons in the convert wheel: a page for DOC, DOCX, ODT, RTF and PDF, a sheet for XLSX, XLS, ODS and CSV, and a screen on a stand for PPTX, PPT and ODP.
 
 ## Jobs
 
@@ -80,7 +81,7 @@ window between them as well.
 - [ ] Tab and Shift+Tab move a celadon focus ring through every control; Enter or Space presses.
 - [ ] Output folder: Choose picks a folder and results go there; Reset goes back to "Next to each file".
 - [ ] Wheel keys: pressing a key button moves that wheel to the next key and swaps with the wheel that had it. Dragging follows the new keys at once.
-- [ ] Engines shows "Found on PATH", "Not installed" or the chosen path for FFmpeg and Pandoc. Choose takes an .exe; jobs use it straight away.
+- [ ] Engines shows "Found on PATH", "Not installed" or the chosen path for FFmpeg, Pandoc and LibreOffice. LibreOffice installed in Program Files shows its path without being chosen. Choose takes an .exe; jobs use it straight away.
 - [ ] Every change is saved to %APPDATA%\Kiln\settings.toml. A broken file starts Kiln with defaults and a footer line saying why.
 
 ## Themes

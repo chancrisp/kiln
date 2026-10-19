@@ -158,6 +158,49 @@ pub fn assert_output(path: &Path, ext: &str) {
             assert!(bytes.starts_with(b"PK\x03\x04"), "{ctx}");
             assert!(contains(&bytes, b"mimetypeapplication/epub+zip"), "{ctx}");
         }
+        "pdf" => {
+            assert!(bytes.starts_with(b"%PDF-"), "{ctx}");
+            assert!(contains(&bytes, b"%%EOF"), "{ctx}");
+            assert!(contains(&bytes, b"/Type/Page"), "{ctx} has no pages");
+        }
+        // Legacy Office files are OLE compound files; the main stream's
+        // name is stored in UTF-16.
+        "doc" | "xls" | "ppt" => {
+            assert!(
+                bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]),
+                "{ctx}"
+            );
+            let stream = match ext {
+                "doc" => "WordDocument",
+                "xls" => "Workbook",
+                _ => "PowerPoint Document",
+            };
+            let utf16: Vec<u8> = stream.encode_utf16().flat_map(u16::to_le_bytes).collect();
+            assert!(contains(&bytes, &utf16), "{ctx} has no {stream} stream");
+        }
+        "xlsx" | "pptx" => {
+            assert!(bytes.starts_with(b"PK\x03\x04"), "{ctx}");
+            let part: &[u8] = if ext == "xlsx" {
+                b"xl/workbook.xml"
+            } else {
+                b"ppt/presentation.xml"
+            };
+            assert!(contains(&bytes, part), "{ctx}");
+        }
+        "ods" | "odp" => {
+            assert!(bytes.starts_with(b"PK\x03\x04"), "{ctx}");
+            let mime: &[u8] = if ext == "ods" {
+                b"mimetypeapplication/vnd.oasis.opendocument.spreadsheet"
+            } else {
+                b"mimetypeapplication/vnd.oasis.opendocument.presentation"
+            };
+            assert!(contains(&bytes, mime), "{ctx}");
+        }
+        "csv" => {
+            let text = String::from_utf8_lossy(&bytes);
+            assert!(text.contains("1222"), "{ctx} lost a number: {text}");
+            assert!(text.contains("glaze"), "{ctx} lost a word: {text}");
+        }
         "md" | "rst" | "txt" | "html" | "tex" | "rtf" => {
             let text = String::from_utf8_lossy(&bytes);
             assert!(text.contains("Kiln fixture"), "{ctx} lost the heading");

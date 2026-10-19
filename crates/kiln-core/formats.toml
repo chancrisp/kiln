@@ -9,6 +9,10 @@
 #                   type. Each item is one argument; nothing goes through a shell.
 #   pandoc = "..."  the name Pandoc uses for this type.
 #   standalone      Pandoc writes a complete document, not a fragment.
+#   libreoffice = "..."           LibreOffice's --convert-to value for writing
+#                                 this type: an extension, optionally with
+#                                 ":filter name:filter options".
+#   libreoffice_infilter = "..."  LibreOffice's --infilter value for reading it.
 #
 # [[route]] says which backend converts `from` types to `to` types. Every
 # from/to combination is a pair; identical types are skipped. Declaring the
@@ -85,10 +89,12 @@ standalone = true
 [formats.docx]
 kind = "document"
 pandoc = "docx"
+libreoffice = "docx:MS Word 2007 XML"
 
 [formats.odt]
 kind = "document"
 pandoc = "odt"
+libreoffice = "odt:writer8"
 
 [formats.epub]
 kind = "document"
@@ -107,10 +113,52 @@ standalone = true
 kind = "document"
 pandoc = "rtf"
 standalone = true
+libreoffice = "rtf:Rich Text Format"
 
 [formats.txt]
 kind = "document"
 pandoc = "plain"
+
+# --- Office (LibreOffice) ---------------------------------------------------
+
+[formats.doc]
+kind = "document"
+libreoffice = "doc:MS Word 97"
+
+[formats.pdf]
+kind = "document"
+libreoffice = "pdf"
+
+[formats.xlsx]
+kind = "spreadsheet"
+libreoffice = "xlsx:Calc MS Excel 2007 XML"
+
+[formats.xls]
+kind = "spreadsheet"
+libreoffice = "xls:MS Excel 97"
+
+[formats.ods]
+kind = "spreadsheet"
+libreoffice = "ods:calc8"
+
+# Comma separated, double quotes only where needed, UTF-8 (76), starting at
+# line 1, cells written as shown.
+[formats.csv]
+kind = "spreadsheet"
+libreoffice = "csv:Text - txt - csv (StarCalc):44,34,76,1,,0,false,true,true"
+libreoffice_infilter = "CSV:44,34,76,1"
+
+[formats.pptx]
+kind = "presentation"
+libreoffice = "pptx:Impress MS PowerPoint 2007 XML"
+
+[formats.ppt]
+kind = "presentation"
+libreoffice = "ppt:MS PowerPoint 97"
+
+[formats.odp]
+kind = "presentation"
+libreoffice = "odp:impress8"
 
 # --- Routes -----------------------------------------------------------------
 
@@ -133,3 +181,27 @@ to = ["mp4", "mov", "mkv", "webm", "wav", "mp3", "flac", "ogg", "opus", "m4a"]
 backend = "pandoc"
 from = ["md", "html", "docx", "odt", "epub", "rst", "tex"]
 to = ["md", "html", "docx", "odt", "epub", "rst", "tex", "rtf", "txt"]
+
+# LibreOffice takes the office pairs Pandoc can't do: legacy binary types,
+# RTF as input, spreadsheets, slides and PDF output. Pandoc keeps the pairs
+# it already has, such as DOCX to ODT.
+
+[[route]]
+backend = "libreoffice"
+from = ["doc", "rtf"]
+to = ["doc", "docx", "odt", "rtf", "pdf"]
+
+[[route]]
+backend = "libreoffice"
+from = ["docx", "odt"]
+to = ["doc", "pdf"]
+
+[[route]]
+backend = "libreoffice"
+from = ["xlsx", "xls", "ods", "csv"]
+to = ["xlsx", "xls", "ods", "csv", "pdf"]
+
+[[route]]
+backend = "libreoffice"
+from = ["pptx", "ppt", "odp"]
+to = ["pptx", "ppt", "odp", "pdf"]
