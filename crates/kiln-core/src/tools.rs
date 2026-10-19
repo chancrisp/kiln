@@ -77,7 +77,7 @@ impl Tool {
             (Tool::Compress, Kind::Video) => true,
             (Tool::Compress, Kind::Audio) => f.ext != "wav",
             (Tool::Crop, Kind::Image | Kind::Video) => true,
-            (Tool::Trim, Kind::Audio) => true,
+            (Tool::Trim, Kind::Audio | Kind::Video) => true,
             (Tool::Split, Kind::Audio | Kind::Video) => true,
             (Tool::Merge, Kind::Audio | Kind::Video) => true,
             (Tool::Merge, Kind::Document) => f.pandoc.is_some(),
@@ -122,6 +122,9 @@ fn compress_args(ext: &str) -> Option<&'static [&'static str]> {
 
 /// Silence below this level counts as silence for Trim.
 const SILENCE_DB: &str = "-50dB";
+/// What counts as a black frame for Trim: blackdetect with its default
+/// pixel threshold, over at least a tenth of a second.
+const BLACK_FILTER: &str = "blackdetect=d=0.1";
 /// Seconds of video Crop looks at to find black bars.
 const CROP_SCAN_SECONDS: f64 = 60.0;
 
@@ -295,6 +298,48 @@ impl Kiln {
                 let tmp = work.path().join(format!("out.{ext}"));
                 let duration = ffmpeg::probe_duration(opts, input, ctx)?;
                 media_args_run(opts, ctx, input, &args, &tmp, duration, (0.3, 1.0), &[])?;
+                Ok(vec![place(&tmp, &out_dir, &named(tool.suffix()), ext)?])
+            }
+            (Tool::Trim, Kind::Video) => {
+                let duration = ffmpeg::probe_duration(opts, input, ctx)?.ok_or_else(no_duration)?;
+                let log = ffmpeg::analyse(opts, ctx, input, "-vf", BLACK_FILTER, None)?;
+                let mut keep =
+                    quiet_edges(&log, "black_start:", "black_end:", VIDEO_EDGE, duration);
+                if ffmpeg::has_audio(opts, input, ctx)? {
+                    let log = ffmpeg::analyse(
+                        opts,
+                        ctx,
+                        input,
+                        "-af",
+                        &format!("silencedetect=noise={SILENCE_DB}:d=0.1"),
+                        None,
+                    )?;
+                    let sound =
+                        quiet_edges(&log, "silence_start: ", "silence_end: ", EDGE, duration);
+                    // Only cut what is both black and silent, so a voice
+                    // over a black opening stays.
+                    keep = (keep.0.min(sound.0), keep.1.max(sound.1));
+                }
+                let (start, end) = worth_trimming(keep, duration).ok_or_else(|| {
+                    Error::NothingToDo(
+                        "There's no black, silent stretch at the start or end to trim.".to_owned(),
+                    )
+                })?;
+                let pre = vec![OsString::from("-ss"), format!("{start:.3}").into()];
+                let mut args: Vec<OsString> =
+                    vec!["-t".into(), format!("{:.3}", end - start).into()];
+                args.extend(f.ffmpeg.iter().map(OsString::from));
+                let tmp = work.path().join(format!("out.{ext}"));
+                media_args_run(
+                    opts,
+                    ctx,
+                    input,
+                    &args,
+                    &tmp,
+                    Some(end - start),
+                    (0.3, 1.0),
+                    &pre,
+                )?;
                 Ok(vec![place(&tmp, &out_dir, &named(tool.suffix()), ext)?])
             }
             (Tool::Trim, _) => {
@@ -544,10 +589,23 @@ fn last_crop(log: &str) -> Option<(u32, u32, u32, u32)> {
     }
 }
 
+/// Seconds within which a quiet stretch counts as touching an edge.
+const EDGE: f64 = 0.05;
+/// The same for black video, which blackdetect ends at the last frame's
+/// start, a frame short of the file's end.
+const VIDEO_EDGE: f64 = 0.25;
+
 /// Where the sound starts and ends, from silencedetect's log. `None` if
 /// there's nothing to trim, or nothing but silence.
 fn sound_bounds(log: &str, duration: f64) -> Option<(f64, f64)> {
-    const EDGE: f64 = 0.05;
+    let keep = quiet_edges(log, "silence_start: ", "silence_end: ", EDGE, duration);
+    worth_trimming(keep, duration)
+}
+
+/// Where the content starts and ends once quiet stretches touching either
+/// edge are left out. `start_key` and `end_key` are how a detect filter
+/// (silencedetect, blackdetect) labels each stretch in its log.
+fn quiet_edges(log: &str, start_key: &str, end_key: &str, edge: f64, duration: f64) -> (f64, f64) {
     let value = |line: &str, key: &str| -> Option<f64> {
         let rest = line.split(key).nth(1)?;
         rest.split_whitespace()
@@ -558,9 +616,11 @@ fn sound_bounds(log: &str, duration: f64) -> Option<(f64, f64)> {
     };
     let mut silences: Vec<(f64, Option<f64>)> = vec![];
     for line in log.lines() {
-        if let Some(s) = value(line, "silence_start: ") {
+        // blackdetect puts both ends on one line; silencedetect splits them.
+        if let Some(s) = value(line, start_key) {
             silences.push((s.max(0.0), None));
-        } else if let Some(e) = value(line, "silence_end: ") {
+        }
+        if let Some(e) = value(line, end_key) {
             if let Some(last) = silences.last_mut() {
                 last.1 = Some(e);
             }
@@ -569,15 +629,20 @@ fn sound_bounds(log: &str, duration: f64) -> Option<(f64, f64)> {
     let mut start = 0.0;
     let mut end = duration;
     if let Some((s, Some(e))) = silences.first() {
-        if *s <= EDGE {
+        if *s <= edge {
             start = *e;
         }
     }
     if let Some((s, e)) = silences.last() {
-        if e.is_none_or(|e| e >= duration - EDGE) && *s > start {
+        if e.is_none_or(|e| e >= duration - edge) && *s > start {
             end = *s;
         }
     }
+    (start, end)
+}
+
+/// `keep` if it cuts anything and leaves something.
+fn worth_trimming((start, end): (f64, f64), duration: f64) -> Option<(f64, f64)> {
     let trimmed = start > EDGE || end < duration - EDGE;
     (trimmed && end - start > 0.05).then_some((start, end))
 }
@@ -601,6 +666,17 @@ mod tests {
                    [Parsed_cropdetect_0 @ 0x1] x1:0 x2:63 y1:6 y2:41 w:64 h:36 x:0 y:6 pts:2 t:0.2 limit:0.09 crop=64:36:0:6\n";
         assert_eq!(last_crop(log), Some((64, 36, 0, 6)));
         assert_eq!(last_crop("nothing here"), None);
+    }
+
+    #[test]
+    fn finds_picture_between_black_stretches() {
+        let log = "[blackdetect @ 0x1] black_start:0 black_end:0.5 black_duration:0.5\n\
+                   [blackdetect @ 0x1] black_start:1.5 black_end:2 black_duration:0.5\n";
+        let keep = quiet_edges(log, "black_start:", "black_end:", VIDEO_EDGE, 2.0);
+        assert_eq!(worth_trimming(keep, 2.0), Some((0.5, 1.5)));
+        let empty = quiet_edges("", "black_start:", "black_end:", VIDEO_EDGE, 2.0);
+        assert_eq!(empty, (0.0, 2.0));
+        assert_eq!(worth_trimming((0.0, 2.0), 2.0), None);
     }
 
     #[test]

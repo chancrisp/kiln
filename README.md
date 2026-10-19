@@ -52,7 +52,7 @@ and `kiln formats FILE` prints what a given file can become.
 |---|---|---|
 | Compress | PNG and JPG images, video, audio (not WAV) | Re-encodes smaller, and keeps the original if the result isn't smaller |
 | Crop | images, video | Removes plain borders from images and black bars from video |
-| Trim | audio | Cuts silence from the start and end |
+| Trim | audio, video | Cuts silence from the start and end of audio, and stretches that are both black and silent from video |
 | Split | audio, video | Cuts the file into two halves |
 | Merge | two or more audio, video or document files of one type | Joins them in order |
 

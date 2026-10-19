@@ -42,7 +42,7 @@ fn tools_offered_match_the_files() {
     assert_eq!(t(&["a.png"]), [Compress, Crop]);
     assert_eq!(t(&["a.mp3"]), [Compress, Trim, Split]);
     assert_eq!(t(&["a.wav"]), [Trim, Split]);
-    assert_eq!(t(&["a.mp4"]), [Compress, Crop, Split]);
+    assert_eq!(t(&["a.mp4"]), [Compress, Crop, Trim, Split]);
     assert_eq!(t(&["a.jpg"]), [Compress, Crop]);
     assert_eq!(t(&["a.gif"]), [Crop]);
     assert_eq!(t(&["a.mp3", "b.mp3"]), [Compress, Trim, Split, Merge]);
@@ -104,6 +104,27 @@ fn trim_without_silence_has_nothing_to_do() {
     assert_eq!(
         err.to_string(),
         "There's no silence at the start or end to trim."
+    );
+}
+
+#[test]
+fn trim_cuts_black_silent_video_edges() {
+    let (dir, input) = stage(&fixture("padded.mp4"));
+    let out = run(Tool::Trim, &[input], &dir).unwrap();
+    assert_eq!(name(&out[0]), "padded trimmed.mp4");
+    let p = probe(&out[0]);
+    assert!((p.duration - 1.0).abs() < 0.2, "trimmed to {}", p.duration);
+    assert_eq!((p.video, p.audio), (1, 1));
+    assert_eq!((p.width, p.height), (Some(64), Some(48)));
+}
+
+#[test]
+fn trim_on_video_without_black_edges_has_nothing_to_do() {
+    let (dir, input) = stage(&sample_for("mp4"));
+    let err = run(Tool::Trim, &[input], &dir).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "There's no black, silent stretch at the start or end to trim."
     );
 }
 

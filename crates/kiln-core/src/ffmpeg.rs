@@ -161,6 +161,12 @@ pub(crate) fn probe_duration(
     }
 }
 
+/// Whether the file has an audio stream.
+pub(crate) fn has_audio(opts: &Options, input: &Path, ctx: &mut Context<'_>) -> Result<bool> {
+    let lines = probe(opts, ctx, input, "stream=codec_type")?;
+    Ok(lines.iter().any(|l| l == "audio"))
+}
+
 /// Width and height of the first video stream.
 pub(crate) fn probe_size(
     opts: &Options,

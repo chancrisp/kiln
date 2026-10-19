@@ -23,6 +23,9 @@ fn main() {
     if wanted("media") {
         media(&dir);
     }
+    if wanted("media") || wanted("padded-video") {
+        padded_video(&dir);
+    }
     if wanted("documents") {
         documents(&dir);
     }
@@ -229,6 +232,44 @@ fn media(dir: &Path) {
 
     // Text with a media extension.
     std::fs::write(dir.join("corrupt.wav"), b"RIFF but not really\n").unwrap();
+}
+
+/// Half a second of black, silent video either side of one second of test
+/// picture and tone, for Trim.
+fn padded_video(dir: &Path) {
+    let gap = "color=black:size=64x48:rate=10:duration=0.5";
+    let quiet = "anullsrc=r=22050:cl=mono:d=0.5";
+    let mut args = vec!["-hide_banner", "-loglevel", "error", "-y", "-bitexact"];
+    for src in [
+        gap,
+        quiet,
+        "testsrc=size=64x48:rate=10:duration=1",
+        "sine=frequency=440:sample_rate=22050:duration=1",
+        gap,
+        quiet,
+    ] {
+        args.extend_from_slice(&["-f", "lavfi", "-i", src]);
+    }
+    args.extend_from_slice(&[
+        "-filter_complex",
+        "[0:v][1:a][2:v][3:a][4:v][5:a]concat=n=3:v=1:a=1[v][a]",
+        "-map",
+        "[v]",
+        "-map",
+        "[a]",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-crf",
+        "40",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "32k",
+        "padded.mp4",
+    ]);
+    run("ffmpeg", &args, dir);
 }
 
 const MARKDOWN: &str = "---
