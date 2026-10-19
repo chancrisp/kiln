@@ -1,38 +1,65 @@
-# Kiln
+<div align="center">
 
-Kiln is a native Windows file converter. Drop a file on the window, hold a
-key, and pick what it should become from a radial menu called the glaze
-wheel. Everything happens on your PC. Nothing is uploaded.
+<img src="docs/readme/banner.png" alt="Kiln, a native Windows file converter" width="820">
 
-![The convert wheel open over the file list](docs/screenshots/m5/wheel-convert-100.png)
+### Fire raw files into finished ones
 
-| | |
-|---|---|
-| ![Settings in light mode](docs/screenshots/m6/settings-light-100.png) | ![A running job, a finished one and a failed one](docs/screenshots/m5/jobs-100.png) |
+A native Windows file converter. Drop a file, hold a key, pick a format. Nothing is uploaded.
 
-## Features
+<a href="https://github.com/chancrisp/kiln/releases"><img src="https://img.shields.io/badge/DOWNLOAD-Windows_10_%26_11-7FB5A0?style=for-the-badge&logo=windows&logoColor=white&labelColor=1C1B19" alt="Download for Windows 10 and 11"></a>
+<a href="LICENSE"><img src="https://img.shields.io/badge/LICENSE-Apache_2.0-9A8F80?style=for-the-badge&labelColor=1C1B19" alt="Apache 2.0 license"></a>
+<a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/BUILT_WITH-Rust-B5503F?style=for-the-badge&logo=rust&logoColor=white&labelColor=1C1B19" alt="Built with Rust"></a>
 
-- **Three wheels.** While dragging files over the window, hold a modifier:
-  - **Shift** for the convert wheel, which offers only the formats every dropped file can become.
-  - **Ctrl** for file tools: compress, crop, trim, split and merge.
-  - **Alt** for file actions: copy path, move, and open in Windows Terminal.
+</div>
 
-  Each key can be reassigned in Settings.
-- **Works from the keyboard.** Select a row with the arrow keys.
-  - Enter opens the convert wheel, Ctrl+Enter opens tools, and Alt+Enter opens actions.
-  - Inside a wheel, the arrows move, Enter applies and Escape closes.
-- **Jobs run in the background** on a small worker pool. Each row shows its progress as a thin line and can be cancelled.
-- **Nothing is overwritten.**
-  - Results go next to the input, or to a folder you choose. A taken name becomes `name (1).jpg`.
-  - Names Windows reserves, such as `CON`, are made safe.
-  - Temporary files live in a per-job folder under `%TEMP%\Kiln` and are removed when the job finishes or is cancelled.
-- **Offline.** Converting never touches the network. The only network call is
-  **Check for updates** in Settings, which asks GitHub for the latest release
-  when you press it, and never on its own.
-- **Small and quick.** The app is a single native executable of under 3 MB. It draws with Direct2D and DirectWrite, with no web view.
-- **One window.** Dropping files on Kiln's icon while it's open adds them to the open window.
-- **Light and dark.** The theme follows the Windows app mode, or you can choose one. Kiln is per-monitor DPI aware.
+## What is Kiln?
+
+Kiln turns one kind of file into another. Drag files onto its window, hold a
+key, and a radial menu called the **glaze wheel** opens under the pointer with
+only the formats those files can become. Pick one and Kiln does the rest in the
+background, right on your PC.
+
+- **One gesture.** Hold Shift to convert, Ctrl for file tools and Alt for file actions. Every key can be reassigned.
+- **189 format pairs.** Images, audio, video, documents, office files, spreadsheets and slides.
+- **Offline.** Converting never touches the network. Nothing is uploaded, ever.
+- **Nothing is overwritten.** Results land next to the input, or in a folder you choose. A taken name becomes `name (1).jpg`.
+- **Small and quick.** A single native executable under 3 MB, drawn with Direct2D. No web view. The window is up in about 215 ms.
+- **Keyboard first.** Arrow keys pick a row, Enter opens the wheel, Escape closes it.
+- **Light and dark.** Follows the Windows app mode and every monitor's DPI.
 - **A command line too.** `kiln convert photo.png jpg` does the same work from a terminal.
+
+<div align="center">
+<img src="docs/screenshots/m7/empty-100.png" alt="Kiln's empty window, ready for files" width="736">
+</div>
+
+## The glaze wheel
+
+Three wheels, one per modifier key. Each shows only what fits the files you dropped.
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/m5/wheel-convert-100.png" alt="The convert wheel" width="270"><br><b>CONVERT</b><br><sub>Hold <kbd>Shift</kbd>. Every format the files can become</sub></td>
+    <td align="center"><img src="docs/screenshots/m5/wheel-tools-100.png" alt="The tools wheel" width="270"><br><b>TOOLS</b><br><sub>Hold <kbd>Ctrl</kbd>. Compress, crop, trim, split, merge</sub></td>
+    <td align="center"><img src="docs/screenshots/m6/wheel-actions-100.png" alt="The actions wheel" width="270"><br><b>ACTIONS</b><br><sub>Hold <kbd>Alt</kbd>. Copy path, move, open in Terminal</sub></td>
+  </tr>
+</table>
+
+From the keyboard, select a row and press <kbd>Enter</kbd> for Convert,
+<kbd>Ctrl</kbd>+<kbd>Enter</kbd> for Tools or <kbd>Alt</kbd>+<kbd>Enter</kbd>
+for Actions. Inside a wheel, the arrows move, Enter applies and Escape closes.
+
+## A closer look
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/m7/jobs-light-100.png" alt="A running job, a finished one and a failed one" width="400"><br><b>JOBS</b><br><sub>Run in the background, each with its own progress line and cancel</sub></td>
+    <td align="center"><img src="docs/screenshots/m7/settings-update-100.png" alt="The settings panel" width="400"><br><b>SETTINGS</b><br><sub>Output folder, theme, wheel keys and engines</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/m5/details-100.png" alt="The details dialog with engine output" width="400"><br><b>DETAILS</b><br><sub>A failed job shows one plain line, with the full engine output a click away</sub></td>
+    <td align="center"><img src="docs/screenshots/m6/wheel-convert-light-100.png" alt="The convert wheel in light mode" width="400"><br><b>LIGHT MODE</b><br><sub>Same stoneware, lighter glaze</sub></td>
+  </tr>
+</table>
 
 ## Formats
 
@@ -61,17 +88,32 @@ and `kiln formats FILE` prints what a given file can become.
 
 ## Install
 
-- **Installer.** `Kiln-<version>-x64.msi` installs into Program Files and adds a Start menu entry. It also puts `kiln` on PATH.
+- **Installer.** `Kiln-<version>-x64.msi` installs into Program Files, adds a Start menu entry and puts `kiln` on PATH.
 - **Portable.** Unzip `Kiln-<version>-x64-portable.zip` anywhere and run `kiln-app.exe`.
 
-Images convert out of the box. Audio and video need [FFmpeg](https://ffmpeg.org/download.html), and documents need [Pandoc](https://pandoc.org/installing.html). Office files, spreadsheets, slides and PDF output need [LibreOffice](https://www.libreoffice.org/download/), which is optional. Kiln doesn't bundle or download any of them. Install them, and Kiln finds them on PATH, or LibreOffice in its default install folder. You can also choose the executables in **Settings > Engines**.
+Images convert out of the box. The other kinds use free engines that Kiln
+finds on your PC. It never bundles or downloads them.
 
-Each LibreOffice job runs with a fresh profile inside its temporary folder, with macros and active content (OLE objects, DDE and other self-updating links) turned off and no update check.
+| Engine | Needed for |
+|---|---|
+| [FFmpeg](https://ffmpeg.org/download.html) | audio and video |
+| [Pandoc](https://pandoc.org/installing.html) | documents |
+| [LibreOffice](https://www.libreoffice.org/download/) (optional) | office files, spreadsheets, slides and PDF output |
+
+Kiln looks on PATH, and for LibreOffice in its default install folder. You can
+also choose the executables in **Settings > Engines**. Each LibreOffice job
+runs with a fresh profile inside its temporary folder, with macros and active
+content (OLE objects, DDE and other self-updating links) turned off and no
+update check.
+
+The only network call Kiln ever makes is **Check for updates** in Settings,
+which asks GitHub for the latest release when you press it, and never on its own.
 
 ## Settings
 
-Open Settings with the dial in the header or Ctrl+,. Every change is saved
-straight away to `%APPDATA%\Kiln\settings.toml`, which you can also edit by hand:
+Open Settings with the dial in the header or <kbd>Ctrl</kbd>+<kbd>,</kbd>.
+Every change is saved straight away to `%APPDATA%\Kiln\settings.toml`, which
+you can also edit by hand:
 
 ```toml
 output_folder = 'D:\Converted'   # leave out to write next to each file
@@ -112,15 +154,26 @@ cargo test --workspace         # backend tests need ffmpeg, ffprobe, pandoc and 
 .\packaging\package.ps1        # dist\ MSI and portable ZIP (needs WiX 5 for the MSI)
 ```
 
-`kiln-core` and `kiln-cli` also build and test on Linux and macOS, which is handy for
-working on converters. `kiln-app` is Windows only. Its layout, theme, icon
-and settings logic are plain Rust and are tested on every platform.
+`kiln-core` and `kiln-cli` also build and test on Linux and macOS, which is
+handy for working on converters. `kiln-app` is Windows only. Its layout, theme,
+icon and settings logic are plain Rust and are tested on every platform.
 
 Signing is optional. Set `KILN_SIGN_CERT` (a .pfx path) and
 `KILN_SIGN_PASSWORD` before running `package.ps1`, and the executables and
 MSI are signed with signtool. Without them, packages are built unsigned.
 
-## Add a format
+```text
+crates/kiln-core   conversion logic, format registry, job runner (no UI)
+crates/kiln-cli    the `kiln` command
+crates/kiln-app    the Windows app: Win32, Direct2D, DirectWrite
+packaging          MSI definition and the packaging script
+docs/screenshots   previews from each milestone
+```
+
+<details>
+<summary><b>Add a format</b></summary>
+
+<br>
 
 1. Describe the type in [`crates/kiln-core/formats.toml`](crates/kiln-core/formats.toml):
 
@@ -137,14 +190,19 @@ MSI are signed with signtool. Without them, packages are built unsigned.
    `cargo run -p kiln-core --example gen_fixtures`.
 4. Run `cargo test --workspace`. `crates/kiln-cli/tests/pairs.rs` converts
    every supported pair, so the new type is tested both ways.
-5. Add it to the table above. A test checks that this README names every
-   format in the registry.
+5. Add it to the Formats table above. A test checks that this README names
+   every format in the registry.
 
 A format that needs a new engine gets a new backend: implement the
 `Converter` trait in `kiln-core` and register it in `job.rs`. External
 programs are always run with separate arguments, never through a shell.
 
-## Known limitations
+</details>
+
+<details>
+<summary><b>Known limitations</b></summary>
+
+<br>
 
 - WEBP is written lossless only, so a WEBP made from a JPG can be larger than the JPG.
 - An animated GIF keeps only its first frame.
@@ -153,27 +211,36 @@ programs are always run with separate arguments, never through a shell.
 - Office files, PDF and documents have no tools other than Merge for documents.
 - The update check returns "No releases are published yet" until a release exists on GitHub.
 
+</details>
+
+<details>
+<summary><b>Performance</b></summary>
+
+<br>
+
 On the development PC (release build, Windows 11, NVIDIA GPU), the window
 appears about 215 ms after launch. Idle, Kiln uses about 13 MB of private
 memory, which is the figure Task Manager shows. Its working set is about
 53 MB, but most of that is graphics driver code shared with other apps.
 The MSI is 1.9 MB and the portable ZIP 2.4 MB.
 
-## Project layout
+</details>
 
-```text
-crates/kiln-core   conversion logic, format registry, job runner (no UI)
-crates/kiln-cli    the `kiln` command
-crates/kiln-app    the Windows app: Win32, Direct2D, DirectWrite
-packaging          MSI definition and the packaging script
-docs/screenshots   previews from each milestone
-```
+## Contributing
 
-[DESIGN.md](DESIGN.md) explains how Kiln looks and sounds, and why.
-[VISUAL_TESTING.md](VISUAL_TESTING.md) is the checklist to run before a
-release.
+Bug reports and format requests are welcome in
+[Issues](https://github.com/chancrisp/kiln/issues). Before changing code, read
+[CONTRIBUTING.md](CONTRIBUTING.md). [DESIGN.md](DESIGN.md) explains how Kiln
+looks and sounds, and why. [VISUAL_TESTING.md](VISUAL_TESTING.md) is the
+checklist to run before a release.
 
-## License
+<div align="center">
 
-Apache License 2.0. See [LICENSE](LICENSE). Bundled and external components
-are listed in [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES).
+<br>
+
+**[Download Kiln](https://github.com/chancrisp/kiln/releases)**
+
+<sub>Built with Rust, Win32, Direct2D and DirectWrite. Made by Chandler Crisp.<br>
+Apache License 2.0. See <a href="LICENSE">LICENSE</a> and <a href="THIRD_PARTY_LICENSES">THIRD_PARTY_LICENSES</a>.</sub>
+
+</div>
