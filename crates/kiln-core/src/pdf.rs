@@ -110,6 +110,16 @@ fn extract_text(input: &Path) -> Result<String> {
     Ok(text)
 }
 
+/// Whether any of the first `pages` pages of the PDF in `bytes` draws
+/// text, so a scan can be told from a document.
+pub(crate) fn text_in_first(bytes: &[u8], pages: usize) -> Result<bool> {
+    // pdf-extract panics on some malformed files, as above.
+    let all = std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem_by_pages(bytes))
+        .map_err(|_| failed("the PDF's text couldn't be read."))?
+        .map_err(|e| failed(load_reason(&e.to_string())))?;
+    Ok(all.iter().take(pages).any(|p| !p.trim().is_empty()))
+}
+
 /// Pages joined by a blank line, with trailing spaces gone and runs of
 /// blank lines cut to one.
 fn tidy_text(pages: &[String]) -> String {

@@ -1,21 +1,27 @@
 //! What Kiln can tell about a file by looking inside it: for images, the
-//! size, transparency, animation and whether it looks like a photo, plus
-//! the likely size of a converted result. `inspect` reads and nothing
-//! else; `suggest` turns its facts into suggestions.
+//! size, transparency, animation and whether it looks like a photo; for
+//! PDFs, the pages and whether they hold text; for audio and video, what
+//! FFprobe reports and whether there are black bars; and the likely size
+//! of a converted result. `inspect` reads and nothing else; `suggest`
+//! turns its facts into suggestions.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File};
 use std::io::BufReader;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::Arc;
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{AnimationDecoder, DynamicImage, ExtendedColorType, ImageEncoder, RgbaImage};
 
-use crate::converter::{CancelToken, Options};
+use crate::converter::{CancelToken, Context, Options};
 use crate::job::Kiln;
-use crate::quality::MediaInfo;
+use crate::quality::{self, MediaInfo, Preset, Quality};
 use crate::raster;
 use crate::registry::Kind;
 
@@ -32,6 +38,17 @@ const GRAPHIC_COLOURS: usize = 64;
 /// A preview where at least this share of pixels equals its right-hand
 /// neighbour is a graphic.
 const GRAPHIC_FLAT: f32 = 0.5;
+
+/// How long one FFmpeg or FFprobe run, or one PDF read, may take.
+const LIMIT: Duration = Duration::from_secs(2);
+/// How often a wait looks at the caller's cancel token and the clock.
+const POLL: Duration = Duration::from_millis(25);
+/// Seconds of video the black-bar detector reads.
+const BAR_SCAN_SECONDS: f64 = 3.0;
+/// PDFs larger than this skip the text check.
+const MAX_PDF_BYTES: u64 = 200_000_000;
+/// The pages of a PDF looked at for text.
+const TEXT_PAGES: usize = 3;
 
 /// What `inspect` found in one file.
 #[derive(Debug, Clone, PartialEq)]
@@ -101,8 +118,11 @@ pub fn inspect(kiln: &Kiln, path: &Path, opts: &Options, cancel: &CancelToken) -
     // Decoders run on untrusted files; a panic in one costs only facts.
     let read = panic::catch_unwind(AssertUnwindSafe(|| {
         let mut found = facts.clone();
-        if let Kind::Image = format.kind {
-            image_facts(kiln, path, opts, cancel, &mut found);
+        match format.kind {
+            Kind::Image => image_facts(path, opts, cancel, &mut found),
+            Kind::Audio | Kind::Video => media_facts(kiln, path, opts, cancel, &mut found),
+            Kind::Document if format.ext == "pdf" => pdf_facts(path, cancel, &mut found),
+            _ => {}
         }
         found
     }));
@@ -110,7 +130,7 @@ pub fn inspect(kiln: &Kiln, path: &Path, opts: &Options, cancel: &CancelToken) -
 }
 
 /// Picture facts by image family, and estimates when there is a preview.
-fn image_facts(kiln: &Kiln, path: &Path, opts: &Options, cancel: &CancelToken, facts: &mut Facts) {
+fn image_facts(path: &Path, opts: &Options, cancel: &CancelToken, facts: &mut Facts) {
     let ext = facts.ext.clone();
     let ext = ext.as_str();
     let photo = |(width, height): (u32, u32)| Picture {
@@ -138,12 +158,192 @@ fn image_facts(kiln: &Kiln, path: &Path, opts: &Options, cancel: &CancelToken, f
     } else if raster::RAW.contains(&ext) {
         facts.picture = raster::wic::size(path).ok().map(photo);
     } else if matches!(ext, "heic" | "avif" | "jxl") {
-        facts.picture = kiln
-            .probe(path, opts)
+        facts.picture = probe(path, opts, cancel)
             .and_then(|m| Some((m.width?, m.height?)))
             .map(photo);
     } else if raster::reads(ext) || ext == "apng" {
         raster_facts(path, ext, opts, cancel, facts);
+    }
+}
+
+/// What FFprobe reports for audio or video, the frame and black bars of
+/// video, and likely sizes as MP4 or MP3 and after Compress.
+fn media_facts(kiln: &Kiln, path: &Path, opts: &Options, cancel: &CancelToken, facts: &mut Facts) {
+    let Some(info) = probe(path, opts, cancel) else {
+        return;
+    };
+    let video = facts.kind == Kind::Video;
+    if video {
+        if let (Some(width), Some(height)) = (info.width, info.height) {
+            facts.picture = Some(Picture {
+                width,
+                height,
+                alpha: false,
+                animated: false,
+                look: Look::Photo,
+            });
+            facts.bars = bars(path, (width, height), opts, cancel);
+        }
+    }
+    let registry = kiln.registry();
+    let target = if video { "mp4" } else { "mp3" };
+    if let Some(size) = registry
+        .format(target)
+        .and_then(|to| quality::estimate(to, &opts.quality, &info))
+    {
+        facts.estimates.insert(target.to_owned(), size);
+    }
+    let small = Quality {
+        preset: Preset::Small,
+        ..opts.quality
+    };
+    facts.compressed = registry
+        .format(&facts.ext)
+        .and_then(|own| quality::estimate(own, &small, &info));
+    facts.media = Some(info);
+}
+
+/// FFprobe's report, as `Kiln::probe` gives it, within `LIMIT`. `None`
+/// when FFprobe is missing, can't read the file or is cut off.
+fn probe(path: &Path, opts: &Options, cancel: &CancelToken) -> Option<MediaInfo> {
+    if cancel.is_cancelled() {
+        return None;
+    }
+    let deadline = Deadline::new(cancel);
+    let mut ctx = Context {
+        progress: &mut |_| {},
+        cancel: &deadline.token,
+    };
+    let info = crate::ffmpeg::probe_media(opts, path, &mut ctx).ok()?;
+    (info.duration.is_some() || info.width.is_some()).then_some(info)
+}
+
+/// Whether FFmpeg's black-bar detector finds bars in the first
+/// `BAR_SCAN_SECONDS` of a `frame`-sized video. `None` when the run fails
+/// or is cut off.
+fn bars(path: &Path, frame: (u32, u32), opts: &Options, cancel: &CancelToken) -> Option<bool> {
+    if cancel.is_cancelled() {
+        return None;
+    }
+    let deadline = Deadline::new(cancel);
+    let mut ctx = Context {
+        progress: &mut |_| {},
+        cancel: &deadline.token,
+    };
+    let log = crate::ffmpeg::analyse(
+        opts,
+        &mut ctx,
+        path,
+        "-vf",
+        "cropdetect=limit=24:round=2:reset=0",
+        Some(BAR_SCAN_SECONDS),
+    )
+    .ok()?;
+    Some(
+        crate::tools::last_crop(&log).is_some_and(|(w, h, _, _)| (w, h) != frame && w > 0 && h > 0),
+    )
+}
+
+/// A PDF's page count and whether its first pages hold text. Each read
+/// is cut off after `LIMIT`: a PDF that can't be loaded in time gets no
+/// PDF facts, and one whose text can't be checked gets `has_text: None`.
+fn pdf_facts(path: &Path, cancel: &CancelToken, facts: &mut Facts) {
+    let owned = path.to_path_buf();
+    let loaded = within(cancel, move || {
+        let bytes = fs::read(&owned).ok()?;
+        let doc = lopdf::Document::load_mem(&bytes).ok()?;
+        let pages = u32::try_from(doc.get_pages().len()).unwrap_or(u32::MAX);
+        Some((Arc::new(bytes), pages, doc.is_encrypted()))
+    });
+    let Some((bytes, pages, encrypted)) = loaded.flatten() else {
+        return;
+    };
+    let has_text = if encrypted || facts.bytes > MAX_PDF_BYTES {
+        None
+    } else {
+        within(cancel, move || {
+            crate::pdf::text_in_first(&bytes, TEXT_PAGES).ok()
+        })
+        .flatten()
+    };
+    facts.pdf = Some(PdfFacts { pages, has_text });
+}
+
+/// Run `work` on its own thread and wait for it until `LIMIT` has passed
+/// or `cancel` is set. `None` when it ran out of time, was cancelled or
+/// panicked. A thread that is cut off is left to finish on its own.
+fn within<T: Send + 'static>(
+    cancel: &CancelToken,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    if cancel.is_cancelled() {
+        return None;
+    }
+    let (tx, rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("kiln-inspect".to_owned())
+        .spawn(move || {
+            let _ = tx.send(work());
+        })
+        .ok()?;
+    let start = Instant::now();
+    loop {
+        match rx.recv_timeout(POLL) {
+            Ok(found) => return Some(found),
+            Err(RecvTimeoutError::Disconnected) => return None,
+            Err(RecvTimeoutError::Timeout) => {}
+        }
+        if cancel.is_cancelled() || start.elapsed() >= LIMIT {
+            return None;
+        }
+    }
+}
+
+/// A cancel token of its own for one FFmpeg or FFprobe run, set when the
+/// caller's token is set or `LIMIT` has passed. A watcher thread checks
+/// every `POLL`; dropping the `Deadline` stops it.
+struct Deadline {
+    token: CancelToken,
+    stop: Option<Sender<()>>,
+    watcher: Option<JoinHandle<()>>,
+}
+
+impl Deadline {
+    fn new(cancel: &CancelToken) -> Self {
+        let token = CancelToken::new();
+        let (stop, stopped) = mpsc::channel::<()>();
+        let (mine, theirs) = (token.clone(), cancel.clone());
+        let start = Instant::now();
+        let watcher = thread::Builder::new()
+            .name("kiln-deadline".to_owned())
+            .spawn(move || loop {
+                if theirs.is_cancelled() || start.elapsed() >= LIMIT {
+                    mine.cancel();
+                    return;
+                }
+                if !matches!(stopped.recv_timeout(POLL), Err(RecvTimeoutError::Timeout)) {
+                    return;
+                }
+            });
+        // Without a watcher nothing would enforce the limit, so nothing runs.
+        if watcher.is_err() {
+            token.cancel();
+        }
+        Self {
+            token,
+            stop: Some(stop),
+            watcher: watcher.ok(),
+        }
+    }
+}
+
+impl Drop for Deadline {
+    fn drop(&mut self) {
+        // Closing the channel wakes the watcher at once.
+        self.stop.take();
+        if let Some(watcher) = self.watcher.take() {
+            let _ = watcher.join();
+        }
     }
 }
 
@@ -333,5 +533,31 @@ mod tests {
             Rgba([(x / 4 * 16) as u8, (y * 4) as u8, 100, 255])
         });
         assert_eq!(look_of(&img), Look::Graphic);
+    }
+
+    #[test]
+    fn slow_work_is_cut_off_at_the_limit() {
+        let t = Instant::now();
+        let got = within(&CancelToken::new(), || thread::sleep(LIMIT * 3));
+        assert!(got.is_none());
+        assert!(t.elapsed() >= LIMIT && t.elapsed() < LIMIT * 2);
+    }
+
+    #[test]
+    fn a_deadline_follows_the_caller_and_the_clock() {
+        let caller = CancelToken::new();
+        let d = Deadline::new(&caller);
+        assert!(!d.token.is_cancelled());
+        caller.cancel();
+        thread::sleep(POLL * 4);
+        assert!(d.token.is_cancelled());
+
+        let t = Instant::now();
+        let d = Deadline::new(&CancelToken::new());
+        while !d.token.is_cancelled() && t.elapsed() < LIMIT * 3 {
+            thread::sleep(POLL);
+        }
+        assert!(d.token.is_cancelled());
+        assert!(t.elapsed() >= LIMIT && t.elapsed() < LIMIT * 2);
     }
 }

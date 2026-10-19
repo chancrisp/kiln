@@ -125,6 +125,22 @@ fn images(dir: &Path) {
         Rgb(base.map(|b| (b as i32 + noise()).clamp(0, 255) as u8))
     });
     photo.save(dir.join("photo.png")).unwrap();
+
+    // A scanned page: the photo as the only thing on one PDF page, written
+    // by Kiln's own PDF backend, so it has no text.
+    let staging = std::env::temp_dir().join(format!("kiln-scan-{}", std::process::id()));
+    std::fs::create_dir_all(&staging).unwrap();
+    std::fs::copy(dir.join("photo.png"), staging.join("scan.png")).unwrap();
+    let pdf = kiln_core::Kiln::new()
+        .convert(
+            &staging.join("scan.png"),
+            "pdf",
+            &kiln_core::Options::default(),
+        )
+        .unwrap();
+    std::fs::copy(&pdf, dir.join("scan.pdf")).unwrap();
+    // The staging folder in %TEMP% holds only the two files made above.
+    let _ = std::fs::remove_dir_all(&staging);
 }
 
 /// The fixture gradient as vector art: 64x48, with a shape and a word.

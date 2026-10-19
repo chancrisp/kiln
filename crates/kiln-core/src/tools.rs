@@ -606,7 +606,7 @@ fn border_box(img: &DynamicImage) -> Option<(u32, u32, u32, u32)> {
 }
 
 /// The last `crop=w:h:x:y` that cropdetect reported.
-fn last_crop(log: &str) -> Option<(u32, u32, u32, u32)> {
+pub(crate) fn last_crop(log: &str) -> Option<(u32, u32, u32, u32)> {
     let spec = log
         .rsplit("crop=")
         .next()

@@ -1,14 +1,16 @@
-//! What `inspect` reads from images: size, transparency, animation, photo
-//! or graphic, and likely result sizes.
+//! What `inspect` reads: for images, size, transparency, animation, photo
+//! or graphic and likely result sizes; for PDFs, pages and text; for audio
+//! and video, what FFprobe reports, black bars and likely result sizes.
 
 #[path = "../../../tests/support/mod.rs"]
 mod support;
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use image::{Rgb, RgbImage};
-use kiln_core::{inspect, CancelToken, Facts, Kiln, Kind, Look, Options};
+use kiln_core::{inspect, CancelToken, Facts, Kiln, Kind, Look, Options, PdfFacts};
 use support::fixture;
 
 fn f(name: &str) -> Facts {
@@ -19,6 +21,15 @@ fn f(name: &str) -> Facts {
         &CancelToken::new(),
     )
     .unwrap()
+}
+
+fn no_ffmpeg() -> Options {
+    let mut o = Options::default();
+    o.engines.ffmpeg = Some(PathBuf::from(
+        r"C:
+owherefmpeg.exe",
+    ));
+    o
 }
 
 fn inspect_at(path: &Path) -> Facts {
@@ -166,6 +177,83 @@ fn image_estimates_land_within_2x() {
             );
         }
     }
+}
+
+#[test]
+fn a_pdf_with_text() {
+    assert_eq!(f("sample.pdf").pdf.unwrap().has_text, Some(true));
+}
+
+#[test]
+fn a_scanned_pdf() {
+    assert_eq!(
+        f("scan.pdf").pdf.unwrap(),
+        PdfFacts {
+            pages: 1,
+            has_text: Some(false)
+        }
+    );
+}
+
+#[test]
+fn black_bars_are_found() {
+    assert_eq!(f("letterbox.mp4").bars, Some(true));
+}
+
+#[test]
+fn no_bars_are_found() {
+    assert_eq!(f("sample.mp4").bars, Some(false));
+}
+
+#[test]
+fn video_has_a_frame_and_estimates() {
+    let v = f("sample.mov");
+    assert!(v.media.unwrap().duration.is_some());
+    assert!(v.picture.is_some());
+    assert!(v.estimates.contains_key("mp4"));
+    assert!(v.compressed.is_some());
+}
+
+#[test]
+fn audio_has_no_picture() {
+    let a = f("sample.wav");
+    assert!(a.media.is_some() && a.picture.is_none() && a.bars.is_none());
+    assert!(a.estimates.contains_key("mp3"));
+}
+
+#[test]
+fn a_missing_ffmpeg_gives_type_and_size() {
+    let v = inspect(
+        &Kiln::new(),
+        &fixture("sample.mov"),
+        &no_ffmpeg(),
+        &CancelToken::new(),
+    )
+    .unwrap();
+    assert!(v.media.is_none() && v.bars.is_none() && v.picture.is_none());
+    assert!(v.bytes > 0);
+}
+
+#[test]
+fn a_cancelled_inspect_returns_at_once() {
+    let c = CancelToken::new();
+    c.cancel();
+    let t = Instant::now();
+    let v = inspect(
+        &Kiln::new(),
+        &fixture("sample.mov"),
+        &Options::default(),
+        &c,
+    )
+    .unwrap();
+    assert!(t.elapsed() < Duration::from_secs(1));
+    assert!(v.bars.is_none());
+}
+
+#[test]
+fn broken_audio_keeps_type_and_size() {
+    let a = f("corrupt.wav");
+    assert!(a.media.is_none() && a.bytes > 0);
 }
 
 /// Converts `path` to JPG with Kiln into `out` and returns the bytes
