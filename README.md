@@ -20,10 +20,11 @@ only the formats those files can become. Pick one and Kiln does the rest in the
 background, right on your PC.
 
 - **One gesture.** Hold Shift to convert, Ctrl for file tools and Alt for file actions. Every key can be reassigned.
-- **189 format pairs.** Images, audio, video, documents, office files, spreadsheets and slides.
+- **85 formats, 1,245 pairs.** Images, camera RAW, audio, video, subtitles, documents, e-books, PDF, office files, spreadsheets and slides.
+- **Quality you can set.** Resolution, frame rate, bitrate and page DPI, offered only where they fit the file, with an estimate of the result.
 - **Offline.** Converting never touches the network. Nothing is uploaded, ever.
 - **Nothing is overwritten.** Results land next to the input, or in a folder you choose. A taken name becomes `name (1).jpg`.
-- **Small and quick.** A single native executable under 3 MB, drawn with Direct2D. No web view. The window is up in about 215 ms.
+- **Small and quick.** A single native executable of about 7.5 MB, drawn with Direct2D. No web view. The window is up in about 215 ms.
 - **Keyboard first.** Arrow keys pick a row, Enter opens the wheel, Escape closes it.
 - **Light and dark.** Follows the Windows app mode and every monitor's DPI.
 - **A command line too.** `kiln convert photo.png jpg` does the same work from a terminal.
@@ -48,12 +49,20 @@ From the keyboard, select a row and press <kbd>Enter</kbd> for Convert,
 <kbd>Ctrl</kbd>+<kbd>Enter</kbd> for Tools or <kbd>Alt</kbd>+<kbd>Enter</kbd>
 for Actions. Inside a wheel, the arrows move, Enter applies and Escape closes.
 
+The convert wheel keeps the eight most useful targets close. When a file can
+become more than that, a **More** segment pours a second ring around the
+first with every other format, grouped by kind.
+
+<div align="center">
+<img src="docs/screenshots/m8/wheel-more-dark-100.png" alt="The convert wheel with its More ring open" width="560">
+</div>
+
 ## A closer look
 
 <table>
   <tr>
     <td align="center"><img src="docs/screenshots/m7/jobs-light-100.png" alt="A running job, a finished one and a failed one" width="400"><br><b>JOBS</b><br><sub>Run in the background, each with its own progress line and cancel</sub></td>
-    <td align="center"><img src="docs/screenshots/m7/settings-update-100.png" alt="The settings panel" width="400"><br><b>SETTINGS</b><br><sub>Output folder, theme, wheel keys and engines</sub></td>
+    <td align="center"><img src="docs/screenshots/m7/settings-update-100.png" alt="The settings panel" width="400"><br><b>SETTINGS</b><br><sub>Output folder, theme, wheel keys, quality defaults and engines</sub></td>
   </tr>
   <tr>
     <td align="center"><img src="docs/screenshots/m5/details-100.png" alt="The details dialog with engine output" width="400"><br><b>DETAILS</b><br><sub>A failed job shows one plain line, with the full engine output a click away</sub></td>
@@ -63,28 +72,82 @@ for Actions. Inside a wheel, the arrows move, Enter applies and Escape closes.
 
 ## Formats
 
+Kiln knows 85 formats and converts between 1,245 pairs. When no single engine
+does a pair, Kiln chains two steps through a shared format, such as HEIC to
+JPG through PNG, or MOBI to PDF through DOCX. The steps run in one temporary
+folder, and only the finished file lands next to the input.
+
 | Kind | Reads | Converts to | Engine |
 |---|---|---|---|
-| Image | PNG, JPG, WEBP, BMP, GIF, TIFF | any other of those | built in |
-| Audio | WAV, MP3, FLAC, OGG, OPUS, M4A | any other audio format | FFmpeg |
-| Video | MP4, MOV, MKV, WEBM | any other video format, or audio (WAV, MP3, FLAC, OGG, OPUS, M4A) | FFmpeg |
-| Document | MD, HTML, DOCX, ODT, EPUB, RST, TEX | any other of those, plus RTF and TXT | Pandoc |
-| Office document | DOC, RTF | DOC, DOCX, ODT, RTF, PDF | LibreOffice |
-| | DOCX, ODT | DOC, PDF | LibreOffice |
-| Spreadsheet | XLSX, XLS, ODS, CSV | any other of those, plus PDF | LibreOffice |
-| Presentation | PPTX, PPT, ODP | any other of those, plus PDF | LibreOffice |
+| Image | PNG, JPG, WEBP, BMP, GIF, TIFF, ICO, TGA, QOI, PPM | any other of those, plus AVIF, JXL and PDF | built in |
+| | SVG, and camera RAW: DNG, CR2, CR3, NEF, ARW, ORF, RW2, RAF, PEF, SRW | the image formats above, and PDF | built in (resvg draws SVG, Windows decodes RAW) |
+| | AVIF, JXL, HEIC | any image format above, and PDF | FFmpeg |
+| Animation | GIF, APNG | any video format | FFmpeg |
+| Audio | WAV, MP3, FLAC, OGG, OPUS, M4A, AAC, AIFF, WMA, AC3, WV | any other audio format | FFmpeg |
+| Video | MP4, M4V, MOV, MKV, WEBM, AVI, WMV, FLV, MPG, TS, 3GP, OGV | any other video format, any audio format, or an animated GIF, WEBP or APNG | FFmpeg |
+| Subtitles | SRT, VTT, ASS | any other of those. MKV and MP4 give up their first subtitle track | FFmpeg |
+| Document | MD, HTML, DOCX, ODT, EPUB, RST, TEX, ORG, ADOC, TYP, WIKI, TEXTILE, DBK, FB2, IPYNB | any other of those, plus RTF, TXT and PPTX | Pandoc |
+| | the same | PDF and DOC | Pandoc, then LibreOffice |
+| E-book | EPUB, MOBI, AZW3 | any other of those. MOBI and AZW3 also become documents and PDF | Calibre |
+| PDF | PDF | TXT, and PNG, JPG, WEBP, BMP or TIFF with one image per page | built in (Windows draws the pages) |
+| | | DOCX, ODT, DOC, RTF, the Pandoc formats, MOBI and AZW3, from its text | built in, then the document engines |
+| Office document | DOC, RTF, TXT, and read only PAGES and WPD | DOC, DOCX, ODT, RTF, PDF, and through DOCX the Pandoc formats | LibreOffice |
+| | DOCX, ODT | DOC, PDF, and PNG or JPG with one image per page | LibreOffice |
+| | read only VSDX and PUB | PDF, and PNG or JPG with one image per page | LibreOffice |
+| Spreadsheet | XLSX, XLS, ODS, CSV, and read only NUMBERS | XLSX, XLS, ODS, CSV, PDF and HTML | LibreOffice |
+| Presentation | PPTX, PPT, ODP, and read only KEY | PPTX, PPT, ODP, PDF, and PNG or JPG with one image per slide | LibreOffice |
 
-Aliases are accepted on input: JPEG, TIF, OGA, M4V, MARKDOWN and HTM. The full
-list lives in [`crates/kiln-core/formats.toml`](crates/kiln-core/formats.toml),
-and `kiln formats FILE` prints what a given file can become.
+Aliases are accepted on input: JPEG, JFIF, TIF, PNM, PGM, PBM, PAM, NRW, SRF,
+SR2, HEIF, HIF, OGA, AIF, MPEG, VOB, MTS, M2TS, SSA, MARKDOWN, HTM, TEXT,
+ASCIIDOC, MEDIAWIKI, DOCBOOK, AZW and VSD. The full list lives in
+[`crates/kiln-core/formats.toml`](crates/kiln-core/formats.toml), and
+`kiln formats FILE` prints what a given file can become.
 
 | Tool | Works on | What it does |
 |---|---|---|
-| Compress | PNG and JPG images, video, audio (not WAV) | Re-encodes smaller, and keeps the original if the result isn't smaller |
+| Compress | PNG and JPG images, video, audio (not WAV), PDF | Re-encodes smaller, and keeps the original if the result isn't smaller |
 | Crop | images, video | Removes plain borders from images and black bars from video |
 | Trim | audio, video | Cuts silence from the start and end of audio, and stretches that are both black and silent from video |
-| Split | audio, video | Cuts the file into two halves |
-| Merge | two or more audio, video or document files of one type | Joins them in order |
+| Split | audio, video, PDF | Cuts audio and video into two halves, and a PDF into one file per page |
+| Merge | two or more audio, video, document or PDF files of one type, or images | Joins them in order. Images become one PDF, a page each |
+
+## Quality
+
+Every conversion starts from defaults that suit its kind, and each one can be
+changed. Kiln offers only the settings that change the result for that file:
+
+| Converting | Settings offered |
+|---|---|
+| video to video | quality, resolution, frame rate, audio bitrate |
+| an animated GIF or APNG to video | quality, size, frame rate |
+| video to an animated GIF or WEBP | quality, size, frame rate |
+| video to an animated APNG | size, frame rate |
+| video or audio to MP3, OGG, OPUS, M4A, AAC, WMA or AC3 | audio bitrate |
+| an image to JPG, AVIF or JXL | quality, size |
+| an image to a lossless format | size |
+| PDF, document or slide pages to images | page DPI, plus quality for JPG |
+| documents, e-books, PDF text, lossless audio | nothing: there's no choice that helps |
+
+**Small** makes noticeably smaller files, fine for sharing. **High**, the
+default, is visually lossless for most material. **Best** stays as close to the
+source as the format allows. Sizes and frame rates are caps: Kiln never scales
+up, so a 720p clip stays 720p when the cap is 1080p.
+
+- **For one conversion.** In the convert wheel, point at a format and press
+  <kbd>Tab</kbd> or right-click. The options sheet reads the file first, shows
+  what it is (`1280 × 720 · 25 fps · 1:30`), and estimates the result as you
+  change things.
+- **As defaults.** **Settings > Quality** holds one set for video, images,
+  audio and PDF pages. A plain click in the wheel uses them.
+- **From the command line.** `--preset`, `--size`, `--fps`, `--audio-kbps`,
+  `--dpi` and `--quality` (JPG, 1 to 100).
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/m8/sheet-mov-dark-100.png" alt="The options sheet for an MP4 going to MOV" width="400"><br><b>OPTIONS SHEET</b><br><sub>Only the settings that fit, and an estimate</sub></td>
+    <td align="center"><img src="docs/screenshots/m8/settings-quality-light-100.png" alt="The quality defaults in Settings" width="400"><br><b>QUALITY DEFAULTS</b><br><sub>One set for each kind of result</sub></td>
+  </tr>
+</table>
 
 ## Install
 
@@ -99,8 +162,13 @@ finds on your PC. It never bundles or downloads them.
 | [FFmpeg](https://ffmpeg.org/download.html) | audio and video |
 | [Pandoc](https://pandoc.org/installing.html) | documents |
 | [LibreOffice](https://www.libreoffice.org/download/) (optional) | office files, spreadsheets, slides and PDF output |
+| [Calibre](https://calibre-ebook.com/download) (optional) | MOBI and AZW3 e-books |
 
-Kiln looks on PATH, and for LibreOffice in its default install folder. You can
+PDF text, PDF pages as images, SVG and camera RAW need no engine. Kiln reads
+them itself, with Windows drawing PDF pages and decoding RAW.
+
+Kiln looks on PATH, and for LibreOffice and Calibre in their default install
+folders. You can
 also choose the executables in **Settings > Engines**. Each LibreOffice job
 runs with a fresh profile inside its temporary folder, with macros and active
 content (OLE objects, DDE and other self-updating links) turned off and no
@@ -124,10 +192,20 @@ convert = "shift"
 tools = "ctrl"
 actions = "alt"
 
+[quality]                        # the defaults in Settings > Quality
+video = "high"                   # small, high or best
+resolution = "original"          # original, or a cap in lines: 1080
+fps = "original"                 # original, or a cap: 30
+images = "high"                  # small, high or best
+image_size = "original"          # original, or a cap on the long side: 2048
+audio_kbps = 192                 # leave out to follow the preset
+page_dpi = 150                   # 36 to 600
+
 [engines]                        # leave out to use the ones on PATH
 ffmpeg = 'C:\Tools\ffmpeg\bin\ffmpeg.exe'
 pandoc = 'C:\Program Files\Pandoc\pandoc.exe'
 libreoffice = 'D:\LibreOffice\program\soffice.exe'
+calibre = 'C:\Program Files\Calibre2\ebook-convert.exe'
 ```
 
 A file Kiln can't read is left alone. The app starts with the defaults and
@@ -136,7 +214,8 @@ says why in the footer.
 ## Command line
 
 ```text
-kiln convert INPUT FORMAT [-o DIR] [-q QUALITY] [--ffmpeg PATH] [--pandoc PATH] [--libreoffice PATH]
+kiln convert INPUT FORMAT [-o DIR] [-p small|high|best] [-q JPG_QUALITY] [--size N] [--fps N]
+             [--audio-kbps N] [--dpi N] [--ffmpeg PATH] [--pandoc PATH] [--libreoffice PATH] [--calibre PATH]
 kiln tool TOOL INPUTS... [-o DIR]
 kiln formats FILE
 ```
@@ -150,7 +229,7 @@ You need Rust (stable, 1.82 or newer) with the MSVC toolchain on Windows 10 or 1
 
 ```powershell
 cargo build --release          # target\release\kiln-app.exe and kiln.exe
-cargo test --workspace         # backend tests need ffmpeg, ffprobe, pandoc and LibreOffice
+cargo test --workspace         # backend tests need ffmpeg, ffprobe, pandoc, LibreOffice and Calibre
 .\packaging\package.ps1        # dist\ MSI and portable ZIP (needs WiX 5 for the MSI)
 ```
 
@@ -204,11 +283,15 @@ programs are always run with separate arguments, never through a shell.
 
 <br>
 
-- WEBP is written lossless only, so a WEBP made from a JPG can be larger than the JPG.
-- An animated GIF keeps only its first frame.
-- Compress works on PNG and JPG images, video, and audio other than WAV. Other image types have no tighter encoding to re-save with.
+- A still WEBP is written lossless, so a WEBP made from a JPG can be larger than the JPG. Animated WEBP from video is lossy.
+- An animated GIF or APNG converted to another image format keeps only its first frame. Convert it to video to keep the motion.
+- HEIC, SVG, camera RAW, Pages, Numbers, Keynote, WordPerfect, Visio and Publisher files are read only.
+- PDF to a document keeps the text and its paragraphs, not the layout. A scanned PDF has no text to take out.
+- MOBI and AZW3 need Calibre, and only files without DRM convert.
+- Camera RAW is decoded by Windows, so a RAW type needs the Raw Image Extension from the Microsoft Store on older Windows builds.
+- Compress works on PNG and JPG images, video, audio other than WAV, and PDF. Other image types have no tighter encoding to re-save with.
 - Trim on video cuts only stretches that are both black and silent, and the kept part is re-encoded.
-- Office files, PDF and documents have no tools other than Merge for documents.
+- Office files and documents other than PDF have no tools other than Merge for documents.
 - The update check returns "No releases are published yet" until a release exists on GitHub.
 
 </details>
@@ -222,7 +305,8 @@ On the development PC (release build, Windows 11, NVIDIA GPU), the window
 appears about 215 ms after launch. Idle, Kiln uses about 13 MB of private
 memory, which is the figure Task Manager shows. Its working set is about
 53 MB, but most of that is graphics driver code shared with other apps.
-The MSI is 1.9 MB and the portable ZIP 2.4 MB.
+`kiln-app.exe` is about 7.5 MB and `kiln.exe` about 2.8 MB. Most of the app's
+size is the in-process PDF, SVG and image code that needs no engine.
 
 </details>
 

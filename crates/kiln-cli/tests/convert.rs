@@ -150,7 +150,10 @@ fn unsupported_target_names_the_options() {
         .assert()
         .code(2)
         .stdout("")
-        .stderr("kiln: Can't convert PNG to MP4. Supported formats: BMP, GIF, JPG, TIFF, WEBP.\n");
+        .stderr(
+            "kiln: Can't convert PNG to MP4. Supported formats: \
+             AVIF, BMP, GIF, ICO, JPG, JXL, PDF, PPM, QOI, TGA, TIFF, WEBP.\n",
+        );
     assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
 }
 
@@ -160,10 +163,10 @@ fn unknown_target_is_a_usage_error() {
     kiln()
         .arg("convert")
         .arg(&input)
-        .arg("heic")
+        .arg("xyz")
         .assert()
         .code(2)
-        .stderr("kiln: HEIC isn't a format Kiln knows.\n");
+        .stderr("kiln: XYZ isn't a format Kiln knows.\n");
 }
 
 #[test]
@@ -172,7 +175,7 @@ fn formats_lists_compatible_outputs() {
         .args(["formats", "song.flac"])
         .assert()
         .success()
-        .stdout("M4A\nMP3\nOGG\nOPUS\nWAV\n");
+        .stdout("AAC\nAC3\nAIFF\nM4A\nMP3\nOGG\nOPUS\nWAV\nWMA\nWV\n");
     kiln()
         .args(["formats", "notes.xyz"])
         .assert()

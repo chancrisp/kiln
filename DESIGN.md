@@ -82,7 +82,7 @@ test enforces this.
 - Icons sit on a 24 × 24 grid and use a 1.5 px stroke with round caps and joins.
 - They are built from simple geometric shapes and drawn as vector paths in [`icons.rs`](crates/kiln-app/src/icons.rs). There is no icon font.
 - Keep curves generous. A Bézier smaller than about 2 units strokes poorly in some Direct2D implementations, so draw tiny circles as short polygons.
-- Current set: vessel, vessel-solid, flame, cube, cross, image, audio, video, document, sheet, slides, compress, crop, trim, split, merge, copy, move, terminal, dial.
+- Current set: vessel, vessel-solid, flame, cube, cross, image, audio, video, subtitle, document, sheet, slides, compress, crop, trim, split, merge, copy, move, terminal, dial, more.
 - The app icon is the solid vessel in celadon on a soot tile with rounded corners, at 16, 32, 48 and 256 px. Regenerate it with `cargo run -p kiln-app --example gen_icon`.
 
 ## The glaze wheel
@@ -100,6 +100,28 @@ test enforces this.
 - **Contents.** The wheel shows only what applies:
   - The formats every dropped file can become.
   - The tools that fit them. Merge needs two or more files of one type.
+- **More.** The convert wheel holds at most eight targets, the ones people reach for first. When there are more, the ninth segment is **More** (three dots).
+  - Pointing at More pours an outer ring from behind the dish over 160 ms, scaling from 66% with opacity. Pointing at another inner segment draws it back over 120 ms.
+  - The ring runs from 144 to 208 DIPs. Its targets are grouped by kind, each group led by its kind's icon in muted stone, with a hairline divider only where a group starts. Codes are monospace, without icons.
+  - The 8 DIP groove between the dish and the ring is solid ground, so nothing behind shows through.
+  - The centre reads `MP4 → AVI` while a target is lit, so the pair is always spelled out.
+- **Options.** Tab or right-click on a target opens its options sheet instead of converting. The footer says so while a target is lit: "Tab or right-click for MP3 options."
+
+## The options sheet
+
+- A panel centred over a scrim. It rises 8 px and fades in over 160 ms, and fades out over 120 ms.
+- **Title** in the serif: "Convert to MOV", or "Convert 3 files to MOV".
+- **Context** below it in muted UI text: the file and what it is, as in `long take.mp4 · 1280 × 720 · 25 fps · 1:30`. While the file is read, it says "Reading the file…".
+- **Rows** show only the settings that change this pair's result, so a PNG to JPG sheet has two rows and an MP3 to OGG sheet one. Each value is a segmented control (Small, High, Best) or a stepper.
+- A **stepper** shows its value between two chevrons. Clicking the left or right end, or Left and Right on the keyboard, steps through choices that fit the file. A 720p clip never offers 1080p.
+- **Result** at the bottom left: the size it will come out at and a rough file size, as in `1280 × 720 · About 25 MB`. It updates as values change. Kiln leaves the file size out where it can't be estimated well.
+- **Convert** is the primary button, on the right, with Cancel beside it. Opened from the keyboard, focus starts on Convert, so Tab then Enter converts with the defaults.
+
+## Settings
+
+- One panel with three tabs: **General**, **Quality** and **Engines**. The tabs are a segmented control. The chosen tab's fill slides to it over 160 ms, and the page crossfades over 120 ms. Every page keeps the panel's height, so switching never moves it.
+- Every stepper and segmented group has its own label. When two share a line, the second sits in its own labelled column.
+- Changes save straight away. There is no Apply button.
 
 ## Progress and results
 

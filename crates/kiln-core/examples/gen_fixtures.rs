@@ -1,10 +1,17 @@
 //! Regenerates the fixtures in tests/fixtures.
 //!
-//! cargo run -p kiln-core --example gen_fixtures [images|media|documents|office]...
+//! cargo run -p kiln-core --example gen_fixtures [images|modern|media|subtitles|documents|office|ebooks]...
 //!
 //! With no arguments every group is made. Images are made with the image
-//! crate. Audio, video and documents need `ffmpeg` and `pandoc` on PATH;
-//! office files need LibreOffice, and are made from sample.docx.
+//! crate; AVIF, JPEG XL, HEIC and APNG with FFmpeg. Audio, video and
+//! documents need `ffmpeg` and `pandoc` on PATH; office files need
+//! LibreOffice and are made from sample.docx; e-books need Calibre and are
+//! made from sample.epub.
+//!
+//! Camera RAW and the read-only office types (Pages, Numbers, Keynote,
+//! Visio, Publisher, WordPerfect) can't be made here. Tests that need them
+//! look in the folder named by KILN_EXTRA_SAMPLES and skip when it isn't
+//! set.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -20,6 +27,12 @@ fn main() {
     if wanted("images") {
         images(&dir);
     }
+    if wanted("modern") {
+        modern(&dir);
+    }
+    if wanted("subtitles") || wanted("media") {
+        subtitles(&dir);
+    }
     if wanted("media") {
         media(&dir);
     }
@@ -32,6 +45,9 @@ fn main() {
     if wanted("office") {
         office(&dir);
     }
+    if wanted("ebooks") {
+        ebooks(&dir);
+    }
 }
 
 fn images(dir: &Path) {
@@ -39,9 +55,26 @@ fn images(dir: &Path) {
     let rgb = RgbImage::from_fn(64, 48, |x, y| Rgb([(x * 4) as u8, (y * 5) as u8, 128]));
     rgb.save(dir.join("rgb_gradient.png")).unwrap();
     // The same gradient in every other raster type the image backend reads.
-    for ext in ["jpg", "webp", "bmp", "gif", "tiff"] {
+    for ext in ["jpg", "webp", "bmp", "gif", "tiff", "tga", "qoi"] {
         rgb.save(dir.join(format!("sample.{ext}"))).unwrap();
     }
+    rgb.save_with_format(dir.join("sample.ppm"), image::ImageFormat::Pnm)
+        .unwrap();
+    // An icon of the same picture, written by Kiln's own encoder.
+    let staging = std::env::temp_dir().join(format!("kiln-ico-{}", std::process::id()));
+    std::fs::create_dir_all(&staging).unwrap();
+    std::fs::copy(dir.join("rgb_gradient.png"), staging.join("sample.png")).unwrap();
+    let ico = kiln_core::Kiln::new()
+        .convert(
+            &staging.join("sample.png"),
+            "ico",
+            &kiln_core::Options::default(),
+        )
+        .unwrap();
+    std::fs::copy(&ico, dir.join("sample.ico")).unwrap();
+    // The staging folder in %TEMP% holds only the two files made above.
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::write(dir.join("sample.svg"), SVG).unwrap();
 
     // 32x32: left half fully transparent, right half opaque dark blue.
     let rgba = RgbaImage::from_fn(32, 32, |x, _| {
@@ -78,6 +111,176 @@ fn images(dir: &Path) {
 
     // Text with a .png extension.
     std::fs::write(dir.join("not_really.png"), b"this is plain text\n").unwrap();
+}
+
+/// The fixture gradient as vector art: 64x48, with a shape and a word.
+const SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="48" viewBox="0 0 64 48">
+  <defs>
+    <linearGradient id="g" x1="0" x2="1">
+      <stop offset="0" stop-color="#000080"/>
+      <stop offset="1" stop-color="#ff0080"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="48" fill="url(#g)"/>
+  <circle cx="32" cy="24" r="12" fill="#ffffff" fill-opacity="0.5"/>
+</svg>
+"##;
+
+fn ffmpeg(dir: &Path, args: &[&str]) {
+    let mut all = vec!["-hide_banner", "-loglevel", "error", "-y", "-bitexact"];
+    all.extend_from_slice(args);
+    run("ffmpeg", &all, dir);
+}
+
+/// AVIF, JPEG XL and HEIC stills of the gradient, and a one-second APNG.
+fn modern(dir: &Path) {
+    ffmpeg(
+        dir,
+        &[
+            "-i",
+            "rgb_gradient.png",
+            "-c:v",
+            "libaom-av1",
+            "-still-picture",
+            "1",
+            "-crf",
+            "20",
+            "-pix_fmt",
+            "yuv444p",
+            "sample.avif",
+        ],
+    );
+    ffmpeg(
+        dir,
+        &[
+            "-i",
+            "rgb_gradient.png",
+            "-c:v",
+            "libjxl",
+            "-distance",
+            "0.5",
+            "sample.jxl",
+        ],
+    );
+    ffmpeg(
+        dir,
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x48:rate=10:duration=1",
+            "-plays",
+            "0",
+            "-f",
+            "apng",
+            "sample.apng",
+        ],
+    );
+    heic(dir);
+}
+
+/// FFmpeg can read HEIC but not write it, so the HEVC picture comes from a
+/// one-frame MP4 and is wrapped in HEIF boxes here.
+fn heic(dir: &Path) {
+    let scratch = std::env::temp_dir().join(format!("kiln-heic-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).unwrap();
+    ffmpeg(
+        &scratch,
+        &[
+            "-i",
+            &dir.join("rgb_gradient.png").to_string_lossy(),
+            "-frames:v",
+            "1",
+            "-c:v",
+            "libx265",
+            "-x265-params",
+            "log-level=error",
+            "-pix_fmt",
+            "yuv420p",
+            "-crf",
+            "18",
+            "-tag:v",
+            "hvc1",
+            "frame.mp4",
+        ],
+    );
+    let mp4 = std::fs::read(scratch.join("frame.mp4")).unwrap();
+    // The scratch folder in %TEMP% holds only frame.mp4.
+    let _ = std::fs::remove_dir_all(&scratch);
+
+    let find = |tag: &[u8]| {
+        let at = mp4.windows(4).position(|w| w == tag).unwrap() - 4;
+        let size = u32::from_be_bytes(mp4[at..at + 4].try_into().unwrap()) as usize;
+        &mp4[at..at + size]
+    };
+    let hvcc = find(b"hvcC").to_vec();
+    let mdat = find(b"mdat");
+    let picture = &mdat[8..];
+
+    fn boxed(tag: &[u8], body: &[u8]) -> Vec<u8> {
+        let mut b = ((body.len() + 8) as u32).to_be_bytes().to_vec();
+        b.extend_from_slice(tag);
+        b.extend_from_slice(body);
+        b
+    }
+    fn full(tag: &[u8], version: u8, body: &[u8]) -> Vec<u8> {
+        let mut b = vec![version, 0, 0, 0];
+        b.extend_from_slice(body);
+        boxed(tag, &b)
+    }
+    let ftyp = boxed(b"ftyp", b"heic\0\0\0\0mif1heic");
+    let hdlr = full(b"hdlr", 0, b"\0\0\0\0pict\0\0\0\0\0\0\0\0\0\0\0\0\0");
+    let pitm = full(b"pitm", 0, &1u16.to_be_bytes());
+    let infe = full(b"infe", 2, b"\0\x01\0\0hvc1\0");
+    let mut iinf_body = 1u16.to_be_bytes().to_vec();
+    iinf_body.extend_from_slice(&infe);
+    let iinf = full(b"iinf", 0, &iinf_body);
+    let mut ispe_body = 64u32.to_be_bytes().to_vec();
+    ispe_body.extend_from_slice(&48u32.to_be_bytes());
+    let ispe = full(b"ispe", 0, &ispe_body);
+    let ipco = boxed(b"ipco", &[hvcc, ispe].concat());
+    let ipma = full(b"ipma", 0, &[0, 0, 0, 1, 0, 1, 2, 0x81, 0x02]);
+    let iprp = boxed(b"iprp", &[ipco, ipma].concat());
+    // iloc: 4-byte offsets and lengths, one item with one extent. The
+    // offset is filled in once the size of everything before mdat is known.
+    let iloc_body = |offset: u32| {
+        let mut b = vec![0x44, 0x00];
+        b.extend_from_slice(&1u16.to_be_bytes());
+        b.extend_from_slice(&1u16.to_be_bytes());
+        b.extend_from_slice(&0u16.to_be_bytes());
+        b.extend_from_slice(&1u16.to_be_bytes());
+        b.extend_from_slice(&offset.to_be_bytes());
+        b.extend_from_slice(&(picture.len() as u32).to_be_bytes());
+        b
+    };
+    let meta_for = |offset: u32| {
+        let iloc = full(b"iloc", 0, &iloc_body(offset));
+        full(
+            b"meta",
+            0,
+            &[hdlr.clone(), pitm.clone(), iinf.clone(), iprp.clone(), iloc].concat(),
+        )
+    };
+    let head = ftyp.len() + meta_for(0).len();
+    let meta = meta_for((head + 8) as u32);
+    let file = [ftyp, meta, boxed(b"mdat", picture)].concat();
+    std::fs::write(dir.join("sample.heic"), file).unwrap();
+}
+
+/// Two cues, in SubRip, WebVTT and ASS.
+const SRT: &str = "1
+00:00:00,000 --> 00:00:00,500
+Kiln fixture
+
+2
+00:00:00,500 --> 00:00:01,000
+clay, glaze, fire
+";
+
+fn subtitles(dir: &Path) {
+    std::fs::write(dir.join("sample.srt"), SRT).unwrap();
+    ffmpeg(dir, &["-i", "sample.srt", "-c:s", "webvtt", "sample.vtt"]);
+    ffmpeg(dir, &["-i", "sample.srt", "-c:s", "ass", "sample.ass"]);
 }
 
 fn run(program: &str, args: &[&str], cwd: &Path) {
@@ -145,20 +348,132 @@ fn media(dir: &Path) {
         "32k",
         "sample.m4a",
     ]);
+    ff(&[
+        "-i",
+        "sample.wav",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "32k",
+        "sample.aac",
+    ]);
+    ff(&["-i", "sample.wav", "-c:a", "pcm_s16be", "sample.aiff"]);
+    ff(&[
+        "-i",
+        "sample.wav",
+        "-c:a",
+        "wmav2",
+        "-b:a",
+        "32k",
+        "sample.wma",
+    ]);
+    ff(&[
+        "-i",
+        "sample.wav",
+        "-c:a",
+        "ac3",
+        "-b:a",
+        "64k",
+        "-ar",
+        "48000",
+        "sample.ac3",
+    ]);
+    ff(&["-i", "sample.wav", "-c:a", "wavpack", "sample.wv"]);
 
     let picture = "testsrc=size=64x48:rate=10:duration=1";
     let h264 = ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "40"];
-    for (name, audio) in [
-        ("sample.mp4", ["-c:a", "aac", "-b:a", "32k"]),
-        ("sample.mov", ["-c:a", "aac", "-b:a", "32k"]),
-        ("sample.mkv", ["-c:a", "libopus", "-b:a", "16k"]),
+    // MP4 and MKV carry the subtitle fixture as a text track.
+    for (name, audio, subs) in [
+        (
+            "sample.mp4",
+            ["-c:a", "aac", "-b:a", "32k"],
+            Some("mov_text"),
+        ),
+        ("sample.mov", ["-c:a", "aac", "-b:a", "32k"], None),
+        (
+            "sample.mkv",
+            ["-c:a", "libopus", "-b:a", "16k"],
+            Some("srt"),
+        ),
+        ("sample.m4v", ["-c:a", "aac", "-b:a", "32k"], None),
+        ("sample.flv", ["-c:a", "aac", "-b:a", "32k"], None),
+        ("sample.ts", ["-c:a", "aac", "-b:a", "32k"], None),
+        ("sample.3gp", ["-c:a", "aac", "-b:a", "32k"], None),
     ] {
         let mut args = vec!["-f", "lavfi", "-i", picture, "-f", "lavfi", "-i", tone];
+        if subs.is_some() {
+            args.extend_from_slice(&["-i", "sample.srt", "-map", "0", "-map", "1", "-map", "2"]);
+        }
         args.extend_from_slice(&h264);
         args.extend_from_slice(&audio);
+        if let Some(codec) = subs {
+            args.extend_from_slice(&["-c:s", codec]);
+        }
         args.extend_from_slice(&["-shortest", name]);
         ff(&args);
     }
+    for (name, codecs) in [
+        (
+            "sample.avi",
+            &[
+                "-c:v",
+                "mpeg4",
+                "-q:v",
+                "8",
+                "-c:a",
+                "libmp3lame",
+                "-b:a",
+                "32k",
+            ][..],
+        ),
+        (
+            "sample.wmv",
+            &["-c:v", "wmv2", "-q:v", "8", "-c:a", "wmav2", "-b:a", "32k"][..],
+        ),
+        (
+            "sample.ogv",
+            &[
+                "-c:v",
+                "libtheora",
+                "-q:v",
+                "4",
+                "-c:a",
+                "libvorbis",
+                "-q:a",
+                "0",
+            ][..],
+        ),
+    ] {
+        let mut args = vec!["-f", "lavfi", "-i", picture, "-f", "lavfi", "-i", tone];
+        args.extend_from_slice(codecs);
+        args.extend_from_slice(&["-shortest", name]);
+        ff(&args);
+    }
+    // MPEG-2 only allows broadcast frame rates.
+    ff(&[
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=size=64x48:rate=25:duration=1",
+        "-f",
+        "lavfi",
+        "-i",
+        tone,
+        "-f",
+        "dvd",
+        "-c:v",
+        "mpeg2video",
+        "-q:v",
+        "8",
+        "-c:a",
+        "mp2",
+        "-b:a",
+        "64k",
+        "-ar",
+        "48000",
+        "-shortest",
+        "sample.mpg",
+    ]);
     ff(&[
         "-f",
         "lavfi",
@@ -299,6 +614,15 @@ fn documents(dir: &Path) {
         ("sample.epub", "epub"),
         ("sample.rst", "rst"),
         ("sample.tex", "latex"),
+        ("sample.txt", "plain"),
+        ("sample.org", "org"),
+        ("sample.adoc", "asciidoc"),
+        ("sample.typ", "typst"),
+        ("sample.wiki", "mediawiki"),
+        ("sample.textile", "textile"),
+        ("sample.dbk", "docbook"),
+        ("sample.fb2", "fb2"),
+        ("sample.ipynb", "ipynb"),
     ] {
         run(
             "pandoc",
@@ -394,6 +718,7 @@ fn office(dir: &Path) {
     let docx = dir.join("sample.docx");
     convert(&docx, "doc:MS Word 97", None);
     convert(&docx, "rtf:Rich Text Format", None);
+    convert(&docx, "pdf", None);
     let csv = dir.join("sample.csv");
     for to in [
         "xlsx:Calc MS Excel 2007 XML",
@@ -412,4 +737,18 @@ fn office(dir: &Path) {
     }
     // The scratch folder in %TEMP% holds only what this function wrote.
     let _ = std::fs::remove_dir_all(&scratch);
+}
+
+/// MOBI and AZW3 from sample.epub, written by Calibre.
+fn ebooks(dir: &Path) {
+    let convert = kiln_core::find_calibre().expect("Calibre is installed");
+    for out in ["sample.mobi", "sample.azw3"] {
+        let status = Command::new(&convert)
+            .arg(dir.join("sample.epub"))
+            .arg(dir.join(out))
+            .stdout(std::process::Stdio::null())
+            .status()
+            .expect("ebook-convert starts");
+        assert!(status.success(), "Calibre couldn't write {out}");
+    }
 }

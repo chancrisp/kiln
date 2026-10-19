@@ -1,6 +1,6 @@
 //! `%APPDATA%\Kiln\settings.toml`: where results go, which key opens which
-//! wheel, the theme, and engine paths. Every field is optional; anything
-//! left out takes its default.
+//! wheel, the theme, quality defaults and engine paths. Every field is
+//! optional; anything left out takes its default.
 
 use std::ffi::OsStr;
 use std::fmt;
@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use kiln_core::{Engines, Options};
+use kiln_core::{Engines, Format, Options};
 
+use crate::quality::QualityDefaults;
 use crate::wheel::WheelKind;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,6 +22,7 @@ pub struct Settings {
     pub output_folder: Option<PathBuf>,
     pub theme: ThemeChoice,
     pub keys: KeyMap,
+    pub quality: QualityDefaults,
     pub engines: EnginePaths,
 }
 
@@ -181,6 +183,8 @@ pub struct EnginePaths {
     pub pandoc: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none", with = "opt_path")]
     pub libreoffice: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none", with = "opt_path")]
+    pub calibre: Option<PathBuf>,
 }
 
 /// The engines Kiln runs as separate programs.
@@ -189,16 +193,23 @@ pub enum Engine {
     Ffmpeg,
     Pandoc,
     LibreOffice,
+    Calibre,
 }
 
 impl Engine {
-    pub const ALL: [Engine; 3] = [Engine::Ffmpeg, Engine::Pandoc, Engine::LibreOffice];
+    pub const ALL: [Engine; 4] = [
+        Engine::Ffmpeg,
+        Engine::Pandoc,
+        Engine::LibreOffice,
+        Engine::Calibre,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Engine::Ffmpeg => "FFmpeg",
             Engine::Pandoc => "Pandoc",
             Engine::LibreOffice => "LibreOffice",
+            Engine::Calibre => "Calibre",
         }
     }
 
@@ -208,6 +219,7 @@ impl Engine {
             Engine::Ffmpeg => "ffmpeg",
             Engine::Pandoc => "pandoc",
             Engine::LibreOffice => "soffice",
+            Engine::Calibre => "ebook-convert",
         }
     }
 }
@@ -218,6 +230,7 @@ impl EnginePaths {
             Engine::Ffmpeg => self.ffmpeg.as_deref(),
             Engine::Pandoc => self.pandoc.as_deref(),
             Engine::LibreOffice => self.libreoffice.as_deref(),
+            Engine::Calibre => self.calibre.as_deref(),
         }
     }
 
@@ -226,6 +239,7 @@ impl EnginePaths {
             Engine::Ffmpeg => self.ffmpeg = path,
             Engine::Pandoc => self.pandoc = path,
             Engine::LibreOffice => self.libreoffice = path,
+            Engine::Calibre => self.calibre = path,
         }
     }
 }
@@ -241,7 +255,7 @@ pub enum EngineStatus {
     /// Not set, but on PATH.
     OnPath(PathBuf),
     /// Not set and not on PATH, but in the engine's default install
-    /// folder. Only LibreOffice is looked for this way.
+    /// folder. Only LibreOffice and Calibre are looked for this way.
     Installed(PathBuf),
     Missing,
 }
@@ -283,6 +297,9 @@ pub fn engine_status(settings: &Settings, e: Engine, path_var: &OsStr) -> Engine
             None => match e {
                 Engine::LibreOffice => kiln_core::find_libreoffice()
                     .map_or(EngineStatus::Missing, EngineStatus::Installed),
+                Engine::Calibre => {
+                    kiln_core::find_calibre().map_or(EngineStatus::Missing, EngineStatus::Installed)
+                }
                 _ => EngineStatus::Missing,
             },
         },
@@ -306,8 +323,14 @@ const HEADER: &str = "\
 # output_folder = 'C:\\Users\\you\\Converted'   # unset: next to each file
 # theme = 'system'                            # system, dark or light
 # [keys]                                      # shift, ctrl or alt, one each
+# [quality]                                   # video and images: small, high
+#                                             # or best; resolution, fps and
+#                                             # image_size: original or a
+#                                             # number; audio_kbps: auto or a
+#                                             # number; page_dpi: 36 to 600
 # [engines]                                   # full paths to ffmpeg.exe, pandoc.exe,
-#                                             # soffice.exe (libreoffice)
+#                                             # soffice.exe (libreoffice) and
+#                                             # ebook-convert.exe (calibre)
 
 ";
 
@@ -319,6 +342,11 @@ impl Settings {
                 e.message().trim_end_matches('.')
             ))
         })?;
+        if !s.quality.is_valid() {
+            return Err(SettingsError(
+                "settings.toml has a quality value out of range".to_owned(),
+            ));
+        }
         if !s.keys.is_valid() {
             return Err(SettingsError(
                 "settings.toml gives two wheels the same key".to_owned(),
@@ -362,6 +390,21 @@ impl Settings {
         std::fs::rename(&tmp, path)
     }
 
+    /// The options a conversion from `from` to `to` runs with, at the
+    /// default quality for that kind of result.
+    pub fn options_for(&self, from: &Format, to: &Format) -> Options {
+        self.options_with(self.quality.quality_for(from, to))
+    }
+
+    /// The options with a quality chosen for one conversion.
+    pub fn options_with(&self, quality: kiln_core::Quality) -> Options {
+        Options {
+            jpeg_quality: quality.preset.jpeg_quality(),
+            quality,
+            ..self.options()
+        }
+    }
+
     /// The options every job runs with.
     pub fn options(&self) -> Options {
         Options {
@@ -370,6 +413,7 @@ impl Settings {
                 ffmpeg: self.engines.ffmpeg.clone(),
                 pandoc: self.engines.pandoc.clone(),
                 libreoffice: self.engines.libreoffice.clone(),
+                calibre: self.engines.calibre.clone(),
             },
             ..Options::default()
         }

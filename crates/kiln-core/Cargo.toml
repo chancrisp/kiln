@@ -11,6 +11,10 @@ image.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 toml.workspace = true
+flate2 = "1"
+lopdf.workspace = true
+pdf-extract = "0.10"
+resvg = { version = "0.45", default-features = false, features = ["text", "system-fonts", "memmap-fonts", "raster-images"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
@@ -18,6 +22,19 @@ windows-sys = { version = "0.61", features = [
     "Win32_Security",
     "Win32_System_JobObjects",
     "Win32_System_Threading",
+] }
+windows = { version = "0.62", features = [
+    "Data_Pdf",
+    "Foundation",
+    "Storage",
+    "Storage_Streams",
+    "UI",
+    "Win32_Foundation",
+    "Win32_Graphics_Imaging",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_System_WinRT",
 ] }
 
 [dev-dependencies]

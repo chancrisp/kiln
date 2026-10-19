@@ -29,17 +29,23 @@ use windows::Win32::UI::HiDpi::{
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use kiln_core::{JobEvent, JobId, JobKind, Kiln, Progress, Runner, Tool};
+use kiln_core::{
+    Format, JobEvent, JobId, JobKind, Kiln, Knob, MediaInfo, Progress, Quality, Runner, Tool,
+};
 
 use crate::actions::{self, FileAction};
-use crate::layout::{self, Control, SettingsLayout, SettingsShape, ROW_HEIGHT};
+use crate::layout::{
+    self, Control, SettingsLayout, SettingsShape, SettingsTab, SheetControl, SheetLayout,
+    ROW_HEIGHT,
+};
 use crate::model::{batch_summary, status_line, FileList, JobState};
+use crate::quality::{self as q, Value};
 use crate::settings::{self, Engine, Settings};
 use crate::theme::{self, motion, Palette};
 use crate::update::{Reply, UpdateState};
-use crate::wheel::{self, Action, Wheel, WheelKind};
+use crate::wheel::{self, Action, Spot, Wheel, WheelKind};
 use drop::{DragEvent, DropTarget, DRAG_ENTER, DRAG_LEAVE, DRAG_OVER, WM_KILN_DRAG, WM_KILN_DROP};
-use render::{Renderer, RowAnim, SettingsView, View, WheelView};
+use render::{Renderer, RowAnim, SettingsView, SheetView, View, WheelView};
 
 const ANIM_TIMER: usize = 1;
 const FRAME_MS: u32 = 16;
@@ -53,6 +59,11 @@ const WM_KILN_JOB: u32 = WM_APP + 3;
 const WM_KILN_MOVED: u32 = WM_APP + 4;
 /// Posted when the update check is answered; lparam is a `Box<Reply>`.
 const WM_KILN_UPDATE: u32 = WM_APP + 5;
+/// Posted when the options sheet's files have been read; lparam is a
+/// `Box<Probed>`.
+const WM_KILN_PROBE: u32 = WM_APP + 6;
+/// Most files the options sheet reads for its estimate.
+const PROBE_LIMIT: usize = 64;
 
 /// Drag modifier flags (MK_SHIFT, MK_CONTROL, MK_ALT).
 const MK_SHIFT_FLAG: u32 = 0x0004;
@@ -141,12 +152,14 @@ struct WheelUi {
     wheel: Wheel,
     /// The files it acts on.
     paths: Vec<PathBuf>,
-    hover: Option<usize>,
+    hover: Option<Spot>,
+    /// The outer ring More pours open: 0 shut, 1 open.
+    more: Tween,
     opened: Instant,
     closing: Option<Instant>,
     /// The chosen item and when it was chosen; its job starts once the
     /// pulse has played.
-    pulse: Option<(usize, Instant)>,
+    pulse: Option<(Spot, Instant)>,
     /// Opened from the keyboard rather than during a drag.
     keyboard: bool,
 }
@@ -155,6 +168,81 @@ impl WheelUi {
     fn is_open(&self) -> bool {
         self.closing.is_none() && self.pulse.is_none()
     }
+
+    fn more_open(&self) -> bool {
+        self.more.to > 0.5
+    }
+
+    /// Point at `spot`. Pointing at More pours its ring; pointing at any
+    /// other inner segment lets it go. Returns whether anything changed.
+    fn point(&mut self, spot: Option<Spot>) -> bool {
+        if spot == self.hover {
+            return false;
+        }
+        match spot {
+            Some(Spot::Inner(i)) if self.wheel.is_more(i) => self.more.set(1.0, OPEN_MS),
+            Some(Spot::Inner(_)) => self.more.set(0.0, motion::QUICK_MS),
+            _ => {}
+        }
+        self.hover = spot;
+        true
+    }
+}
+
+/// The options sheet: one conversion's quality, chosen before it starts.
+struct SheetUi {
+    id: u64,
+    paths: Vec<PathBuf>,
+    /// The first file's format; the knobs follow it.
+    from: Format,
+    to: Format,
+    knobs: Vec<Knob>,
+    quality: Quality,
+    /// What the files hold, once read; `None` while reading.
+    infos: Option<Vec<MediaInfo>>,
+    names: Vec<String>,
+    bytes: u64,
+    hover: Option<usize>,
+    focus: Option<usize>,
+    pressed: Option<usize>,
+    opened: Instant,
+    closing: Option<Instant>,
+}
+
+impl SheetUi {
+    /// What the knobs can be set to. With one file read, sizes it already
+    /// fits under are left out.
+    fn values(&self, knob: Knob) -> Vec<Value> {
+        let info = match self.infos.as_deref() {
+            Some([one]) => Some(one),
+            _ => None,
+        };
+        q::values(knob, &self.from, &self.to, info)
+    }
+
+    fn shown(&self, knob: Knob) -> Value {
+        q::shown(&self.quality, knob, &self.values(knob))
+    }
+
+    /// Step a knob along its values, wrapping at the ends.
+    fn step(&mut self, row: usize, delta: isize) {
+        let Some(&knob) = self.knobs.get(row) else {
+            return;
+        };
+        let list = self.values(knob);
+        let v = q::stepped(&list, self.shown(knob), delta, true);
+        q::set(&mut self.quality, knob, v);
+    }
+
+    fn is_open(&self) -> bool {
+        self.closing.is_none()
+    }
+}
+
+/// The options sheet's files, read on a worker thread.
+struct Probed {
+    id: u64,
+    infos: Vec<MediaInfo>,
 }
 
 /// The result of moving files, from the thread that moved them.
@@ -165,10 +253,15 @@ struct Moved {
 
 /// The settings panel while it is open.
 struct SettingsUi {
+    tab: SettingsTab,
+    /// Where the tab marker sits, in tabs from the left; it slides.
+    tab_marker: Tween,
+    /// When the page last changed, for the crossfade.
+    switched: Instant,
     hover: Option<usize>,
     focus: Option<usize>,
     output_line: (String, bool),
-    engine_lines: [(String, bool); 3],
+    engine_lines: [(String, bool); 4],
 }
 
 struct RowTimes {
@@ -220,6 +313,8 @@ struct App {
     /// The files in the current drag, read when it entered the window.
     drag_paths: Vec<PathBuf>,
     wheel: Option<WheelUi>,
+    sheet: Option<SheetUi>,
+    next_sheet: u64,
     /// Engine output shown in the details dialog.
     details: Option<String>,
     dialog_close_hover: bool,
@@ -285,11 +380,21 @@ impl App {
             within(r.added, motion::SETTLE_MS)
                 || r.settled.is_some_and(|t| within(t, motion::CONFIRM_MS))
         });
-        let wheel = self
-            .wheel
+        let wheel = self.wheel.as_ref().is_some_and(|w| {
+            within(w.opened, OPEN_MS)
+                || w.closing.is_some()
+                || w.pulse.is_some()
+                || w.more.running()
+        });
+        let sheet = self
+            .sheet
             .as_ref()
-            .is_some_and(|w| within(w.opened, OPEN_MS) || w.closing.is_some() || w.pulse.is_some());
-        self.drag.running() || rows || wheel
+            .is_some_and(|s| within(s.opened, OPEN_MS) || s.closing.is_some());
+        let settings = self
+            .settings_ui
+            .as_ref()
+            .is_some_and(|ui| ui.tab_marker.running() || within(ui.switched, motion::QUICK_MS));
+        self.drag.running() || rows || wheel || sheet || settings
     }
 
     fn row_anim(&self, i: usize) -> RowAnim {
@@ -376,17 +481,23 @@ impl App {
 
     fn open_wheel(&mut self, kind: WheelKind, paths: Vec<PathBuf>, at: (f32, f32), keyboard: bool) {
         let (w, h) = self.renderer.size_dips();
-        let items = wheel::items_for(kind, &self.kiln, &paths);
-        let hover = (keyboard && !items.is_empty()).then_some(0);
+        let (items, more) = wheel::split_common(wheel::items_for(kind, &self.kiln, &paths));
+        let mut wheel = Wheel {
+            kind,
+            items,
+            more,
+            center: (0.0, 0.0),
+            scale: 1.0,
+            source_code: wheel::source_code(&paths),
+        };
+        // Placed so the outer ring fits too, should More be opened.
+        (wheel.center, wheel.scale) = wheel::place(at.0, at.1, w, h, wheel.extent());
+        let hover = (keyboard && wheel.segments() > 0).then_some(Spot::Inner(0));
         self.wheel = Some(WheelUi {
-            wheel: Wheel {
-                kind,
-                center: wheel::clamp_center(at.0, at.1, w, h),
-                source_code: wheel::source_code(&paths),
-                items,
-            },
+            wheel,
             paths,
             hover,
+            more: Tween::new(0.0),
             opened: Instant::now(),
             closing: None,
             pulse: None,
@@ -417,30 +528,81 @@ impl App {
         }
     }
 
-    /// Pulse item `i`; its job starts when the pulse ends.
-    fn choose(&mut self, i: usize) {
-        if let Some(w) = &mut self.wheel {
-            if w.is_open() && i < w.wheel.items.len() {
-                w.pulse = Some((i, Instant::now()));
-                w.hover = Some(i);
+    /// Choose `spot`: More pours its ring and moves in to its first
+    /// format; anything else pulses, and its job starts when the pulse
+    /// ends.
+    fn choose(&mut self, spot: Spot) {
+        let Some(w) = self.wheel.as_mut().filter(|w| w.is_open()) else {
+            return;
+        };
+        match spot {
+            Spot::Inner(i) if w.wheel.is_more(i) => {
+                w.point(Some(spot));
+                w.hover = Some(Spot::Outer(0));
+            }
+            _ if w.wheel.item(spot).is_some() => {
+                w.pulse = Some((spot, Instant::now()));
+                w.hover = Some(spot);
+            }
+            _ => return,
+        }
+        self.animate();
+    }
+
+    /// Point the open wheel at whatever is under `(x, y)`.
+    fn wheel_point(&mut self, x: f32, y: f32) {
+        if let Some(w) = self.wheel.as_mut().filter(|w| w.is_open()) {
+            let spot = wheel::hit(&w.wheel, x, y, w.more_open());
+            if w.point(spot) {
                 self.animate();
             }
         }
     }
 
-    /// Advance the wheel's animations: start a pulsed job, drop a faded
-    /// wheel.
-    fn tick_wheel(&mut self) {
+    /// The convert target at `spot`, if the options sheet has anything to
+    /// offer for it.
+    fn sheet_target(&self, spot: Option<Spot>) -> Option<(Format, Format, Vec<Knob>)> {
+        let w = self.wheel.as_ref()?;
+        let Action::Convert(ext) = &w.wheel.item(spot?)?.action else {
+            return None;
+        };
+        let reg = self.kiln.registry();
+        let from = reg.format_of(w.paths.first()?)?.clone();
+        let to = reg.format(ext)?.clone();
+        let knobs = kiln_core::quality::knobs(&from, &to);
+        (!knobs.is_empty()).then_some((from, to, knobs))
+    }
+
+    /// The footer's hint while the wheel points at a format with options.
+    fn wheel_hint(&self) -> Option<String> {
+        let w = self.wheel.as_ref().filter(|w| w.is_open())?;
+        let (_, to, _) = self.sheet_target(w.hover)?;
+        Some(format!("Tab or right-click for {} options.", to.code()))
+    }
+
+    /// Advance the animations: start a pulsed job, drop a faded wheel or
+    /// sheet.
+    fn tick(&mut self) {
+        if self
+            .sheet
+            .as_ref()
+            .is_some_and(|s| s.closing.is_some_and(|t| !within(t, motion::QUICK_MS)))
+        {
+            self.sheet = None;
+        }
         let Some(w) = &mut self.wheel else {
             return;
         };
-        if let Some((i, t)) = w.pulse {
+        if let Some((spot, t)) = w.pulse {
             if !within(t, PULSE_MS) {
                 w.pulse = None;
                 w.closing = Some(Instant::now());
-                let action = w.wheel.items[i].action.clone();
+                let Some(item) = w.wheel.item(spot) else {
+                    return;
+                };
+                let action = item.action.clone();
                 let paths = w.paths.clone();
-                self.start(action, paths);
+                self.start(action, paths, None);
                 return;
             }
         }
@@ -454,17 +616,207 @@ impl App {
         Some(WheelView {
             wheel: &w.wheel,
             hover: w.hover,
+            more: w.more.value().clamp(0.0, 1.0),
             open: eased(w.opened, OPEN_MS),
             fade: w.closing.map_or(1.0, |t| 1.0 - eased(t, motion::QUICK_MS)),
             pulse: w
                 .pulse
-                .map(|(i, t)| (i, t.elapsed().as_secs_f32() * 1000.0 / PULSE_MS as f32)),
+                .map(|(s, t)| (s, t.elapsed().as_secs_f32() * 1000.0 / PULSE_MS as f32)),
         })
+    }
+
+    // The options sheet.
+
+    /// Open the options sheet for the format at `spot` on the wheel. The
+    /// wheel fades as the sheet rises.
+    fn open_sheet(&mut self, spot: Option<Spot>) -> bool {
+        let Some((from, to, knobs)) = self.sheet_target(spot) else {
+            return false;
+        };
+        let Some(w) = &self.wheel else {
+            return false;
+        };
+        let paths = w.paths.clone();
+        let keyboard = w.keyboard;
+        self.close_wheel();
+        let names = paths
+            .iter()
+            .map(|p| {
+                p.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        let bytes = paths
+            .iter()
+            .filter_map(|p| std::fs::metadata(p).ok())
+            .map(|m| m.len())
+            .sum();
+        let id = self.next_sheet;
+        self.next_sheet += 1;
+        let quality = self.settings.quality.quality_for(&from, &to);
+        let (sw, sh) = self.renderer.size_dips();
+        let convert = layout::sheet(sw, sh, &knobs).controls.len() - 1;
+        self.sheet = Some(SheetUi {
+            id,
+            paths: paths.clone(),
+            from,
+            to,
+            knobs,
+            quality,
+            infos: None,
+            names,
+            bytes,
+            hover: None,
+            // From the keyboard, Convert is ready for Enter.
+            focus: keyboard.then_some(convert),
+            pressed: None,
+            opened: Instant::now(),
+            closing: None,
+        });
+        // Reading media takes a moment; the sheet shows meanwhile.
+        let kiln = self.kiln.clone();
+        let opts = self.settings.options();
+        let target = PostTarget(self.hwnd.0 as usize);
+        std::thread::spawn(move || {
+            let infos = paths
+                .iter()
+                .take(PROBE_LIMIT)
+                .map(|p| kiln.probe(p, &opts).unwrap_or_default())
+                .collect();
+            target.post(WM_KILN_PROBE, Probed { id, infos });
+        });
+        self.animate();
+        true
+    }
+
+    fn on_probed(&mut self, p: Probed) {
+        if let Some(s) = self.sheet.as_mut().filter(|s| s.id == p.id) {
+            // Estimates only count when every file was read.
+            s.infos = Some(if p.infos.len() == s.paths.len() {
+                p.infos
+            } else {
+                vec![]
+            });
+            self.invalidate();
+        }
+    }
+
+    fn sheet_layout(&self) -> Option<SheetLayout> {
+        let s = self.sheet.as_ref()?;
+        let (w, h) = self.renderer.size_dips();
+        Some(layout::sheet(w, h, &s.knobs))
+    }
+
+    fn close_sheet(&mut self, convert: bool) {
+        let Some(s) = self.sheet.as_mut().filter(|s| s.is_open()) else {
+            return;
+        };
+        s.closing = Some(Instant::now());
+        s.hover = None;
+        if convert {
+            let action = Action::Convert(s.to.ext.clone());
+            let (paths, quality) = (s.paths.clone(), s.quality);
+            self.start(action, paths, Some(quality));
+        }
+        self.animate();
+    }
+
+    /// Press a sheet control. `delta` steps a value back or forward.
+    fn sheet_activate(&mut self, c: SheetControl, delta: isize) {
+        match c {
+            SheetControl::Cancel => return self.close_sheet(false),
+            SheetControl::Convert => return self.close_sheet(true),
+            SheetControl::Preset(_, preset) => {
+                if let Some(s) = &mut self.sheet {
+                    s.quality.preset = preset;
+                }
+            }
+            SheetControl::Step(row) => {
+                if let Some(s) = &mut self.sheet {
+                    s.step(row, delta);
+                }
+            }
+        }
+        self.invalidate();
+    }
+
+    fn sheet_hit(&self, x: f32, y: f32) -> Option<usize> {
+        self.sheet_layout()?
+            .controls
+            .iter()
+            .position(|(_, r)| r.contains(x, y))
+    }
+
+    /// Tab and the up and down arrows move focus; left and right change
+    /// the focused value; Enter converts unless Cancel has focus; Space
+    /// presses; Escape cancels.
+    fn sheet_key(&mut self, key: VIRTUAL_KEY, shift: bool) {
+        let Some(l) = self.sheet_layout() else {
+            return;
+        };
+        let n = l.controls.len();
+        let Some(s) = self.sheet.as_mut().filter(|s| s.is_open()) else {
+            return;
+        };
+        let focused = s.focus.map(|i| l.controls[i].0);
+        match key {
+            VK_ESCAPE => return self.close_sheet(false),
+            VK_TAB | VK_DOWN | VK_UP => {
+                let back = (key == VK_TAB && shift) || key == VK_UP;
+                // Up and down skip between rows, not between segments.
+                let mut f = s.focus;
+                loop {
+                    f = wheel::step(f, if back { -1 } else { 1 }, n);
+                    let next = f.map(|i| l.controls[i].0);
+                    let same_row = key != VK_TAB
+                        && matches!((next, focused), (Some(SheetControl::Preset(a, _)), Some(SheetControl::Preset(b, _))) if a == b);
+                    if !same_row || f == s.focus {
+                        break;
+                    }
+                }
+                s.focus = f;
+            }
+            VK_LEFT | VK_RIGHT => {
+                let delta = if key == VK_LEFT { -1 } else { 1 };
+                match focused {
+                    Some(SheetControl::Step(row)) => s.step(row, delta),
+                    Some(SheetControl::Preset(row, _)) => {
+                        let i = s.focus.unwrap_or(0) as isize + delta;
+                        if let Some((SheetControl::Preset(r, p), _)) =
+                            l.controls.get(i.max(0) as usize)
+                        {
+                            if *r == row {
+                                s.focus = Some(i as usize);
+                                s.quality.preset = *p;
+                            }
+                        }
+                    }
+                    _ => {
+                        s.focus = wheel::step(s.focus, delta, n);
+                    }
+                }
+            }
+            VK_RETURN => {
+                let convert = focused != Some(SheetControl::Cancel);
+                return self.close_sheet(convert);
+            }
+            VK_SPACE => {
+                if let Some(c) = focused {
+                    return self.sheet_activate(c, 1);
+                }
+            }
+            _ => return,
+        }
+        self.invalidate();
     }
 
     // Jobs.
 
-    fn start(&mut self, action: Action, paths: Vec<PathBuf>) {
+    /// Start `action` on `paths`. A convert runs at `quality`, or at the
+    /// defaults from settings for its kind of file.
+    fn start(&mut self, action: Action, paths: Vec<PathBuf>, quality: Option<Quality>) {
         // Only files that made it into the list.
         let paths: Vec<PathBuf> = paths
             .into_iter()
@@ -506,7 +858,18 @@ impl App {
                 },
                 Action::File(_) => unreachable!("file actions return above"),
             };
-            let id = self.runner.submit(kind, self.settings.options());
+            let options = match (&action, quality) {
+                (_, Some(q)) => self.settings.options_with(q),
+                (Action::Convert(ext), None) => {
+                    let reg = self.kiln.registry();
+                    match (reg.format_of(&group[0]), reg.format(ext)) {
+                        (Some(from), Some(to)) => self.settings.options_for(from, to),
+                        _ => self.settings.options(),
+                    }
+                }
+                _ => self.settings.options(),
+            };
+            let id = self.runner.submit(kind, options);
             for p in &group {
                 if let Some(i) = self.files.index_of(p) {
                     self.files.entries_mut()[i].job = JobState::Running {
@@ -745,18 +1108,18 @@ impl App {
             w,
             h,
             SettingsShape {
+                tab: self
+                    .settings_ui
+                    .as_ref()
+                    .map_or_else(SettingsTab::default, |ui| ui.tab),
                 output_custom: self.settings.output_folder.is_some(),
-                engine_custom: [
-                    e.ffmpeg.is_some(),
-                    e.pandoc.is_some(),
-                    e.libreoffice.is_some(),
-                ],
+                engine_custom: Engine::ALL.map(|k| e.get(k).is_some()),
             },
         )
     }
 
     /// The text beside each chooser, refreshed whenever settings change.
-    fn settings_lines(&self) -> ((String, bool), [(String, bool); 3]) {
+    fn settings_lines(&self) -> ((String, bool), [(String, bool); 4]) {
         let output = match &self.settings.output_folder {
             Some(p) => (p.display().to_string(), false),
             None => ("Next to each file".to_owned(), true),
@@ -765,7 +1128,7 @@ impl App {
         let line = |e: Engine| {
             let st = settings::engine_status(&self.settings, e, &path_var);
             let muted = !matches!(st, settings::EngineStatus::Chosen { .. });
-            (format!("{}  ·  {}", e.label(), st.describe()), muted)
+            (st.describe(), muted)
         };
         (output, Engine::ALL.map(line))
     }
@@ -774,6 +1137,9 @@ impl App {
         self.close_wheel();
         let (output_line, engine_lines) = self.settings_lines();
         self.settings_ui = Some(SettingsUi {
+            tab: SettingsTab::General,
+            tab_marker: Tween::new(0.0),
+            switched: Instant::now() - Duration::from_secs(1),
             hover: None,
             focus: None,
             output_line,
@@ -783,7 +1149,6 @@ impl App {
         self.invalidate();
     }
 
-    /// Press a settings control. Choices save at once.
     /// The one network call, and only on request. Once a newer version
     /// is known the same button opens its page instead.
     fn check_updates(&mut self) {
@@ -799,9 +1164,25 @@ impl App {
         self.invalidate();
     }
 
-    fn activate(&mut self, c: Control) {
+    /// Press a settings control. `delta` steps a value back or forward.
+    fn activate(&mut self, c: Control, delta: isize) {
         let hwnd = self.hwnd;
         match c {
+            Control::Tab(t) => {
+                if let Some(ui) = &mut self.settings_ui {
+                    if ui.tab != t {
+                        ui.tab = t;
+                        ui.tab_marker.set(t.index() as f32, OPEN_MS);
+                        ui.switched = Instant::now();
+                        ui.hover = None;
+                        // The tabs come first, so focus stays put.
+                    }
+                }
+                self.animate();
+                return;
+            }
+            Control::Preset(s, preset) => self.settings.quality.set(s, Value::Preset(preset)),
+            Control::Step(s) => self.settings.quality.step(s, delta),
             Control::Close => {
                 self.settings_ui = None;
                 self.invalidate();
@@ -865,23 +1246,41 @@ impl App {
             .position(|(_, r)| r.contains(x, y))
     }
 
-    /// Tab, Shift+Tab and the arrows move focus; Enter or Space presses;
-    /// Escape closes.
+    /// Tab, Shift+Tab and the up and down arrows move focus. Left and
+    /// right change the focused value: a step, a segment, a page. Enter or
+    /// Space presses; Escape closes.
     fn settings_key(&mut self, key: VIRTUAL_KEY, shift: bool) {
-        let n = self.settings_layout().controls.len();
+        let l = self.settings_layout();
+        let n = l.controls.len();
         let Some(ui) = &mut self.settings_ui else {
             return;
         };
+        let focused = ui.focus.map(|i| l.controls[i].0);
         match key {
             VK_ESCAPE => self.settings_ui = None,
+            VK_LEFT | VK_RIGHT if focused.is_some_and(segmented_or_step) => {
+                let delta = if key == VK_LEFT { -1 } else { 1 };
+                let c = focused.expect("checked above");
+                if let Control::Step(_) = c {
+                    return self.activate(c, delta);
+                }
+                // Segments: the neighbour in the same group takes focus
+                // and is chosen.
+                let i = ui.focus.unwrap_or(0) as isize + delta;
+                if let Some((next, _)) = l.controls.get(i.max(0) as usize) {
+                    if i >= 0 && same_group(c, *next) {
+                        ui.focus = Some(i as usize);
+                        return self.activate(*next, 1);
+                    }
+                }
+            }
             VK_TAB | VK_DOWN | VK_RIGHT | VK_UP | VK_LEFT => {
                 let back = (key == VK_TAB && shift) || key == VK_UP || key == VK_LEFT;
                 ui.focus = wheel::step(ui.focus, if back { -1 } else { 1 }, n);
             }
             VK_RETURN | VK_SPACE => {
-                if let Some(i) = ui.focus {
-                    let c = self.settings_layout().controls[i].0;
-                    self.activate(c);
+                if let Some(c) = focused {
+                    self.activate(c, 1);
                 }
             }
             _ => return,
@@ -926,6 +1325,16 @@ impl App {
     }
 
     fn mouse_move(&mut self, x: f32, y: f32) {
+        if self.sheet.is_some() {
+            let hover = self.sheet_hit(x, y);
+            if let Some(s) = self.sheet.as_mut().filter(|s| s.is_open()) {
+                if s.hover != hover {
+                    s.hover = hover;
+                    self.invalidate();
+                }
+            }
+            return;
+        }
         if self.settings_ui.is_some() {
             let hover = self.settings_hit(x, y);
             if let Some(ui) = &mut self.settings_ui {
@@ -945,14 +1354,8 @@ impl App {
             }
             return;
         }
-        if let Some(w) = &mut self.wheel {
-            if w.is_open() {
-                let hover = wheel::hit(&w.wheel, x, y);
-                if hover != w.hover {
-                    w.hover = hover;
-                    self.invalidate();
-                }
-            }
+        if self.wheel.is_some() {
+            self.wheel_point(x, y);
             return;
         }
         let (row, cancel, link) = self.hit_row(x, y);
@@ -985,8 +1388,17 @@ impl App {
         let clear = std::mem::take(&mut self.clear_pressed);
         let setting = self.settings_pressed.take();
         let close = std::mem::take(&mut self.dialog_close_pressed);
+        let sheet = self.sheet.as_mut().and_then(|s| s.pressed.take());
         unsafe {
             let _ = ReleaseCapture();
+        }
+        if let Some(i) = sheet {
+            if let (Some(l), true) = (self.sheet_layout(), self.sheet_hit(x, y) == Some(i)) {
+                let (c, r) = l.controls[i];
+                self.sheet_activate(c, step_delta(&r, x));
+            }
+            self.invalidate();
+            return;
         }
         if !clear && setting.is_none() && !close {
             return;
@@ -996,8 +1408,8 @@ impl App {
         }
         if let Some(i) = setting {
             if self.settings_ui.is_some() && self.settings_hit(x, y) == Some(i) {
-                let c = self.settings_layout().controls[i].0;
-                self.activate(c);
+                let (c, r) = self.settings_layout().controls[i];
+                self.activate(c, step_delta(&r, x));
             }
         }
         if close && self.details.is_some() {
@@ -1010,6 +1422,21 @@ impl App {
     }
 
     fn mouse_down(&mut self, x: f32, y: f32) {
+        if self.sheet.is_some() {
+            let hit = self.sheet_hit(x, y);
+            let inside = self.sheet_layout().is_some_and(|l| l.panel.contains(x, y));
+            match (self.sheet.as_mut().filter(|s| s.is_open()), hit) {
+                (Some(s), Some(i)) => {
+                    s.pressed = Some(i);
+                    unsafe { SetCapture(self.hwnd) };
+                }
+                // A click on the scrim cancels.
+                (Some(_), None) if !inside => self.close_sheet(false),
+                _ => {}
+            }
+            self.invalidate();
+            return;
+        }
         if self.settings_ui.is_some() {
             if let Some(i) = self.settings_hit(x, y) {
                 self.settings_pressed = Some(i);
@@ -1032,8 +1459,8 @@ impl App {
         }
         if let Some(w) = &self.wheel {
             if w.is_open() {
-                match wheel::hit(&w.wheel, x, y) {
-                    Some(i) => self.choose(i),
+                match wheel::hit(&w.wheel, x, y, w.more_open()) {
+                    Some(spot) => self.choose(spot),
                     None => self.close_wheel(),
                 }
             }
@@ -1062,6 +1489,10 @@ impl App {
     fn key(&mut self, key: VIRTUAL_KEY) -> bool {
         let down = |k: VIRTUAL_KEY| unsafe { GetKeyState(k.0 as i32) } < 0;
         let (shift, ctrl, alt) = (down(VK_SHIFT), down(VK_CONTROL), down(VK_MENU));
+        if self.sheet.is_some() {
+            self.sheet_key(key, shift);
+            return true;
+        }
         if self.settings_ui.is_some() {
             self.settings_key(key, shift);
             return true;
@@ -1077,20 +1508,42 @@ impl App {
         if self.wheel.as_ref().is_some_and(|w| w.pulse.is_some()) {
             return true;
         }
-        if let Some(w) = self.wheel.as_mut().filter(|w| w.is_open()) {
-            let n = w.wheel.items.len();
-            match key {
-                VK_RIGHT | VK_DOWN | VK_TAB => w.hover = wheel::step(w.hover, 1, n),
-                VK_LEFT | VK_UP => w.hover = wheel::step(w.hover, -1, n),
-                VK_RETURN | VK_SPACE => {
-                    if let Some(i) = w.hover {
-                        self.choose(i);
-                    }
+        if self.wheel.as_ref().is_some_and(|w| w.is_open()) {
+            let hover = self.wheel.as_ref().and_then(|w| w.hover);
+            if key == VK_TAB && self.open_sheet(hover) {
+                return true;
+            }
+            let Some(w) = self.wheel.as_mut() else {
+                return true;
+            };
+            let (inner, outer) = (w.wheel.segments(), w.wheel.more.len());
+            let more = w.wheel.items.len();
+            let delta = match key {
+                VK_RIGHT | VK_DOWN | VK_TAB => 1,
+                VK_LEFT | VK_UP => -1,
+                _ => 0,
+            };
+            match (key, w.hover) {
+                (_, Some(Spot::Outer(j))) if delta != 0 => {
+                    w.hover = wheel::step(Some(j), delta, outer).map(Spot::Outer);
                 }
-                VK_ESCAPE => self.close_wheel(),
+                (_, h) if delta != 0 => {
+                    let i = match h {
+                        Some(Spot::Inner(i)) => Some(i),
+                        _ => None,
+                    };
+                    let next = wheel::step(i, delta, inner).map(Spot::Inner);
+                    w.point(next);
+                }
+                // Escape on the outer ring steps back to More.
+                (VK_ESCAPE, Some(Spot::Outer(_))) => {
+                    w.hover = Some(Spot::Inner(more));
+                }
+                (VK_ESCAPE, _) => self.close_wheel(),
+                (VK_RETURN | VK_SPACE, Some(spot)) => self.choose(spot),
                 _ => return true,
             }
-            self.invalidate();
+            self.animate();
             return true;
         }
         match key {
@@ -1128,7 +1581,7 @@ impl App {
     /// (Shift convert, Ctrl tools, Alt actions, unless settings say
     /// otherwise); letting go of the key lets it fade.
     fn drag_over(&mut self, ev: &DragEvent) {
-        if self.settings_ui.is_some() || self.details.is_some() {
+        if self.settings_ui.is_some() || self.details.is_some() || self.sheet.is_some() {
             return;
         }
         let at = self.screen_dips(ev.x, ev.y);
@@ -1153,15 +1606,7 @@ impl App {
             (Some(_), None) => self.close_wheel(),
             _ => {}
         }
-        if let Some(w) = &mut self.wheel {
-            if w.is_open() {
-                let hover = wheel::hit(&w.wheel, at.0, at.1);
-                if hover != w.hover {
-                    w.hover = hover;
-                    self.invalidate();
-                }
-            }
-        }
+        self.wheel_point(at.0, at.1);
     }
 
     fn dropped(&mut self, ev: &DragEvent) {
@@ -1177,7 +1622,7 @@ impl App {
             });
         self.add(ev.paths.clone());
         match chosen {
-            Some(i) => self.choose(i),
+            Some(spot) => self.choose(spot),
             None => self.close_wheel(),
         }
         self.drag_paths.clear();
@@ -1194,6 +1639,38 @@ impl App {
         };
         let hint = self.settings.keys.hint();
         let update_note = self.update.note();
+        let wheel_hint = self.wheel_hint();
+        let sheet_layout = self.sheet_layout();
+        let sheet_rows: Vec<(String, String)> = self
+            .sheet
+            .as_ref()
+            .map(|s| {
+                let unit = q::size_unit(&s.to);
+                s.knobs
+                    .iter()
+                    .map(|&k| {
+                        (
+                            q::knob_name(k, &s.to).to_owned(),
+                            q::label(k, s.shown(k), unit),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let sheet_lines = self.sheet.as_ref().map(|s| {
+            let title = match s.paths.len() {
+                1 => format!("Convert to {}", s.to.code()),
+                n => format!("Convert {n} files to {}", s.to.code()),
+            };
+            let infos = s.infos.as_deref();
+            let one = infos.and_then(|i| (i.len() == 1).then(|| &i[0]));
+            let context = q::source_line(&s.names, s.bytes, one);
+            let result = match infos {
+                None => "Reading the file…".to_owned(),
+                Some(i) => q::result_line(&s.from, &s.to, &s.quality, i),
+            };
+            (title, context, result)
+        });
         let view = View {
             palette: self.palette,
             entries: self.files.entries(),
@@ -1205,7 +1682,7 @@ impl App {
             drag: self.drag.value().clamp(0.0, 1.0),
             heat: heat_now(),
             row_anim: &anim,
-            status: &self.status,
+            status: wheel_hint.as_deref().unwrap_or(&self.status),
             hint: &hint,
             clear_hover: self.clear_hover,
             clear_pressed: self.clear_pressed,
@@ -1214,8 +1691,27 @@ impl App {
             details: self.details.as_deref(),
             dialog_close_hover: self.dialog_close_hover,
             settings_hover: self.settings_hover,
+            sheet: match (&self.sheet, &sheet_layout, &sheet_lines) {
+                (Some(s), Some(l), Some((title, context, result))) => Some(SheetView {
+                    layout: l,
+                    title,
+                    context,
+                    result,
+                    rows: &sheet_rows,
+                    preset: s.quality.preset,
+                    hover: s.hover,
+                    pressed: s.pressed,
+                    focus: s.focus,
+                    open: eased(s.opened, OPEN_MS),
+                    fade: s.closing.map_or(1.0, |t| 1.0 - eased(t, motion::QUICK_MS)),
+                }),
+                _ => None,
+            },
             settings: self.settings_ui.as_ref().map(|ui| SettingsView {
                 layout: &settings_layout,
+                tab_marker: ui.tab_marker.value(),
+                page: eased(ui.switched, motion::QUICK_MS),
+                quality: &self.settings.quality,
                 output: (ui.output_line.0.as_str(), ui.output_line.1),
                 theme: self.settings.theme,
                 keys: self.settings.keys,
@@ -1230,6 +1726,33 @@ impl App {
         if let Err(e) = self.renderer.draw(&view) {
             log(&format!("draw failed: {e}"));
         }
+    }
+}
+
+/// A click on the left end of a stepping control steps back; anywhere
+/// else steps forward.
+fn step_delta(r: &layout::Rect, x: f32) -> isize {
+    if x < r.x + layout::CHEVRON_ZONE {
+        -1
+    } else {
+        1
+    }
+}
+
+/// Controls whose value the left and right arrows change.
+fn segmented_or_step(c: Control) -> bool {
+    matches!(
+        c,
+        Control::Tab(_) | Control::Theme(_) | Control::Preset(..) | Control::Step(_)
+    )
+}
+
+/// Whether two controls are segments of one group.
+fn same_group(a: Control, b: Control) -> bool {
+    match (a, b) {
+        (Control::Tab(_), Control::Tab(_)) | (Control::Theme(_), Control::Theme(_)) => true,
+        (Control::Preset(x, _), Control::Preset(y, _)) => x == y,
+        _ => false,
     }
 }
 
@@ -1351,6 +1874,8 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         drag: Tween::new(0.0),
         drag_paths: vec![],
         wheel: None,
+        sheet: None,
+        next_sheet: 1,
         details: None,
         dialog_close_hover: false,
         status: String::new(),
@@ -1530,7 +2055,7 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             Some(LRESULT(0))
         }
         WM_TIMER if wparam.0 == ANIM_TIMER => {
-            app.tick_wheel();
+            app.tick();
             if !app.animating() {
                 unsafe {
                     let _ = KillTimer(Some(hwnd), ANIM_TIMER);
@@ -1589,7 +2114,7 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             Some(LRESULT(0))
         }
         WM_MOUSEWHEEL => {
-            if app.wheel.is_none() && app.details.is_none() {
+            if app.wheel.is_none() && app.details.is_none() && app.sheet.is_none() {
                 let delta = ((wparam.0 >> 16) & 0xFFFF) as i16 as f32 / WHEEL_DELTA as f32;
                 app.scroll -= delta * ROW_HEIGHT;
                 app.clamp_scroll();
@@ -1599,8 +2124,24 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
         }
         // The Apps key, Shift+F10 or a right click: the convert wheel for
         // the selected file.
+        // On an open wheel, the options for the format under the pointer.
         WM_CONTEXTMENU => {
-            if app.wheel.is_some() || app.details.is_some() || app.settings_ui.is_some() {
+            if app.wheel.as_ref().is_some_and(|w| w.is_open()) {
+                let spot = if lparam.0 == -1 {
+                    app.wheel.as_ref().and_then(|w| w.hover)
+                } else {
+                    let at = app.screen_dips(lo(lparam), hi(lparam));
+                    let w = app.wheel.as_ref().expect("checked above");
+                    wheel::hit(&w.wheel, at.0, at.1, w.more_open())
+                };
+                app.open_sheet(spot);
+                return Some(LRESULT(0));
+            }
+            if app.wheel.is_some()
+                || app.details.is_some()
+                || app.settings_ui.is_some()
+                || app.sheet.is_some()
+            {
                 return Some(LRESULT(0));
             }
             if lparam.0 == -1 {
@@ -1644,6 +2185,11 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             let reply = unsafe { Box::from_raw(lparam.0 as *mut Reply) };
             app.update = UpdateState::from_reply(&reply);
             app.invalidate();
+            Some(LRESULT(0))
+        }
+        WM_KILN_PROBE => {
+            let p = unsafe { Box::from_raw(lparam.0 as *mut Probed) };
+            app.on_probed(*p);
             Some(LRESULT(0))
         }
         WM_KILN_MOVED => {

@@ -1,6 +1,9 @@
 //! Where things go, in DIPs. Pure functions, so the 4 px grid and the
 //! 16 px panel padding can be tested without a window.
 
+use kiln_core::{Knob, Preset};
+
+use crate::quality::DefaultSetting;
 use crate::settings::{Engine, ThemeChoice};
 use crate::theme::shape::{GRID, PANEL_PADDING};
 use crate::wheel::WheelKind;
@@ -187,13 +190,47 @@ pub fn dialog(w: f32, h: f32) -> Dialog {
     }
 }
 
+/// The pages of the settings panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SettingsTab {
+    #[default]
+    General,
+    Quality,
+    Engines,
+}
+
+impl SettingsTab {
+    pub const ALL: [SettingsTab; 3] = [
+        SettingsTab::General,
+        SettingsTab::Quality,
+        SettingsTab::Engines,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SettingsTab::General => "General",
+            SettingsTab::Quality => "Quality",
+            SettingsTab::Engines => "Engines",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        self as usize
+    }
+}
+
 /// Something the settings panel lets you press.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Control {
+    Tab(SettingsTab),
     OutputChoose,
     OutputReset,
     Theme(ThemeChoice),
     Key(WheelKind),
+    /// One segment of a quality preset control.
+    Preset(DefaultSetting, Preset),
+    /// A value that steps through its choices: "1080p", "30 fps".
+    Step(DefaultSetting),
     EngineChoose(Engine),
     EngineReset(Engine),
     CheckUpdates,
@@ -209,6 +246,8 @@ pub struct SettingsRow {
 }
 
 pub struct SettingsLayout {
+    /// The page shown.
+    pub tab: SettingsTab,
     pub panel: Rect,
     pub title: Rect,
     pub rows: Vec<SettingsRow>,
@@ -220,23 +259,34 @@ pub struct SettingsLayout {
 
 pub const SETTINGS_ROW: f32 = 40.0;
 pub const SETTINGS_LABEL: f32 = 112.0;
-/// Theme segments and key buttons.
-pub const SEGMENT_WIDTH: f32 = 72.0;
+/// A label in the second column of the quality page.
+const SETTINGS_LABEL_2: f32 = 80.0;
+/// Segments of the theme and preset controls.
+pub const SEGMENT_WIDTH: f32 = 64.0;
+/// The tabs at the top of the settings panel.
+pub const TAB_WIDTH: f32 = 80.0;
+/// A control that steps through values.
+pub const STEP_WIDTH: f32 = 96.0;
+/// The left end of a stepping control, where a click steps back.
+pub const CHEVRON_ZONE: f32 = 28.0;
 /// The Check for updates button.
 pub const UPDATE_BUTTON_WIDTH: f32 = 136.0;
+/// Rows on the fullest page. Every page keeps this height, so switching
+/// pages never moves the panel.
+const SETTINGS_ROWS: usize = 5;
 
-/// What the settings panel needs to know to lay itself out: which values
-/// are set, since those rows grow a Reset button.
+/// What the settings panel needs to know to lay itself out: the page, and
+/// which values are set, since those rows grow a Reset button.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SettingsShape {
+    pub tab: SettingsTab,
     pub output_custom: bool,
-    pub engine_custom: [bool; 3],
+    pub engine_custom: [bool; 4],
 }
 
 pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
     let p = PANEL_PADDING;
-    let rows_n = 3.0 + Engine::ALL.len() as f32;
-    let ph = p + 32.0 + 8.0 + rows_n * SETTINGS_ROW + p + BUTTON_HEIGHT + p;
+    let ph = p + 32.0 + 8.0 + SETTINGS_ROWS as f32 * SETTINGS_ROW + p + BUTTON_HEIGHT + p;
     let pw = snap((w - 32.0).clamp(0.0, 560.0));
     let panel = Rect::new(
         snap(((w - pw) / 2.0).max(0.0)),
@@ -258,6 +308,17 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
         value,
     };
 
+    let tabs_x = right - SettingsTab::ALL.len() as f32 * TAB_WIDTH;
+    for (k, t) in SettingsTab::ALL.into_iter().enumerate() {
+        let r = Rect::new(
+            tabs_x + k as f32 * TAB_WIDTH,
+            title.y,
+            TAB_WIDTH,
+            BUTTON_HEIGHT,
+        );
+        controls.push((Control::Tab(t), r));
+    }
+
     // A row with a value on the left and Choose (and maybe Reset) on the
     // right.
     let chooser =
@@ -272,43 +333,84 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
             controls.push((choose, choose_r));
             Rect::new(x0, row_y(i) + 8.0, (left - 8.0 - x0).max(0.0), 24.0)
         };
+    // Small, High and Best; returns where the group ends.
+    let presets = |controls: &mut Vec<(Control, Rect)>, i: usize, s: DefaultSetting| {
+        for (k, preset) in Preset::ALL.into_iter().enumerate() {
+            let r = ctl(x0 + k as f32 * SEGMENT_WIDTH, i, SEGMENT_WIDTH);
+            controls.push((Control::Preset(s, preset), r));
+        }
+        x0 + Preset::ALL.len() as f32 * SEGMENT_WIDTH
+    };
 
-    let v = chooser(
-        &mut controls,
-        0,
-        Control::OutputChoose,
-        shape.output_custom.then_some(Control::OutputReset),
-    );
-    rows.push(row("Output folder", 0, Some(v)));
+    match shape.tab {
+        SettingsTab::General => {
+            let v = chooser(
+                &mut controls,
+                0,
+                Control::OutputChoose,
+                shape.output_custom.then_some(Control::OutputReset),
+            );
+            rows.push(row("Output folder", 0, Some(v)));
 
-    for (k, t) in ThemeChoice::ALL.into_iter().enumerate() {
-        controls.push((
-            Control::Theme(t),
-            ctl(x0 + k as f32 * SEGMENT_WIDTH, 1, SEGMENT_WIDTH),
-        ));
-    }
-    rows.push(row("Theme", 1, None));
+            for (k, t) in ThemeChoice::ALL.into_iter().enumerate() {
+                controls.push((
+                    Control::Theme(t),
+                    ctl(x0 + k as f32 * SEGMENT_WIDTH, 1, SEGMENT_WIDTH),
+                ));
+            }
+            rows.push(row("Theme", 1, None));
 
-    let key_w = (((right - x0 - 16.0) / 3.0).min(120.0) / GRID).floor() * GRID;
-    for (k, wheel) in WheelKind::ALL.into_iter().enumerate() {
-        controls.push((
-            Control::Key(wheel),
-            ctl(x0 + k as f32 * (key_w + 8.0), 2, key_w),
-        ));
-    }
-    rows.push(row("Wheel keys", 2, None));
-
-    for (k, e) in Engine::ALL.into_iter().enumerate() {
-        let v = chooser(
-            &mut controls,
-            3 + k,
-            Control::EngineChoose(e),
-            shape.engine_custom[k].then_some(Control::EngineReset(e)),
-        );
-        // The engines sit under one "Engines" label, the name error
-        // messages point to.
-        let label = if k == 0 { "Engines" } else { "" };
-        rows.push(row(label, 3 + k, Some(v)));
+            let key_w = (((right - x0 - 16.0) / 3.0).min(120.0) / GRID).floor() * GRID;
+            for (k, wheel) in WheelKind::ALL.into_iter().enumerate() {
+                controls.push((
+                    Control::Key(wheel),
+                    ctl(x0 + k as f32 * (key_w + 8.0), 2, key_w),
+                ));
+            }
+            rows.push(row("Wheel keys", 2, None));
+        }
+        SettingsTab::Quality => {
+            // Every stepper has its own label: a second one on a line
+            // sits in a second column, so two values never read as one.
+            let x1 = x0 + STEP_WIDTH + 16.0;
+            let stepper = |controls: &mut Vec<(Control, Rect)>,
+                           rows: &mut Vec<SettingsRow>,
+                           (label, i, second): (&'static str, usize, bool),
+                           s| {
+                let (lx, x) = if second {
+                    (x1, x1 + SETTINGS_LABEL_2 + 8.0)
+                } else {
+                    (panel.x + p, x0)
+                };
+                controls.push((Control::Step(s), ctl(x, i, STEP_WIDTH)));
+                rows.push(SettingsRow {
+                    label,
+                    label_rect: Rect::new(lx, row_y(i) + 8.0, x - 8.0 - lx, 24.0),
+                    value: None,
+                });
+            };
+            let (c, r) = (&mut controls, &mut rows);
+            presets(c, 0, DefaultSetting::Video);
+            r.push(row("Video", 0, None));
+            stepper(c, r, ("Resolution", 1, false), DefaultSetting::Resolution);
+            stepper(c, r, ("Frame rate", 1, true), DefaultSetting::Fps);
+            presets(c, 2, DefaultSetting::Images);
+            r.push(row("Images", 2, None));
+            stepper(c, r, ("Image size", 3, false), DefaultSetting::ImageSize);
+            stepper(c, r, ("PDF pages", 3, true), DefaultSetting::PageDpi);
+            stepper(c, r, ("Audio", 4, false), DefaultSetting::Audio);
+        }
+        SettingsTab::Engines => {
+            for (k, e) in Engine::ALL.into_iter().enumerate() {
+                let v = chooser(
+                    &mut controls,
+                    k,
+                    Control::EngineChoose(e),
+                    shape.engine_custom[k].then_some(Control::EngineReset(e)),
+                );
+                rows.push(row(e.label(), k, Some(v)));
+            }
+        }
     }
 
     let close = Rect::new(
@@ -329,11 +431,121 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
     controls.push((Control::Close, close));
 
     SettingsLayout {
+        tab: shape.tab,
         panel,
         title,
         rows,
         controls,
         update_note,
+    }
+}
+
+/// Something the options sheet lets you press.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SheetControl {
+    /// One segment of the preset control in a row.
+    Preset(usize, Preset),
+    /// The stepping control in a row.
+    Step(usize),
+    Cancel,
+    Convert,
+}
+
+impl SheetControl {
+    /// The knob row this control belongs to.
+    pub fn row(self) -> Option<usize> {
+        match self {
+            SheetControl::Preset(r, _) | SheetControl::Step(r) => Some(r),
+            _ => None,
+        }
+    }
+}
+
+/// The options sheet a conversion opens from the wheel.
+pub struct SheetLayout {
+    pub panel: Rect,
+    pub title: Rect,
+    /// What the source is, under the title.
+    pub context: Rect,
+    /// One label per knob.
+    pub labels: Vec<Rect>,
+    /// Every control, in Tab order. Convert comes last.
+    pub controls: Vec<(SheetControl, Rect)>,
+    /// The result's size and a rough file size, beside the buttons.
+    pub result: Rect,
+}
+
+pub const SHEET_WIDTH: f32 = 432.0;
+pub const SHEET_LABEL: f32 = 96.0;
+/// The sheet's stepping controls, wider than the settings page's since
+/// each row holds only one.
+pub const SHEET_STEP_WIDTH: f32 = 136.0;
+pub const CONVERT_WIDTH: f32 = 88.0;
+
+/// Lay out the sheet for `knobs`, centred in a `w` x `h` window.
+pub fn sheet(w: f32, h: f32, knobs: &[Knob]) -> SheetLayout {
+    let p = PANEL_PADDING;
+    let n = knobs.len() as f32;
+    let ph = p + 32.0 + 20.0 + 12.0 + n * SETTINGS_ROW + 12.0 + BUTTON_HEIGHT + p;
+    let ph = (ph / GRID).ceil() * GRID;
+    let pw = snap((w - 32.0).clamp(0.0, SHEET_WIDTH));
+    let panel = Rect::new(
+        snap(((w - pw) / 2.0).max(0.0)),
+        snap(((h - ph) / 2.0).max(8.0)),
+        pw,
+        ph,
+    );
+    let title = Rect::new(panel.x + p, panel.y + p, panel.w - 2.0 * p, 32.0);
+    let context = Rect::new(title.x, title.bottom(), title.w, 20.0);
+    let x0 = panel.x + p + SHEET_LABEL + 8.0;
+    let row_y = |i: usize| context.bottom() + 12.0 + i as f32 * SETTINGS_ROW;
+    let mut labels = vec![];
+    let mut controls = vec![];
+    for (i, knob) in knobs.iter().enumerate() {
+        labels.push(Rect::new(panel.x + p, row_y(i) + 8.0, SHEET_LABEL, 24.0));
+        let y = row_y(i) + 4.0;
+        match knob {
+            Knob::Preset => {
+                for (k, preset) in Preset::ALL.into_iter().enumerate() {
+                    let r = Rect::new(
+                        x0 + k as f32 * SEGMENT_WIDTH,
+                        y,
+                        SEGMENT_WIDTH,
+                        BUTTON_HEIGHT,
+                    );
+                    controls.push((SheetControl::Preset(i, preset), r));
+                }
+            }
+            _ => controls.push((
+                SheetControl::Step(i),
+                Rect::new(x0, y, SHEET_STEP_WIDTH, BUTTON_HEIGHT),
+            )),
+        }
+    }
+    let right = panel.right() - p;
+    let by = panel.bottom() - p - BUTTON_HEIGHT;
+    let convert = Rect::new(right - CONVERT_WIDTH, by, CONVERT_WIDTH, BUTTON_HEIGHT);
+    let cancel = Rect::new(
+        convert.x - 8.0 - BUTTON_WIDTH,
+        by,
+        BUTTON_WIDTH,
+        BUTTON_HEIGHT,
+    );
+    controls.push((SheetControl::Cancel, cancel));
+    controls.push((SheetControl::Convert, convert));
+    let result = Rect::new(
+        panel.x + p,
+        by,
+        (cancel.x - 8.0 - panel.x - p).max(0.0),
+        BUTTON_HEIGHT,
+    );
+    SheetLayout {
+        panel,
+        title,
+        context,
+        labels,
+        controls,
+        result,
     }
 }
 
@@ -460,34 +672,54 @@ mod tests {
         assert!(l.settings_button.x > l.wordmark.right());
     }
 
+    fn apart(a: &Rect, b: &Rect) -> bool {
+        a.right() <= b.x || b.right() <= a.x || a.bottom() <= b.y || b.bottom() <= a.y
+    }
+
+    fn page(tab: SettingsTab) -> SettingsLayout {
+        settings(
+            720.0,
+            480.0,
+            SettingsShape {
+                tab,
+                ..SettingsShape::default()
+            },
+        )
+    }
+
     #[test]
     fn settings_controls_fit_without_overlapping() {
-        let shapes = [
-            SettingsShape::default(),
-            SettingsShape {
+        let mut shapes = vec![];
+        for tab in SettingsTab::ALL {
+            shapes.push(SettingsShape {
+                tab,
+                ..SettingsShape::default()
+            });
+            shapes.push(SettingsShape {
+                tab,
                 output_custom: true,
-                engine_custom: [true, true, true],
-            },
-        ];
-        for (w, h) in [(480.0, 400.0), (720.0, 480.0), (1600.0, 1000.0)] {
-            for shape in shapes {
-                let s = settings(w, h, shape);
+                engine_custom: [true; 4],
+            });
+        }
+        for (w, h) in [(480.0, 360.0), (720.0, 480.0), (1600.0, 1000.0)] {
+            for shape in &shapes {
+                let s = settings(w, h, *shape);
                 assert_grid(&s.panel, "settings panel");
                 assert!(s.panel.x >= 16.0 && s.panel.right() <= w - 16.0);
+                assert!(s.panel.bottom() <= h, "{:?} at {w}x{h}", s.panel);
                 assert_eq!(s.title.x - s.panel.x, 16.0);
                 for (c, r) in &s.controls {
                     assert_grid(r, "settings control");
                     assert!(r.x >= s.panel.x + 16.0, "{c:?} {r:?}");
-                    assert!(r.right() <= s.panel.right() - 16.0, "{c:?} {r:?}");
+                    assert!(
+                        r.right() <= s.panel.right() - 16.0,
+                        "{c:?} {r:?} at {w}x{h}"
+                    );
                     assert!(r.bottom() <= s.panel.bottom() - 16.0, "{c:?} {r:?}");
                 }
                 for (i, (a, ra)) in s.controls.iter().enumerate() {
                     for (b, rb) in &s.controls[i + 1..] {
-                        let apart = ra.right() <= rb.x
-                            || rb.right() <= ra.x
-                            || ra.bottom() <= rb.y
-                            || rb.bottom() <= ra.y;
-                        assert!(apart, "{a:?} overlaps {b:?} at {w}x{h}");
+                        assert!(apart(ra, rb), "{a:?} overlaps {b:?} at {w}x{h}");
                     }
                 }
                 for row in &s.rows {
@@ -498,19 +730,109 @@ mod tests {
                 let note = s.update_note;
                 assert!(note.w >= 120.0, "update note too narrow at {w}x{h}");
                 for (c, r) in &s.controls {
-                    let apart = note.right() <= r.x
-                        || r.right() <= note.x
-                        || note.bottom() <= r.y
-                        || r.bottom() <= note.y;
-                    assert!(apart, "update note overlaps {c:?}");
+                    assert!(apart(&note, r), "update note overlaps {c:?}");
                 }
             }
         }
-        let s = settings(720.0, 480.0, SettingsShape::default());
-        assert_eq!(s.rows.len(), 6);
-        assert_eq!(s.controls.len(), 1 + 3 + 3 + 3 + 1 + 1);
-        assert_eq!(s.controls[s.controls.len() - 2].0, Control::CheckUpdates);
-        assert_eq!(s.controls.last().unwrap().0, Control::Close);
+    }
+
+    #[test]
+    fn settings_pages_hold_their_rows() {
+        let general = page(SettingsTab::General);
+        assert_eq!(general.rows.len(), 3);
+        assert_eq!(general.controls.len(), 3 + 1 + 3 + 3 + 1 + 1);
+        assert_eq!(general.controls[0].0, Control::Tab(SettingsTab::General));
+        let n = general.controls.len();
+        assert_eq!(general.controls[n - 2].0, Control::CheckUpdates);
+        assert_eq!(general.controls[n - 1].0, Control::Close);
+
+        let quality = page(SettingsTab::Quality);
+        let labels: Vec<_> = quality.rows.iter().map(|r| r.label).collect();
+        assert_eq!(
+            labels,
+            [
+                "Video",
+                "Resolution",
+                "Frame rate",
+                "Images",
+                "Image size",
+                "PDF pages",
+                "Audio"
+            ]
+        );
+        assert_eq!(quality.controls.len(), 3 + 3 + 2 + 3 + 2 + 1 + 2);
+        // Tab order runs down the page, as the rows read.
+        let steps: Vec<_> = quality
+            .controls
+            .iter()
+            .filter_map(|(c, _)| match c {
+                Control::Step(s) => Some(*s),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            steps,
+            [
+                DefaultSetting::Resolution,
+                DefaultSetting::Fps,
+                DefaultSetting::ImageSize,
+                DefaultSetting::PageDpi,
+                DefaultSetting::Audio,
+            ]
+        );
+        // Each stepper's label ends before the stepper starts.
+        for (row, (_, r)) in quality
+            .rows
+            .iter()
+            .filter(|r| r.label != "Video" && r.label != "Images")
+            .zip(
+                quality
+                    .controls
+                    .iter()
+                    .filter(|(c, _)| matches!(c, Control::Step(_))),
+            )
+        {
+            assert!(row.label_rect.right() < r.x, "{}", row.label);
+            assert!(row.label_rect.w >= 72.0, "{}", row.label);
+        }
+
+        let engines = page(SettingsTab::Engines);
+        assert_eq!(engines.rows.len(), 4);
+        assert_eq!(engines.rows[3].label, "Calibre");
+
+        // Pages share one panel, so switching never moves it.
+        assert_eq!(general.panel, quality.panel);
+        assert_eq!(general.panel, engines.panel);
+    }
+
+    #[test]
+    fn the_sheet_fits_its_knobs() {
+        let sets: [&[Knob]; 3] = [
+            &[Knob::Preset, Knob::Size, Knob::Fps, Knob::AudioBitrate],
+            &[Knob::AudioBitrate],
+            &[Knob::Preset, Knob::PageDpi],
+        ];
+        for (w, h) in [(480.0, 360.0), (720.0, 480.0), (1600.0, 1000.0)] {
+            for knobs in sets {
+                let s = sheet(w, h, knobs);
+                assert_grid(&s.panel, "sheet");
+                assert!(s.panel.bottom() <= h && s.panel.right() <= w - 16.0);
+                assert_eq!(s.labels.len(), knobs.len());
+                assert_eq!(s.controls.last().unwrap().0, SheetControl::Convert);
+                for (c, r) in &s.controls {
+                    assert_grid(r, "sheet control");
+                    assert!(r.right() <= s.panel.right() - 16.0, "{c:?}");
+                    assert!(r.bottom() <= s.panel.bottom() - 16.0, "{c:?}");
+                }
+                for (i, (a, ra)) in s.controls.iter().enumerate() {
+                    for (b, rb) in &s.controls[i + 1..] {
+                        assert!(apart(ra, rb), "{a:?} overlaps {b:?}");
+                    }
+                    assert!(apart(ra, &s.result), "{a:?} overlaps the result line");
+                }
+                assert!(s.result.w >= 120.0);
+            }
+        }
     }
 
     #[test]

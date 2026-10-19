@@ -6,6 +6,7 @@ pub mod actions;
 pub mod icons;
 pub mod layout;
 pub mod model;
+pub mod quality;
 pub mod settings;
 pub mod theme;
 pub mod update;

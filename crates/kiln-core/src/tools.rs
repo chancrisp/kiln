@@ -11,7 +11,7 @@ use crate::error::{Error, Result};
 use crate::ffmpeg::{self, Encode};
 use crate::job::{checked_input, ensure_written, out_dir_for, place, stem_of, Kiln, WorkDir};
 use crate::registry::{Format, Kind};
-use crate::{process, raster};
+use crate::{pdf, process, raster};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Tool {
@@ -80,7 +80,10 @@ impl Tool {
             (Tool::Trim, Kind::Audio | Kind::Video) => true,
             (Tool::Split, Kind::Audio | Kind::Video) => true,
             (Tool::Merge, Kind::Audio | Kind::Video) => true,
-            (Tool::Merge, Kind::Document) => f.pandoc.is_some(),
+            (Tool::Merge, Kind::Document) => f.pandoc.is_some() || f.ext == "pdf",
+            // Images merge into one PDF, a page each.
+            (Tool::Merge, Kind::Image) => raster::reads(&f.ext),
+            (Tool::Compress | Tool::Split, Kind::Document) => f.ext == "pdf",
             _ => false,
         }
     }
@@ -130,7 +133,7 @@ const CROP_SCAN_SECONDS: f64 = 60.0;
 
 impl Kiln {
     /// Tools that apply to all of `inputs`. Merge needs two or more files
-    /// of the same type.
+    /// of the same type, or two or more images.
     pub fn tools_for(&self, inputs: &[&Path]) -> Vec<Tool> {
         let formats: Option<Vec<&Format>> = inputs
             .iter()
@@ -143,9 +146,9 @@ impl Kiln {
             .into_iter()
             .filter(|t| match t {
                 Tool::Merge => {
-                    formats.len() >= 2
-                        && formats.iter().all(|f| f.ext == formats[0].ext)
-                        && t.handles(formats[0])
+                    let alike = formats.iter().all(|f| f.ext == formats[0].ext)
+                        || formats.iter().all(|f| f.kind == Kind::Image);
+                    formats.len() >= 2 && alike && formats.iter().all(|f| t.handles(f))
                 }
                 _ => formats.iter().all(|f| t.handles(f)),
             })
@@ -247,6 +250,20 @@ impl Kiln {
 
         let named = |suffix: &str| format!("{stem} {suffix}");
         match (tool, f.kind) {
+            (Tool::Compress, Kind::Document) => {
+                let tmp = work.path().join("out.pdf");
+                pdf::compress(input, &tmp, ctx)?;
+                smaller_than(&tmp, input)?;
+                Ok(vec![place(&tmp, &out_dir, &named(tool.suffix()), ext)?])
+            }
+            (Tool::Split, Kind::Document) => {
+                let temps = pdf::split(input, &work.path().join("out.pdf"), ctx)?;
+                temps
+                    .iter()
+                    .enumerate()
+                    .map(|(i, tmp)| place(tmp, &out_dir, &format!("{stem} page {}", i + 1), ext))
+                    .collect()
+            }
             (Tool::Compress, Kind::Image) => {
                 let img = raster::decode(input, ext)?;
                 let tmp = work.path().join(format!("out.{ext}"));
@@ -425,6 +442,22 @@ impl Kiln {
         let tmp = work.path().join(format!("out.{}", f.ext));
         let name = format!("{} merged", stem_of(first));
 
+        if f.kind == Kind::Image {
+            let tmp = work.path().join("out.pdf");
+            let images: Vec<(&Path, &str)> = inputs
+                .iter()
+                .map(|p| {
+                    let ext = self.registry().format_of(p).expect("checked by tools_for");
+                    (*p, ext.ext.as_str())
+                })
+                .collect();
+            pdf::images_to_pdf(&images, &tmp, ctx)?;
+            return Ok(vec![place(&tmp, &out_dir, &name, "pdf")?]);
+        }
+        if f.ext == "pdf" {
+            pdf::merge(inputs, &tmp, ctx)?;
+            return Ok(vec![place(&tmp, &out_dir, &name, "pdf")?]);
+        }
         if f.kind == Kind::Document {
             (ctx.progress)(Progress::Indeterminate);
             let pandoc = f.pandoc.as_deref().expect("handles() checked pandoc");

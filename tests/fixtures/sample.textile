@@ -1,0 +1,11 @@
+h1(#kiln-fixture). Kiln fixture
+
+A small document with _emphasis_, *strong text* and a list:
+
+* clay
+* glaze
+* fire
+
+|_. Cone|_. Temperature|
+|06|999 C|
+|6|1222 C|

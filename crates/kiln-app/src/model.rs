@@ -415,9 +415,15 @@ mod tests {
         let e = &list.entries()[0];
         assert_eq!(e.name, "photo.png");
         assert_eq!(e.code, "PNG");
-        assert_eq!(e.targets, ["BMP", "GIF", "JPG", "TIFF", "WEBP"]);
+        assert_eq!(
+            e.targets,
+            [
+                "AVIF", "BMP", "GIF", "ICO", "JPG", "JXL", "PDF", "PPM", "QOI", "TGA", "TIFF",
+                "WEBP"
+            ]
+        );
         assert!(
-            e.detail().ends_with("1.5 KB  ·  Converts to 5 formats"),
+            e.detail().ends_with("1.5 KB  ·  Converts to 12 formats"),
             "{}",
             e.detail()
         );

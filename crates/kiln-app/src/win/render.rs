@@ -13,28 +13,53 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 use windows_numerics::{Matrix3x2, Vector2};
 
+use kiln_core::Preset;
+
 use crate::icons::{self, Cmd, Icon, Style};
 use crate::layout::{
-    self, Control, Layout, Rect, SettingsLayout, CHIP_HEIGHT, CHIP_MIN_WIDTH, PROGRESS_HEIGHT,
-    ROW_HEIGHT,
+    self, Control, Layout, Rect, SettingsLayout, SettingsTab, SheetControl, SheetLayout,
+    CHIP_HEIGHT, CHIP_MIN_WIDTH, PROGRESS_HEIGHT, ROW_HEIGHT,
 };
 use crate::model::{Entry, JobState, Tone};
+use crate::quality::{QualityDefaults, Value};
 use crate::settings::{KeyMap, ThemeChoice};
 use crate::theme::{effects, shape, Palette, Rgb};
-use crate::wheel::{self, Wheel, R_INNER, R_OUTER};
+use crate::wheel::{self, Action, Spot, Wheel, R_INNER, R_MORE_INNER, R_MORE_OUTER, R_OUTER};
 
 use super::text::Text;
 
 /// How the wheel looks this frame.
 pub struct WheelView<'a> {
     pub wheel: &'a Wheel,
-    pub hover: Option<usize>,
+    pub hover: Option<Spot>,
+    /// 0 to 1: how far More's outer ring has poured open.
+    pub more: f32,
     /// 0 to 1: the opening pour. Drives scale and opacity.
     pub open: f32,
     /// 1 to 0 while closing.
     pub fade: f32,
     /// The item pulsing after a drop, and how far through the pulse.
-    pub pulse: Option<(usize, f32)>,
+    pub pulse: Option<(Spot, f32)>,
+}
+
+/// The options sheet this frame.
+pub struct SheetView<'a> {
+    pub layout: &'a SheetLayout,
+    pub title: &'a str,
+    /// What the source is.
+    pub context: &'a str,
+    /// The result's size and an estimate.
+    pub result: &'a str,
+    /// Each knob's name and its value as it reads.
+    pub rows: &'a [(String, String)],
+    pub preset: Preset,
+    /// Indexes into `layout.controls`.
+    pub hover: Option<usize>,
+    pub pressed: Option<usize>,
+    pub focus: Option<usize>,
+    /// 0 to 1 as it rises; 1 to 0 as it fades.
+    pub open: f32,
+    pub fade: f32,
 }
 
 /// Per-row animation state.
@@ -72,17 +97,23 @@ pub struct View<'a> {
     pub dialog_close_pressed: bool,
     pub settings_hover: bool,
     pub settings: Option<SettingsView<'a>>,
+    pub sheet: Option<SheetView<'a>>,
 }
 
 /// The settings panel this frame.
 pub struct SettingsView<'a> {
     pub layout: &'a SettingsLayout,
+    /// Where the tab marker sits, in tabs from the left.
+    pub tab_marker: f32,
+    /// 0 to 1 after the page changed: the new page fades in.
+    pub page: f32,
+    pub quality: &'a QualityDefaults,
     /// The output folder line, and whether it is the default (muted).
     pub output: (&'a str, bool),
     pub theme: ThemeChoice,
     pub keys: KeyMap,
     /// Each engine's line, and whether it is muted.
-    pub engines: [(&'a str, bool); 3],
+    pub engines: [(&'a str, bool); 4],
     /// Indexes into `layout.controls`.
     pub hover: Option<usize>,
     pub pressed: Option<usize>,
@@ -329,6 +360,9 @@ impl Renderer {
         if let (Ok(()), Some(sv)) = (&result, &v.settings) {
             result = d.settings(w, h, sv, p);
         }
+        if let (Ok(()), Some(sv)) = (&result, &v.sheet) {
+            result = d.sheet(w, h, sv, p);
+        }
 
         let end = unsafe { rt.EndDraw(None, None) };
         result?;
@@ -363,6 +397,33 @@ impl Draw<'_> {
     fn set_base(&self, m: Matrix3x2) {
         self.base.set(m);
         unsafe { self.rt.SetTransform(&m) };
+    }
+
+    /// Draw `f` at `opacity` as one layer, so overlapping parts don't
+    /// show through each other.
+    fn with_opacity<T>(&self, opacity: f32, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        if opacity >= 0.999 {
+            return f();
+        }
+        let layer = unsafe { self.rt.CreateLayer(None)? };
+        let params = D2D1_LAYER_PARAMETERS {
+            contentBounds: D2D_RECT_F {
+                left: -1e6,
+                top: -1e6,
+                right: 1e6,
+                bottom: 1e6,
+            },
+            geometricMask: std::mem::ManuallyDrop::new(None),
+            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            maskTransform: Matrix3x2::identity(),
+            opacity: opacity.max(0.0),
+            opacityBrush: std::mem::ManuallyDrop::new(None),
+            layerOptions: D2D1_LAYER_OPTIONS_NONE,
+        };
+        unsafe { self.rt.PushLayer(&params, &layer) };
+        let result = f();
+        unsafe { self.rt.PopLayer() };
+        result
     }
 
     fn paint(&self, c: Rgb, a: f32) -> &ID2D1SolidColorBrush {
@@ -808,6 +869,94 @@ impl Draw<'_> {
         }
     }
 
+    /// The emphasised button: celadon, for the one action a panel is for.
+    fn primary(&self, text: &str, b: &Rect, hover: bool, pressed: bool, p: &Palette) {
+        let fill = if hover {
+            mix(p.accent, p.text, 0.12)
+        } else {
+            p.accent
+        };
+        self.fill(b, shape::RADIUS_CONTROL, fill, 1.0);
+        if pressed {
+            self.press_shadow(b, p);
+        }
+        self.label(text, &self.text.body_center, b, p.on_accent, 1.0);
+    }
+
+    /// A control that steps through values: the value between two small
+    /// chevrons. The left end steps back, the rest forward.
+    fn stepper(&self, text: &str, b: &Rect, hover: bool, pressed: bool, p: &Palette) {
+        self.button_face(b, hover, pressed, false, p);
+        let inner = Rect::new(b.x + 20.0, b.y, (b.w - 40.0).max(0.0), b.h);
+        self.label(text, &self.text.body_center, &inner, p.text, 1.0);
+        let c = if hover { p.text } else { p.text_muted };
+        let cy = b.y + b.h / 2.0;
+        self.chevron(b.x + 13.0, cy, -1.0, c);
+        self.chevron(b.right() - 13.0, cy, 1.0, c);
+    }
+
+    /// A small chevron at `(x, y)`, pointing right for `dir` 1, left for -1.
+    fn chevron(&self, x: f32, y: f32, dir: f32, c: Rgb) {
+        let (tip, back) = (x + 2.0 * dir, x - 2.0 * dir);
+        unsafe {
+            for (a, b) in [((back, y - 4.0), (tip, y)), ((tip, y), (back, y + 4.0))] {
+                self.rt.DrawLine(
+                    pt(a.0, a.1),
+                    pt(b.0, b.1),
+                    self.paint(c, 1.0),
+                    shape::ICON_STROKE,
+                    self.round,
+                );
+            }
+        }
+    }
+
+    /// One segment of a segmented control: fills here, and one shared
+    /// outline from `segment_group`, so neighbours never double up.
+    fn segment(
+        &self,
+        text: &str,
+        r: &Rect,
+        hover: bool,
+        pressed: bool,
+        selected: bool,
+        p: &Palette,
+    ) {
+        let fill = if hover { p.line } else { p.surface };
+        self.fill(r, shape::RADIUS_CONTROL, fill, 1.0);
+        if selected {
+            self.fill(r, shape::RADIUS_CONTROL, p.accent, effects::HOVER_FILL);
+        }
+        if pressed {
+            self.press_shadow(r, p);
+        }
+        self.label(text, &self.text.body_center, r, p.text, 1.0);
+    }
+
+    /// A segmented control's outline: one border round the group,
+    /// hairline dividers, and the chosen segment's celadon edge on top.
+    fn segment_group(&self, segs: &[(bool, Rect)], p: &Palette) {
+        let (Some(first), Some(last)) = (segs.first(), segs.last()) else {
+            return;
+        };
+        let group = Rect::new(first.1.x, first.1.y, last.1.right() - first.1.x, first.1.h);
+        self.border(&group, shape::RADIUS_CONTROL, p.line, 1.0, shape::BORDER);
+        for (_, r) in &segs[1..] {
+            unsafe {
+                self.rt.DrawLine(
+                    pt(r.x + 0.5, r.y + 1.0),
+                    pt(r.x + 0.5, r.bottom() - 1.0),
+                    self.paint(p.line, 1.0),
+                    shape::BORDER,
+                    None,
+                );
+            }
+        }
+        if let Some((_, r)) = segs.iter().find(|(chosen, _)| *chosen) {
+            self.border(r, shape::RADIUS_CONTROL, p.accent, 1.0, shape::BORDER);
+        }
+    }
+
     /// The keyboard focus ring: a celadon line just outside the control.
     fn focus_ring(&self, b: &Rect, p: &Palette) {
         let r = Rect::new(b.x - 3.0, b.y - 3.0, b.w + 6.0, b.h + 6.0);
@@ -823,114 +972,199 @@ impl Draw<'_> {
     /// The glaze wheel, drawn in its own coordinates around its centre.
     fn wheel(&self, wv: &WheelView, p: &Palette) -> Result<()> {
         let w = wv.wheel;
-        let n = w.items.len();
         let opacity = (wv.open * wv.fade).clamp(0.0, 1.0);
         if opacity <= 0.0 {
             return Ok(());
         }
         // The pour: the wheel spreads out from the cursor.
-        let s = 0.55 + 0.45 * wv.open;
+        let s = (0.55 + 0.45 * wv.open) * w.scale;
+        let base = scale_at(s, w.center.0, w.center.1);
+        let result = self.with_opacity(opacity, || {
+            // More's ring pours out from behind the dish.
+            if wv.more > 0.0 && !w.more.is_empty() {
+                let k = 0.66 + 0.34 * wv.more;
+                self.set_base(compose(&scale_at(k, 0.0, 0.0), &base));
+                self.with_opacity(wv.more, || self.outer_ring(wv, p))?;
+            }
+            self.set_base(base);
+            self.inner_ring(wv, p)
+        });
+        self.set_base(Matrix3x2::identity());
+        result
+    }
 
-        let layer = unsafe { self.rt.CreateLayer(None)? };
-        let params = D2D1_LAYER_PARAMETERS {
-            contentBounds: D2D_RECT_F {
-                left: -1e6,
-                top: -1e6,
-                right: 1e6,
-                bottom: 1e6,
-            },
-            geometricMask: std::mem::ManuallyDrop::new(None),
-            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-            maskTransform: Matrix3x2::identity(),
-            opacity,
-            opacityBrush: std::mem::ManuallyDrop::new(None),
-            layerOptions: D2D1_LAYER_OPTIONS_NONE,
-        };
-        unsafe { self.rt.PushLayer(&params, &layer) };
-        self.set_base(scale_at(s, w.center.0, w.center.1));
+    /// How strongly the pointed-at or pulsing spot is lit.
+    fn lit(wv: &WheelView) -> (Option<Spot>, f32) {
+        let pulse = wv
+            .pulse
+            .map(|(_, t)| (t.clamp(0.0, 1.0) * PI).sin() * 0.3)
+            .unwrap_or(0.0);
+        (
+            wv.pulse.map(|(s, _)| s).or(wv.hover),
+            effects::HOVER_FILL + pulse,
+        )
+    }
 
-        let result = (|| -> Result<()> {
-            // The dish.
-            self.circle(R_OUTER, p.surface, 1.0)?;
-            self.ring_edge(R_OUTER - 0.5, p.line)?;
+    /// A celadon wash on a segment, and a fine arc on its outer edge.
+    fn light(&self, b: Band, wash: f32, edge: f32, p: &Palette) -> Result<()> {
+        let Band {
+            a0,
+            a1,
+            r0,
+            r1,
+            full,
+        } = b;
+        let sector = self.sector(a0, a1, r0, r1, full)?;
+        unsafe {
+            self.rt
+                .FillGeometry(&sector, self.paint(p.accent, wash), None);
+        }
+        if edge > 0.0 {
+            let arc = self.arc(a0, a1, r1 - 0.75, full)?;
+            unsafe {
+                self.rt.DrawGeometry(
+                    &arc,
+                    self.paint(p.accent, edge),
+                    shape::ICON_STROKE,
+                    self.round,
+                );
+            }
+        }
+        Ok(())
+    }
 
-            // Hover or pulse: a celadon wash on the segment and a fine arc
-            // on its outer edge. Icons keep their colour.
-            let lit = wv.pulse.map(|(i, _)| i).or(wv.hover);
-            if let Some(i) = lit {
-                let pulse = wv
-                    .pulse
-                    .map(|(_, t)| (t.clamp(0.0, 1.0) * PI).sin() * 0.3)
-                    .unwrap_or(0.0);
-                let (a0, a1) = wheel::segment(i, n);
-                let sector = self.sector(a0, a1, R_INNER, R_OUTER, n == 1)?;
+    fn inner_ring(&self, wv: &WheelView, p: &Palette) -> Result<()> {
+        let w = wv.wheel;
+        let n = w.segments();
+        // The dish.
+        self.circle(R_OUTER, p.surface, 1.0)?;
+        self.ring_edge(R_OUTER - 0.5, p.line)?;
+
+        // Hover or pulse: a celadon wash and a fine arc. Icons keep their
+        // colour.
+        let (lit, wash) = Self::lit(wv);
+        if let Some(Spot::Inner(i)) = lit {
+            let (a0, a1) = wheel::segment(i, n);
+            self.light(Band::new(a0, a1, R_INNER, R_OUTER, n == 1), wash, 1.0, p)?;
+        }
+        // While its ring is out, More stays softly lit as the way back.
+        let more = w.items.len();
+        if wv.more > 0.0 && w.is_more(more) && lit != Some(Spot::Inner(more)) {
+            let (a0, a1) = wheel::segment(more, n);
+            let k = wv.more;
+            let band = Band::new(a0, a1, R_INNER, R_OUTER, false);
+            self.light(band, effects::HOVER_FILL * 0.5 * k, 0.5 * k, p)?;
+        }
+
+        // Dividers between segments.
+        if n > 1 {
+            for i in 0..n {
+                let (a0, _) = wheel::segment(i, n);
+                let (c, si) = (a0.cos(), a0.sin());
                 unsafe {
-                    self.rt.FillGeometry(
-                        &sector,
-                        self.paint(p.accent, effects::HOVER_FILL + pulse),
+                    self.rt.DrawLine(
+                        pt(c * R_INNER, si * R_INNER),
+                        pt(c * R_OUTER, si * R_OUTER),
+                        self.paint(p.line, 1.0),
+                        shape::BORDER,
                         None,
                     );
                 }
-                let arc = self.arc(a0, a1, R_OUTER - 0.75, n == 1)?;
-                unsafe {
-                    self.rt.DrawGeometry(
-                        &arc,
-                        self.paint(p.accent, 1.0),
-                        shape::ICON_STROKE,
-                        self.round,
-                    );
+            }
+        }
+
+        // Items: icon above, label below.
+        for i in 0..n {
+            let (lx, ly) = wheel::label_point(i, n);
+            let (icon, label, is_code) = match w.items.get(i) {
+                Some(item) => (item.icon, item.label.as_str(), item.is_code),
+                None => ("more", "More", false),
+            };
+            self.icon(icon, lx - 12.0, ly - 22.0, 1.0, p.text, 1.0);
+            if is_code {
+                let r = Rect::new(lx - 40.0, ly + 4.0, 80.0, 16.0);
+                self.code(label, &r, p.text, 1.0)?;
+            } else {
+                let r = Rect::new(lx - 52.0, ly + 4.0, 104.0, 16.0);
+                self.label(label, &self.text.caption_center, &r, p.text, 1.0);
+            }
+        }
+
+        // The centre: the wheel's name, and the source type, or where a
+        // conversion goes while one is pointed at: "PNG → JPG".
+        self.circle(R_INNER, p.ground, 1.0)?;
+        self.ring_edge(R_INNER - 0.5, p.line)?;
+        let title = Rect::new(-R_INNER, -22.0, 2.0 * R_INNER, 28.0);
+        self.label(
+            w.kind.title(),
+            &self.text.display_center,
+            &title,
+            p.text,
+            1.0,
+        );
+        let line = match lit.and_then(|s| w.item(s)) {
+            Some(item) if matches!(item.action, Action::Convert(_)) => {
+                format!("{} → {}", w.source_code, item.label)
+            }
+            _ => w.source_code.clone(),
+        };
+        let src = Rect::new(-R_INNER + 4.0, 8.0, 2.0 * R_INNER - 8.0, 16.0);
+        self.code(&line, &src, p.text_muted, 1.0)?;
+        Ok(())
+    }
+
+    /// The ring More pours open: every other format, grouped by kind, each
+    /// group led by its kind's icon.
+    fn outer_ring(&self, wv: &WheelView, p: &Palette) -> Result<()> {
+        let w = wv.wheel;
+        let slots = wheel::outer_slots(&w.more);
+        let band = self.sector(0.0, TAU, R_MORE_INNER, R_MORE_OUTER, true)?;
+        // The groove between the dish and this ring is solid ground, so
+        // the list behind never shows through it.
+        let groove = self.sector(0.0, TAU, R_OUTER - 1.0, R_MORE_INNER, true)?;
+        unsafe {
+            self.rt
+                .FillGeometry(&band, self.paint(p.surface, 1.0), None);
+            self.rt
+                .FillGeometry(&groove, self.paint(p.ground, 1.0), None);
+        }
+        self.ring_edge(R_MORE_INNER + 0.5, p.line)?;
+        self.ring_edge(R_MORE_OUTER - 0.5, p.line)?;
+
+        let (lit, wash) = Self::lit(wv);
+        if let Some(Spot::Outer(j)) = lit {
+            if let Some(slot) = slots.iter().find(|s| s.item == Some(j)) {
+                let band = Band::new(slot.a0, slot.a1, R_MORE_INNER, R_MORE_OUTER, false);
+                self.light(band, wash, 1.0, p)?;
+            }
+        }
+
+        // Dividers only where a group starts.
+        for slot in slots.iter().filter(|s| s.item.is_none()) {
+            let (c, si) = (slot.a0.cos(), slot.a0.sin());
+            unsafe {
+                self.rt.DrawLine(
+                    pt(c * R_MORE_INNER, si * R_MORE_INNER),
+                    pt(c * R_MORE_OUTER, si * R_MORE_OUTER),
+                    self.paint(p.line, 1.0),
+                    shape::BORDER,
+                    None,
+                );
+            }
+        }
+
+        for slot in &slots {
+            let (x, y) = wheel::outer_point(slot);
+            match slot.item {
+                // A group's kind, small and quiet.
+                None => self.icon(slot.icon, x - 9.0, y - 9.0, 0.75, p.text_muted, 1.0),
+                Some(j) => {
+                    let r = Rect::new(x - 26.0, y - 8.0, 52.0, 16.0);
+                    self.code(&w.more[j].label, &r, p.text, 1.0)?;
                 }
             }
-
-            // Dividers between segments.
-            if n > 1 {
-                for i in 0..n {
-                    let (a0, _) = wheel::segment(i, n);
-                    let (c, si) = (a0.cos(), a0.sin());
-                    unsafe {
-                        self.rt.DrawLine(
-                            pt(c * R_INNER, si * R_INNER),
-                            pt(c * R_OUTER, si * R_OUTER),
-                            self.paint(p.line, 1.0),
-                            shape::BORDER,
-                            None,
-                        );
-                    }
-                }
-            }
-
-            // Items: icon above, label below.
-            for (i, item) in w.items.iter().enumerate() {
-                let (lx, ly) = wheel::label_point(i, n);
-                self.icon(item.icon, lx - 12.0, ly - 22.0, 1.0, p.text, 1.0);
-                if item.is_code {
-                    let r = Rect::new(lx - 40.0, ly + 4.0, 80.0, 16.0);
-                    self.code(&item.label, &r, p.text, 1.0)?;
-                } else {
-                    let r = Rect::new(lx - 52.0, ly + 4.0, 104.0, 16.0);
-                    self.label(&item.label, &self.text.caption_center, &r, p.text, 1.0);
-                }
-            }
-
-            // The centre: the wheel's name and the source type.
-            self.circle(R_INNER, p.ground, 1.0)?;
-            self.ring_edge(R_INNER - 0.5, p.line)?;
-            let title = Rect::new(-R_INNER, -22.0, 2.0 * R_INNER, 28.0);
-            self.label(
-                w.kind.title(),
-                &self.text.display_center,
-                &title,
-                p.text,
-                1.0,
-            );
-            let src = Rect::new(-R_INNER + 8.0, 8.0, 2.0 * R_INNER - 16.0, 16.0);
-            self.code(&w.source_code, &src, p.text_muted, 1.0)?;
-            Ok(())
-        })();
-
-        self.set_base(Matrix3x2::identity());
-        unsafe { self.rt.PopLayer() };
-        result
+        }
+        Ok(())
     }
 
     fn circle(&self, r: f32, c: Rgb, a: f32) -> Result<()> {
@@ -1043,7 +1277,75 @@ impl Draw<'_> {
         self.fill(&l.panel, shape::RADIUS_PANEL, p.surface, 1.0);
         self.border(&l.panel, shape::RADIUS_PANEL, p.line, 1.0, shape::BORDER);
         self.label("Settings", &self.text.display, &l.title, p.text, 1.0);
+        self.tabs(sv, p);
+        // A new page fades in where the last one was.
+        self.with_opacity(sv.page.clamp(0.0, 1.0), || self.settings_page(sv, p))?;
 
+        for (k, (control, r)) in l.controls.iter().enumerate() {
+            let (hover, pressed) = (sv.hover == Some(k), sv.pressed == Some(k));
+            match control {
+                Control::Close => self.button("Close", r, hover, pressed, p),
+                Control::CheckUpdates => self.button(sv.update_button, r, hover, pressed, p),
+                _ => continue,
+            }
+            if sv.focus == Some(k) {
+                self.focus_ring(r, p);
+            }
+        }
+        let (note, muted) = sv.update;
+        let c = if muted { p.text_muted } else { p.text };
+        self.label(note, &self.text.caption_wrap, &l.update_note, c, 1.0);
+        Ok(())
+    }
+
+    /// The page tabs: one segmented control whose celadon marker slides to
+    /// the chosen page.
+    fn tabs(&self, sv: &SettingsView, p: &Palette) {
+        let l = sv.layout;
+        let tabs: Vec<(usize, SettingsTab, Rect)> = l
+            .controls
+            .iter()
+            .enumerate()
+            .filter_map(|(k, (c, r))| match c {
+                Control::Tab(t) => Some((k, *t, *r)),
+                _ => None,
+            })
+            .collect();
+        let Some(&(_, _, first)) = tabs.first() else {
+            return;
+        };
+        for &(k, t, r) in &tabs {
+            if sv.hover == Some(k) && t != l.tab {
+                self.fill(&r, shape::RADIUS_CONTROL, p.line, 1.0);
+            }
+        }
+        let marker = Rect::new(first.x + sv.tab_marker * first.w, first.y, first.w, first.h);
+        self.fill(
+            &marker,
+            shape::RADIUS_CONTROL,
+            p.accent,
+            effects::HOVER_FILL,
+        );
+        for &(k, t, r) in &tabs {
+            if sv.pressed == Some(k) {
+                self.press_shadow(&r, p);
+            }
+            let c = if t == l.tab { p.text } else { p.text_muted };
+            self.label(t.label(), &self.text.body_center, &r, c, 1.0);
+        }
+        let segs: Vec<(bool, Rect)> = tabs.iter().map(|&(_, _, r)| (false, r)).collect();
+        self.segment_group(&segs, p);
+        self.border(&marker, shape::RADIUS_CONTROL, p.accent, 1.0, shape::BORDER);
+        for &(k, _, r) in &tabs {
+            if sv.focus == Some(k) {
+                self.focus_ring(&r, p);
+            }
+        }
+    }
+
+    /// The current page's rows and controls.
+    fn settings_page(&self, sv: &SettingsView, p: &Palette) -> Result<()> {
+        let l = sv.layout;
         for (i, row) in l.rows.iter().enumerate() {
             self.label(
                 row.label,
@@ -1053,39 +1355,41 @@ impl Draw<'_> {
                 1.0,
             );
             let Some(r) = row.value else { continue };
-            let (text, muted) = match i {
-                0 => sv.output,
-                // Rows 1 and 2, theme and keys, have no value text.
-                n => sv.engines[n - 3],
+            let (text, muted) = match l.tab {
+                SettingsTab::Engines => sv.engines[i],
+                _ => sv.output,
             };
             let c = if muted { p.text_muted } else { p.text };
             self.label(text, &self.text.body, &r, c, 1.0);
         }
 
+        // Segmented groups, outlined once each after their fills.
+        let mut groups: Vec<(Control, Vec<(bool, Rect)>)> = vec![];
         for (k, (control, r)) in l.controls.iter().enumerate() {
-            let hover = sv.hover == Some(k);
-            let pressed = sv.pressed == Some(k);
-            match control {
+            let (hover, pressed) = (sv.hover == Some(k), sv.pressed == Some(k));
+            let chosen = match control {
                 Control::OutputChoose | Control::EngineChoose(_) => {
-                    self.button("Choose", r, hover, pressed, p)
+                    self.button("Choose", r, hover, pressed, p);
+                    None
                 }
                 Control::OutputReset | Control::EngineReset(_) => {
-                    self.button("Reset", r, hover, pressed, p)
+                    self.button("Reset", r, hover, pressed, p);
+                    None
                 }
-                Control::Close => self.button("Close", r, hover, pressed, p),
-                Control::CheckUpdates => self.button(sv.update_button, r, hover, pressed, p),
                 Control::Theme(t) => {
-                    // One segmented control: fills here, one shared
-                    // border below, so neighbours never double up.
-                    let fill = if hover { p.line } else { p.surface };
-                    self.fill(r, shape::RADIUS_CONTROL, fill, 1.0);
-                    if *t == sv.theme {
-                        self.fill(r, shape::RADIUS_CONTROL, p.accent, effects::HOVER_FILL);
-                    }
-                    if pressed {
-                        self.press_shadow(r, p);
-                    }
-                    self.label(t.label(), &self.text.body_center, r, p.text, 1.0);
+                    let chosen = *t == sv.theme;
+                    self.segment(t.label(), r, hover, pressed, chosen, p);
+                    Some(chosen)
+                }
+                Control::Preset(s, preset) => {
+                    let chosen = sv.quality.get(*s) == Value::Preset(*preset);
+                    self.segment(preset.label(), r, hover, pressed, chosen, p);
+                    Some(chosen)
+                }
+                Control::Step(s) => {
+                    let text = s.label(sv.quality.get(*s));
+                    self.stepper(&text, r, hover, pressed, p);
+                    None
                 }
                 Control::Key(wheel) => {
                     self.button_face(r, hover, pressed, false, p);
@@ -1095,49 +1399,118 @@ impl Draw<'_> {
                     let (_, cw) = self.text.code_layout(code, r.w, r.h)?;
                     let cr = Rect::new(r.right() - 12.0 - cw.ceil(), r.y, cw.ceil(), r.h);
                     self.code(code, &cr, p.text_muted, 1.0)?;
+                    None
+                }
+                Control::Tab(_) | Control::CheckUpdates | Control::Close => continue,
+            };
+            if let Some(chosen) = chosen {
+                match groups.last_mut() {
+                    Some((c, segs)) if same_group(*c, *control) => segs.push((chosen, *r)),
+                    _ => groups.push((*control, vec![(chosen, *r)])),
                 }
             }
-            if sv.focus == Some(k) {
+        }
+        for (_, segs) in &groups {
+            self.segment_group(segs, p);
+        }
+        for (k, (control, r)) in l.controls.iter().enumerate() {
+            let page = !matches!(
+                control,
+                Control::Tab(_) | Control::CheckUpdates | Control::Close
+            );
+            if page && sv.focus == Some(k) {
                 self.focus_ring(r, p);
             }
         }
-        let (note, muted) = sv.update;
-        let c = if muted { p.text_muted } else { p.text };
-        self.label(note, &self.text.caption_wrap, &l.update_note, c, 1.0);
-        self.segment_edges(l, sv, p);
         Ok(())
     }
 
-    /// The theme control's outline: one border round the group, hairline
-    /// dividers, and the chosen segment's celadon edge on top.
-    fn segment_edges(&self, l: &SettingsLayout, sv: &SettingsView, p: &Palette) {
-        let segs: Vec<(ThemeChoice, Rect)> = l
-            .controls
-            .iter()
-            .filter_map(|(c, r)| match c {
-                Control::Theme(t) => Some((*t, *r)),
-                _ => None,
-            })
-            .collect();
-        let (Some(first), Some(last)) = (segs.first(), segs.last()) else {
-            return;
-        };
-        let group = Rect::new(first.1.x, first.1.y, last.1.right() - first.1.x, first.1.h);
-        self.border(&group, shape::RADIUS_CONTROL, p.line, 1.0, shape::BORDER);
-        for (_, r) in &segs[1..] {
-            unsafe {
-                self.rt.DrawLine(
-                    pt(r.x + 0.5, r.y + 1.0),
-                    pt(r.x + 0.5, r.bottom() - 1.0),
-                    self.paint(p.line, 1.0),
-                    shape::BORDER,
-                    None,
-                );
+    /// The options sheet: what the source is, the choices that fit it, and
+    /// what they will make. It rises a little as it fades in.
+    fn sheet(&self, w: f32, h: f32, sv: &SheetView, p: &Palette) -> Result<()> {
+        let a = (sv.open * sv.fade).clamp(0.0, 1.0);
+        if a <= 0.0 {
+            return Ok(());
+        }
+        self.fill(&Rect::new(0.0, 0.0, w, h), 0.0, p.ground, 0.7 * a);
+        let rise = 8.0 * (1.0 - sv.open);
+        let result = self.with_opacity(a, || {
+            self.set_base(scale_at(1.0, 0.0, rise));
+            let l = sv.layout;
+            self.fill(&l.panel, shape::RADIUS_PANEL, p.surface, 1.0);
+            self.border(&l.panel, shape::RADIUS_PANEL, p.line, 1.0, shape::BORDER);
+            self.label(sv.title, &self.text.display, &l.title, p.text, 1.0);
+            self.label(
+                sv.context,
+                &self.text.caption,
+                &l.context,
+                p.text_muted,
+                1.0,
+            );
+            for (r, (name, _)) in l.labels.iter().zip(sv.rows) {
+                self.label(name, &self.text.body, r, p.text_muted, 1.0);
             }
+            let mut presets = vec![];
+            for (k, (c, r)) in l.controls.iter().enumerate() {
+                let (hover, pressed) = (sv.hover == Some(k), sv.pressed == Some(k));
+                match c {
+                    SheetControl::Preset(_, preset) => {
+                        let chosen = *preset == sv.preset;
+                        self.segment(preset.label(), r, hover, pressed, chosen, p);
+                        presets.push((chosen, *r));
+                    }
+                    SheetControl::Step(row) => {
+                        let text = sv.rows.get(*row).map_or("", |(_, v)| v.as_str());
+                        self.stepper(text, r, hover, pressed, p);
+                    }
+                    SheetControl::Cancel => self.button("Cancel", r, hover, pressed, p),
+                    SheetControl::Convert => self.primary("Convert", r, hover, pressed, p),
+                }
+            }
+            self.segment_group(&presets, p);
+            for (k, (_, r)) in l.controls.iter().enumerate() {
+                if sv.focus == Some(k) {
+                    self.focus_ring(r, p);
+                }
+            }
+            let line = Rect::new(l.result.x, l.result.y + 8.0, l.result.w, 16.0);
+            self.label(sv.result, &self.text.caption, &line, p.text_muted, 1.0);
+            Ok(())
+        });
+        self.set_base(Matrix3x2::identity());
+        result
+    }
+}
+
+/// A stretch of ring between two angles and two radii; with `full`, the
+/// whole ring.
+#[derive(Clone, Copy)]
+struct Band {
+    a0: f32,
+    a1: f32,
+    r0: f32,
+    r1: f32,
+    full: bool,
+}
+
+impl Band {
+    fn new(a0: f32, a1: f32, r0: f32, r1: f32, full: bool) -> Self {
+        Self {
+            a0,
+            a1,
+            r0,
+            r1,
+            full,
         }
-        if let Some((_, r)) = segs.iter().find(|(t, _)| *t == sv.theme) {
-            self.border(r, shape::RADIUS_CONTROL, p.accent, 1.0, shape::BORDER);
-        }
+    }
+}
+
+/// Whether two controls are segments of one group.
+fn same_group(a: Control, b: Control) -> bool {
+    match (a, b) {
+        (Control::Theme(_), Control::Theme(_)) => true,
+        (Control::Preset(x, _), Control::Preset(y, _)) => x == y,
+        _ => false,
     }
 }
 

@@ -157,9 +157,9 @@ fn work(
         } else {
             let mut progress = |p: Progress| on_event(JobEvent::Progress(id, p));
             match &job.kind {
-                JobKind::Convert { input, target } => kiln
-                    .convert_with(input, target, &job.options, &mut progress, &job.cancel)
-                    .map(|p| vec![p]),
+                JobKind::Convert { input, target } => {
+                    kiln.convert_outputs(input, target, &job.options, &mut progress, &job.cancel)
+                }
                 JobKind::Tool { tool, inputs } => {
                     kiln.run_tool_with(*tool, inputs, &job.options, &mut progress, &job.cancel)
                 }

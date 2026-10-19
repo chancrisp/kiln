@@ -8,14 +8,16 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::calibre::CalibreConverter;
 use crate::converter::{CancelToken, Context, Converter, Options, Progress, Request};
 use crate::error::{Error, Result};
 use crate::ffmpeg::FfmpegConverter;
 use crate::libreoffice::LibreOfficeConverter;
 use crate::output;
 use crate::pandoc::PandocConverter;
+use crate::pdf::PdfConverter;
 use crate::raster::ImageConverter;
-use crate::registry::{Format, Registry};
+use crate::registry::{Format, Kind, Registry};
 
 /// The registry plus the backends its routes name.
 pub struct Kiln {
@@ -37,11 +39,13 @@ impl Kiln {
 
     /// Use a custom registry. Fails if a route names an unknown backend.
     pub fn with_registry(registry: Registry) -> Result<Self> {
-        let backends: [Box<dyn Converter>; 4] = [
+        let backends: [Box<dyn Converter>; 6] = [
             Box::new(ImageConverter),
             Box::new(FfmpegConverter),
             Box::new(PandocConverter),
             Box::new(LibreOfficeConverter),
+            Box::new(CalibreConverter),
+            Box::new(PdfConverter),
         ];
         let converters: HashMap<_, _> = backends.into_iter().map(|c| (c.id(), c)).collect();
         if let Some(unknown) = registry.backends().find(|b| !converters.contains_key(b)) {
@@ -67,15 +71,33 @@ impl Kiln {
             .unwrap_or_default()
     }
 
+    /// What FFprobe can say about a picture, sound or video: its size,
+    /// frame rate, length and whether it has sound. For size estimates and
+    /// for offering only the choices that fit the file. `None` for other
+    /// kinds, or when FFprobe isn't installed or can't read the file.
+    pub fn probe(&self, input: &Path, opts: &Options) -> Option<crate::quality::MediaInfo> {
+        let f = self.registry.format_of(input)?;
+        if !matches!(f.kind, Kind::Image | Kind::Audio | Kind::Video) {
+            return None;
+        }
+        let cancel = CancelToken::new();
+        let mut ctx = Context {
+            progress: &mut |_| {},
+            cancel: &cancel,
+        };
+        let info = crate::ffmpeg::probe_media(opts, input, &mut ctx).ok()?;
+        (info.duration.is_some() || info.width.is_some()).then_some(info)
+    }
+
     /// Convert `input` to `target` (an extension such as "jpg") and return
-    /// the path written.
+    /// the path written. When a conversion writes several files, such as
+    /// one image per PDF page, this is the first; see
+    /// [`Kiln::convert_outputs`].
     pub fn convert(&self, input: &Path, target: &str, opts: &Options) -> Result<PathBuf> {
         self.convert_with(input, target, opts, &mut |_| {}, &CancelToken::new())
     }
 
     /// Like [`Kiln::convert`], reporting progress and honouring `cancel`.
-    /// Nothing is left behind on failure or cancel: no partial output and
-    /// no working folder.
     pub fn convert_with(
         &self,
         input: &Path,
@@ -84,6 +106,23 @@ impl Kiln {
         progress: &mut dyn FnMut(Progress),
         cancel: &CancelToken,
     ) -> Result<PathBuf> {
+        let mut outputs = self.convert_outputs(input, target, opts, progress, cancel)?;
+        Ok(outputs.remove(0))
+    }
+
+    /// Convert and return every file written, in order: one for most
+    /// conversions, one per page or slide when the target is an image of
+    /// a paged document. A chained route runs each engine in turn inside
+    /// the job's working folder. Nothing is left behind on failure or
+    /// cancel: no partial output and no working folder.
+    pub fn convert_outputs(
+        &self,
+        input: &Path,
+        target: &str,
+        opts: &Options,
+        progress: &mut dyn FnMut(Progress),
+        cancel: &CancelToken,
+    ) -> Result<Vec<PathBuf>> {
         if !(1..=100).contains(&opts.jpeg_quality) {
             return Err(Error::InvalidQuality(opts.jpeg_quality));
         }
@@ -101,9 +140,9 @@ impl Kiln {
             .registry
             .format(target)
             .ok_or_else(|| Error::UnknownFormat(target.trim_start_matches('.').to_owned()))?;
-        let backend = self
+        let steps = self
             .registry
-            .backend(from, to)
+            .route(from, to)
             .ok_or_else(|| Error::UnsupportedPair {
                 from: from.code(),
                 to: to.code(),
@@ -114,30 +153,107 @@ impl Kiln {
                     .map(|f| f.code())
                     .collect(),
             })?;
-        let converter = &self.converters[backend];
 
         let out_dir = out_dir_for(&input, opts)?;
         let work = WorkDir::for_options(opts)?;
-        let temp_out = work.path().join(format!("output.{}", to.ext));
+        let stem = stem_of(&input);
+        let count = steps.len();
+        let mut current = input.clone();
+        let mut written = Vec::new();
+        for (i, step) in steps.iter().enumerate() {
+            let step_from = self
+                .registry
+                .format(&step.from)
+                .expect("routes use known formats");
+            let step_to = self
+                .registry
+                .format(&step.to)
+                .expect("routes use known formats");
+            let last = i + 1 == count;
+            // Each step gets its own folder, so engines that keep files
+            // next to their output (LibreOffice's profile) never meet.
+            // Files between steps keep the input's name, since some
+            // engines take a title from it.
+            let temp_out = if last {
+                work.path().join(format!("output.{}", step_to.ext))
+            } else {
+                let dir = work.path().join(format!("step-{}", i + 1));
+                fs::create_dir(&dir).map_err(|e| Error::io(&dir, e))?;
+                dir.join(format!("{stem}.{}", step_to.ext))
+            };
+            let req = Request {
+                input: &current,
+                output: &temp_out,
+                from: step_from,
+                to: step_to,
+                options: opts,
+            };
+            let mut step_progress = |p: Progress| {
+                progress(match p {
+                    Progress::Fraction(f) => Progress::Fraction((i as f32 + f) / count as f32),
+                    Progress::Indeterminate => Progress::Indeterminate,
+                })
+            };
+            let mut ctx = Context {
+                progress: &mut step_progress,
+                cancel,
+            };
+            self.converters[step.backend.as_str()].convert(&req, &mut ctx)?;
+            if cancel.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
 
-        let req = Request {
-            input: &input,
-            output: &temp_out,
-            from,
-            to,
-            options: opts,
-        };
-        let mut ctx = Context { progress, cancel };
-        converter.convert(&req, &mut ctx)?;
-        if cancel.is_cancelled() {
-            return Err(Error::Cancelled);
+            let engine = engine_name(&step.backend);
+            written = written_by(&temp_out);
+            if written.is_empty() {
+                written.push(temp_out.clone());
+            }
+            for path in &written {
+                ensure_written(path, engine)?;
+            }
+            if !last {
+                if written.len() > 1 {
+                    return Err(Error::EngineFailed {
+                        engine,
+                        summary: "it wrote several files where the next step needs one.".to_owned(),
+                        details: String::new(),
+                    });
+                }
+                current = written.remove(0);
+            }
         }
 
-        ensure_written(&temp_out, engine_name(backend))?;
-        let final_path = place(&temp_out, &out_dir, &stem_of(&input), &to.ext)?;
-        (ctx.progress)(Progress::Fraction(1.0));
-        Ok(final_path)
+        let finals = if written.len() == 1 {
+            vec![place(&written[0], &out_dir, &stem, &to.ext)?]
+        } else {
+            let unit = if from.kind == Kind::Presentation {
+                "slide"
+            } else {
+                "page"
+            };
+            written
+                .iter()
+                .enumerate()
+                .map(|(n, path)| {
+                    place(path, &out_dir, &format!("{stem} {unit} {}", n + 1), &to.ext)
+                })
+                .collect::<Result<Vec<_>>>()?
+        };
+        progress(Progress::Fraction(1.0));
+        Ok(finals)
     }
+}
+
+/// What a step wrote: its output, or the numbered files a backend writes
+/// instead when it makes several (see [`Request::numbered`]).
+fn written_by(output: &Path) -> Vec<PathBuf> {
+    if output.exists() {
+        return vec![output.to_path_buf()];
+    }
+    (1..)
+        .map(|n| Request::numbered(output, n))
+        .take_while(|p| p.exists())
+        .collect()
 }
 
 /// Where outputs for `input` go: the configured folder, or next to it.
@@ -179,6 +295,7 @@ pub(crate) fn engine_name(backend: &str) -> &'static str {
         "ffmpeg" => "FFmpeg",
         "pandoc" => "Pandoc",
         "libreoffice" => "LibreOffice",
+        "calibre" => "Calibre",
         _ => "Kiln",
     }
 }

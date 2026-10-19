@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE article>
+<article
+  xmlns="http://docbook.org/ns/docbook" version="5.0"
+  xmlns:mml="http://www.w3.org/1998/Math/MathML"
+  xmlns:xlink="http://www.w3.org/1999/xlink" >
+  <info>
+    <title>Kiln fixture</title>
+  </info>
+  <section xml:id="kiln-fixture">
+    <title>Kiln fixture</title>
+    <para>
+      A small document with <emphasis>emphasis</emphasis>,
+      <emphasis role="strong">strong text</emphasis> and a list:
+    </para>
+    <itemizedlist spacing="compact">
+      <listitem>
+        <para>
+          clay
+        </para>
+      </listitem>
+      <listitem>
+        <para>
+          glaze
+        </para>
+      </listitem>
+      <listitem>
+        <para>
+          fire
+        </para>
+      </listitem>
+    </itemizedlist>
+    <informaltable>
+      <tgroup cols="2">
+        <colspec align="left" />
+        <colspec align="left" />
+        <thead>
+          <row>
+            <entry>
+              Cone
+            </entry>
+            <entry>
+              Temperature
+            </entry>
+          </row>
+        </thead>
+        <tbody>
+          <row>
+            <entry>
+              06
+            </entry>
+            <entry>
+              999 C
+            </entry>
+          </row>
+          <row>
+            <entry>
+              6
+            </entry>
+            <entry>
+              1222 C
+            </entry>
+          </row>
+        </tbody>
+      </tgroup>
+    </informaltable>
+  </section>
+</article>

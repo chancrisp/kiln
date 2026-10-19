@@ -324,6 +324,53 @@ pub const CROSS: Icon = Icon {
     path: CROSS_PATH,
 };
 
+/// Subtitles: a screen with two lines of captions along the bottom.
+pub const SUBTITLE_PATH: &[Cmd] = &[
+    Move(3.5, 5.0),
+    Line(20.5, 5.0),
+    Line(20.5, 19.0),
+    Line(3.5, 19.0),
+    Close,
+    Move(7.0, 12.5),
+    Line(12.0, 12.5),
+    Move(14.5, 12.5),
+    Line(17.0, 12.5),
+    Move(7.0, 15.5),
+    Line(15.5, 15.5),
+];
+
+/// More: three dots in a row, drawn as small octagons so they stroke
+/// cleanly.
+pub const MORE_PATH: &[Cmd] = &[
+    Move(7.0, 12.0),
+    Line(6.56, 13.06),
+    Line(5.5, 13.5),
+    Line(4.44, 13.06),
+    Line(4.0, 12.0),
+    Line(4.44, 10.94),
+    Line(5.5, 10.5),
+    Line(6.56, 10.94),
+    Close,
+    Move(13.5, 12.0),
+    Line(13.06, 13.06),
+    Line(12.0, 13.5),
+    Line(10.94, 13.06),
+    Line(10.5, 12.0),
+    Line(10.94, 10.94),
+    Line(12.0, 10.5),
+    Line(13.06, 10.94),
+    Close,
+    Move(20.0, 12.0),
+    Line(19.56, 13.06),
+    Line(18.5, 13.5),
+    Line(17.44, 13.06),
+    Line(17.0, 12.0),
+    Line(17.44, 10.94),
+    Line(18.5, 10.5),
+    Line(19.56, 10.94),
+    Close,
+];
+
 const fn stroke(name: &'static str, path: &'static [Cmd]) -> Icon {
     Icon {
         name,
@@ -332,7 +379,7 @@ const fn stroke(name: &'static str, path: &'static [Cmd]) -> Icon {
     }
 }
 
-pub const ALL: [Icon; 20] = [
+pub const ALL: [Icon; 22] = [
     VESSEL,
     VESSEL_SOLID,
     FLAME,
@@ -344,6 +391,7 @@ pub const ALL: [Icon; 20] = [
     stroke("document", DOCUMENT_PATH),
     stroke("sheet", SHEET_PATH),
     stroke("slides", SLIDES_PATH),
+    stroke("subtitle", SUBTITLE_PATH),
     stroke("compress", COMPRESS_PATH),
     stroke("crop", CROP_PATH),
     stroke("trim", TRIM_PATH),
@@ -353,6 +401,7 @@ pub const ALL: [Icon; 20] = [
     stroke("move", MOVE_PATH),
     stroke("terminal", TERMINAL_PATH),
     stroke("dial", DIAL_PATH),
+    stroke("more", MORE_PATH),
 ];
 
 /// The app icon's geometry at a given pixel size: the tile's corner radius

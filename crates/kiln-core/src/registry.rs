@@ -19,6 +19,7 @@ pub enum Kind {
     Document,
     Spreadsheet,
     Presentation,
+    Subtitle,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,12 +46,21 @@ impl Format {
     }
 }
 
+/// One engine run inside a conversion: `from` to `to` with `backend`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Step {
+    pub from: String,
+    pub to: String,
+    pub backend: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct Registry {
     formats: BTreeMap<String, Format>,
     aliases: HashMap<String, String>,
-    /// (from, to) -> backend id.
-    routes: BTreeMap<(String, String), String>,
+    /// (from, to) -> the steps that convert it. A direct route has one
+    /// step; a chain runs several, passing a file from one to the next.
+    routes: BTreeMap<(String, String), Vec<Step>>,
 }
 
 #[derive(Deserialize)]
@@ -59,6 +69,8 @@ struct RawFile {
     formats: BTreeMap<String, RawFormat>,
     #[serde(default, rename = "route")]
     routes: Vec<RawRoute>,
+    #[serde(default, rename = "chain")]
+    chains: Vec<RawChain>,
 }
 
 #[derive(Deserialize)]
@@ -84,8 +96,22 @@ struct RawRoute {
     to: Vec<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawChain {
+    from: Vec<String>,
+    via: Vec<String>,
+    to: Vec<String>,
+}
+
 fn bad(msg: String) -> Error {
     Error::Registry(msg)
+}
+
+/// "pandoc", or "pandoc, then libreoffice" for a chain.
+fn describe(steps: &[Step]) -> String {
+    let names: Vec<&str> = steps.iter().map(|s| s.backend.as_str()).collect();
+    names.join(", then ")
 }
 
 fn valid_ext(ext: &str) -> bool {
@@ -159,12 +185,72 @@ impl Registry {
                         continue;
                     }
                     let key = (from.clone(), to.clone());
-                    if let Some(prev) = routes.insert(key, route.backend.clone()) {
+                    let step = Step {
+                        from: from.clone(),
+                        to: to.clone(),
+                        backend: route.backend.clone(),
+                    };
+                    if let Some(prev) = routes.insert(key, vec![step]) {
                         return Err(bad(format!(
-                            "{} to {} is declared twice (backends {prev} and {}).",
+                            "{} to {} is declared twice (backends {} and {}).",
                             from.to_ascii_uppercase(),
                             to.to_ascii_uppercase(),
+                            describe(&prev),
                             route.backend
+                        )));
+                    }
+                }
+            }
+        }
+
+        // Chains are read in order, so a chain may build on an earlier one.
+        for chain in raw.chains {
+            for ext in chain.from.iter().chain(&chain.via).chain(&chain.to) {
+                if !formats.contains_key(ext) {
+                    return Err(bad(format!(
+                        "A chain uses \"{ext}\", which isn't a declared format."
+                    )));
+                }
+            }
+            if chain.via.is_empty() {
+                return Err(bad("A chain needs at least one type in via.".to_owned()));
+            }
+            for from in &chain.from {
+                for to in &chain.to {
+                    if from == to {
+                        continue;
+                    }
+                    let code = |e: &str| e.to_ascii_uppercase();
+                    if chain.via.contains(from) || chain.via.contains(to) {
+                        return Err(bad(format!(
+                            "The chain from {} to {} passes through one of its own ends.",
+                            code(from),
+                            code(to)
+                        )));
+                    }
+                    let mut hops = vec![from];
+                    hops.extend(&chain.via);
+                    hops.push(to);
+                    let mut steps = Vec::new();
+                    for leg in hops.windows(2) {
+                        let Some(leg_steps) = routes.get(&(leg[0].clone(), leg[1].clone())) else {
+                            return Err(bad(format!(
+                                "The chain from {} to {} needs {} to {}, which isn't supported.",
+                                code(from),
+                                code(to),
+                                code(leg[0]),
+                                code(leg[1])
+                            )));
+                        };
+                        steps.extend(leg_steps.iter().cloned());
+                    }
+                    let key = (from.clone(), to.clone());
+                    if let Some(prev) = routes.insert(key, steps) {
+                        return Err(bad(format!(
+                            "{} to {} is declared twice (backends {} and a chain).",
+                            code(from),
+                            code(to),
+                            describe(&prev)
                         )));
                     }
                 }
@@ -200,22 +286,36 @@ impl Registry {
             .collect()
     }
 
-    /// The backend id for a pair, if it is supported.
-    pub fn backend(&self, from: &Format, to: &Format) -> Option<&str> {
+    /// The steps that convert a pair, if it is supported.
+    pub fn route(&self, from: &Format, to: &Format) -> Option<&[Step]> {
         self.routes
             .get(&(from.ext.clone(), to.ext.clone()))
-            .map(String::as_str)
+            .map(Vec::as_slice)
     }
 
-    /// Every supported pair, as (from, to, backend).
-    pub fn pairs(&self) -> impl Iterator<Item = (&Format, &Format, &str)> {
+    /// The backend id for a pair one engine converts directly. Chains and
+    /// unsupported pairs give `None`.
+    pub fn backend(&self, from: &Format, to: &Format) -> Option<&str> {
+        match self.route(from, to)? {
+            [step] => Some(step.backend.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Every supported pair, as (from, to, steps).
+    pub fn pairs(&self) -> impl Iterator<Item = (&Format, &Format, &[Step])> {
         self.routes
             .iter()
-            .map(|((f, t), b)| (&self.formats[f], &self.formats[t], b.as_str()))
+            .map(|((f, t), s)| (&self.formats[f], &self.formats[t], s.as_slice()))
     }
 
     pub fn backends(&self) -> impl Iterator<Item = &str> {
-        let mut ids: Vec<&str> = self.routes.values().map(String::as_str).collect();
+        let mut ids: Vec<&str> = self
+            .routes
+            .values()
+            .flatten()
+            .map(|s| s.backend.as_str())
+            .collect();
         ids.sort_unstable();
         ids.dedup();
         ids.into_iter()
@@ -240,12 +340,18 @@ mod tests {
         let jpg = r.format("jpg").unwrap();
         assert_eq!(r.backend(png, jpg), Some("image"));
         let codes: Vec<&str> = r.targets(png).iter().map(|f| f.ext.as_str()).collect();
-        assert_eq!(codes, ["bmp", "gif", "jpg", "tiff", "webp"]);
+        assert_eq!(
+            codes,
+            [
+                "avif", "bmp", "gif", "ico", "jpg", "jxl", "pdf", "ppm", "qoi", "tga", "tiff",
+                "webp"
+            ]
+        );
         assert_eq!(r.backend(jpg, png), Some("image"));
         assert_eq!(r.format("tif").unwrap().ext, "tiff");
         assert!(r
             .backends()
-            .eq(["ffmpeg", "image", "libreoffice", "pandoc"]));
+            .eq(["calibre", "ffmpeg", "image", "libreoffice", "pandoc", "pdf"]));
     }
 
     #[test]
@@ -283,11 +389,10 @@ mod tests {
         assert_eq!(pair("doc", "docx"), Some("libreoffice"));
         assert_eq!(pair("xlsx", "csv"), Some("libreoffice"));
         assert_eq!(pair("pptx", "odp"), Some("libreoffice"));
-        // PDF is written, never read.
-        assert!(r.targets(r.format("pdf").unwrap()).is_empty());
-        // Every type LibreOffice writes says how.
-        for (_, to, backend) in r.pairs() {
-            if backend == "libreoffice" {
+        // Every type LibreOffice writes says how, in chains too.
+        for (_, _, steps) in r.pairs() {
+            for step in steps.iter().filter(|s| s.backend == "libreoffice") {
+                let to = r.format(&step.to).unwrap();
                 assert!(
                     to.libreoffice.is_some(),
                     "{} has no libreoffice filter",
@@ -295,7 +400,6 @@ mod tests {
                 );
             }
         }
-        assert_eq!(r.pairs().filter(|p| p.2 == "libreoffice").count(), 37);
     }
 
     #[test]
@@ -398,5 +502,103 @@ mod tests {
             colour = "blue"
         "#);
         assert!(msg.contains("colour"), "{msg}");
+    }
+
+    const CHAIN_BASE: &str = r#"
+        [formats.a]
+        kind = "document"
+        [formats.b]
+        kind = "document"
+        [formats.c]
+        kind = "document"
+        [formats.d]
+        kind = "document"
+        [[route]]
+        backend = "x"
+        from = ["a"]
+        to = ["b"]
+        [[route]]
+        backend = "y"
+        from = ["b"]
+        to = ["c"]
+    "#;
+
+    #[test]
+    fn chains_join_their_legs() {
+        let r = Registry::from_toml(&format!(
+            "{CHAIN_BASE}
+            [[chain]]
+            from = [\"a\"]
+            via = [\"b\"]
+            to = [\"c\"]"
+        ))
+        .unwrap();
+        let (a, c) = (r.format("a").unwrap(), r.format("c").unwrap());
+        let steps: Vec<(&str, &str, &str)> = r
+            .route(a, c)
+            .unwrap()
+            .iter()
+            .map(|s| (s.from.as_str(), s.to.as_str(), s.backend.as_str()))
+            .collect();
+        assert_eq!(steps, [("a", "b", "x"), ("b", "c", "y")]);
+        assert_eq!(r.backend(a, c), None);
+        assert_eq!(r.backend(a, r.format("b").unwrap()), Some("x"));
+        let codes: Vec<&str> = r.targets(a).iter().map(|f| f.ext.as_str()).collect();
+        assert_eq!(codes, ["b", "c"]);
+    }
+
+    #[test]
+    fn chains_need_every_leg() {
+        let msg = err(&format!(
+            "{CHAIN_BASE}
+            [[chain]]
+            from = [\"a\"]
+            via = [\"b\"]
+            to = [\"d\"]"
+        ));
+        assert_eq!(
+            msg,
+            "The chain from A to D needs B to D, which isn't supported."
+        );
+    }
+
+    #[test]
+    fn chains_may_not_repeat_a_route() {
+        let msg = err(&format!(
+            "{CHAIN_BASE}
+            [[route]]
+            backend = \"z\"
+            from = [\"a\"]
+            to = [\"c\"]
+            [[chain]]
+            from = [\"a\"]
+            via = [\"b\"]
+            to = [\"c\"]"
+        ));
+        assert!(msg.contains("declared twice"), "{msg}");
+    }
+
+    #[test]
+    fn chains_may_not_pass_through_their_ends() {
+        let msg = err(&format!(
+            "{CHAIN_BASE}
+            [[chain]]
+            from = [\"a\"]
+            via = [\"a\", \"b\"]
+            to = [\"c\"]"
+        ));
+        assert!(msg.contains("its own ends"), "{msg}");
+    }
+
+    #[test]
+    fn every_chain_in_the_builtin_registry_resolves() {
+        let r = Registry::builtin();
+        for (from, to, steps) in r.pairs() {
+            assert_eq!(steps.first().unwrap().from, from.ext);
+            assert_eq!(steps.last().unwrap().to, to.ext);
+            for w in steps.windows(2) {
+                assert_eq!(w[0].to, w[1].from, "{} to {}", from.ext, to.ext);
+            }
+        }
     }
 }
