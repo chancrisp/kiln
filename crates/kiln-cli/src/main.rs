@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use kiln_core::{png_to_jpg, JpegOptions};
+use kiln_core::{Engines, Error, Kiln, Options};
 
 #[derive(Parser)]
 #[command(name = "kiln", version, about = "Convert files locally.")]
@@ -20,7 +20,7 @@ enum Command {
     Convert {
         /// The file to convert.
         input: PathBuf,
-        /// The output format, such as jpg.
+        /// The output format, such as jpg, mp3 or docx.
         format: String,
         /// Write the result here instead of next to the input.
         #[arg(short, long, value_name = "DIR")]
@@ -28,47 +28,71 @@ enum Command {
         /// JPG quality, 1 to 100.
         #[arg(short, long, default_value_t = 90, value_parser = clap::value_parser!(u8).range(1..=100))]
         quality: u8,
+        /// Path to the FFmpeg executable. Defaults to the one on PATH.
+        #[arg(long, value_name = "PATH")]
+        ffmpeg: Option<PathBuf>,
+        /// Path to the Pandoc executable. Defaults to the one on PATH.
+        #[arg(long, value_name = "PATH")]
+        pandoc: Option<PathBuf>,
     },
-}
-
-/// Output formats this build can produce, as shown to users.
-const SUPPORTED: &[&str] = &["JPG"];
-
-/// Normalize a user-typed format ("jpg", ".JPEG") to its display code.
-fn target_code(format: &str) -> Option<&'static str> {
-    match format.trim_start_matches('.').to_ascii_lowercase().as_str() {
-        "jpg" | "jpeg" => Some("JPG"),
-        _ => None,
-    }
+    /// List the formats a file can be converted to.
+    Formats {
+        /// The file, or just a name with its extension.
+        input: PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    let kiln = Kiln::new();
     match cli.command {
         Command::Convert {
             input,
             format,
             out_dir,
             quality,
+            ffmpeg,
+            pandoc,
         } => {
-            if target_code(&format).is_none() {
-                eprintln!(
-                    "kiln: Can't convert to {}. Supported formats: {}.",
-                    format.trim_start_matches('.').to_ascii_uppercase(),
-                    SUPPORTED.join(", ")
-                );
-                return ExitCode::from(2);
-            }
-            match png_to_jpg(&input, &JpegOptions { quality, out_dir }) {
+            let opts = Options {
+                out_dir,
+                jpeg_quality: quality,
+                engines: Engines { ffmpeg, pandoc },
+                ..Options::default()
+            };
+            match kiln.convert(&input, &format, &opts) {
                 Ok(out) => {
                     println!("{}", out.display());
                     ExitCode::SUCCESS
                 }
                 Err(e) => {
                     eprintln!("kiln: {e}");
-                    ExitCode::FAILURE
+                    ExitCode::from(exit_code(&e))
                 }
             }
         }
+        Command::Formats { input } => {
+            let targets = kiln.targets_for(&input);
+            if targets.is_empty() {
+                let ext = input
+                    .extension()
+                    .map(|e| e.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                eprintln!("kiln: {}", Error::UnsupportedInput(ext));
+                return ExitCode::from(2);
+            }
+            for f in targets {
+                println!("{}", f.code());
+            }
+            ExitCode::SUCCESS
+        }
+    }
+}
+
+/// 2 for requests Kiln can't take on, 1 for conversions that failed.
+fn exit_code(e: &Error) -> u8 {
+    match e {
+        Error::UnsupportedInput(_) | Error::UnknownFormat(_) | Error::UnsupportedPair { .. } => 2,
+        _ => 1,
     }
 }

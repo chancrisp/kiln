@@ -146,12 +146,38 @@ fn unsupported_target_names_the_options() {
     kiln()
         .arg("convert")
         .arg(&input)
-        .arg("webp")
+        .arg("mp4")
         .assert()
         .code(2)
         .stdout("")
-        .stderr("kiln: Can't convert to WEBP. Supported formats: JPG.\n");
+        .stderr("kiln: Can't convert PNG to MP4. Supported formats: JPG.\n");
     assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn unknown_target_is_a_usage_error() {
+    let (_dir, input) = staged("rgb_gradient.png");
+    kiln()
+        .arg("convert")
+        .arg(&input)
+        .arg("webp")
+        .assert()
+        .code(2)
+        .stderr("kiln: WEBP isn't a format Kiln knows.\n");
+}
+
+#[test]
+fn formats_lists_compatible_outputs() {
+    kiln()
+        .args(["formats", "song.flac"])
+        .assert()
+        .success()
+        .stdout("M4A\nMP3\nOGG\nOPUS\nWAV\n");
+    kiln()
+        .args(["formats", "notes.xyz"])
+        .assert()
+        .code(2)
+        .stderr("kiln: Kiln can't convert XYZ files.\n");
 }
 
 #[test]

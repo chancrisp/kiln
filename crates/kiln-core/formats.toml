@@ -1,0 +1,135 @@
+# Kiln format registry.
+#
+# [formats.<ext>] describes one file type. Extensions are lowercase, without
+# the dot. `aliases` are other extensions that mean the same type; they are
+# accepted on input and never used for output names.
+#
+# Backend-specific keys:
+#   ffmpeg = [...]  arguments added before the output when FFmpeg writes this
+#                   type. Each item is one argument; nothing goes through a shell.
+#   pandoc = "..."  the name Pandoc uses for this type.
+#   standalone      Pandoc writes a complete document, not a fragment.
+#
+# [[route]] says which backend converts `from` types to `to` types. Every
+# from/to combination is a pair; identical types are skipped. Declaring the
+# same pair twice, in one route or across routes, is an error at load time.
+
+# --- Images -----------------------------------------------------------------
+
+[formats.png]
+kind = "image"
+
+[formats.jpg]
+kind = "image"
+aliases = ["jpeg"]
+
+# --- Audio ------------------------------------------------------------------
+
+[formats.wav]
+kind = "audio"
+ffmpeg = ["-c:a", "pcm_s16le"]
+
+[formats.mp3]
+kind = "audio"
+ffmpeg = ["-c:a", "libmp3lame", "-q:a", "2"]
+
+[formats.flac]
+kind = "audio"
+ffmpeg = ["-c:a", "flac"]
+
+[formats.ogg]
+kind = "audio"
+aliases = ["oga"]
+ffmpeg = ["-c:a", "libvorbis", "-q:a", "5"]
+
+[formats.opus]
+kind = "audio"
+ffmpeg = ["-c:a", "libopus", "-b:a", "128k"]
+
+[formats.m4a]
+kind = "audio"
+ffmpeg = ["-c:a", "aac", "-b:a", "192k"]
+
+# --- Video ------------------------------------------------------------------
+
+[formats.mp4]
+kind = "video"
+aliases = ["m4v"]
+ffmpeg = ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "23", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart"]
+
+[formats.mov]
+kind = "video"
+ffmpeg = ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "23", "-c:a", "aac", "-b:a", "160k"]
+
+[formats.mkv]
+kind = "video"
+ffmpeg = ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "23", "-c:a", "libopus", "-b:a", "128k"]
+
+[formats.webm]
+kind = "video"
+ffmpeg = ["-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "33", "-row-mt", "1", "-c:a", "libopus", "-b:a", "128k"]
+
+# --- Documents --------------------------------------------------------------
+
+[formats.md]
+kind = "document"
+aliases = ["markdown"]
+pandoc = "markdown"
+
+[formats.html]
+kind = "document"
+aliases = ["htm"]
+pandoc = "html"
+standalone = true
+
+[formats.docx]
+kind = "document"
+pandoc = "docx"
+
+[formats.odt]
+kind = "document"
+pandoc = "odt"
+
+[formats.epub]
+kind = "document"
+pandoc = "epub"
+
+[formats.rst]
+kind = "document"
+pandoc = "rst"
+
+[formats.tex]
+kind = "document"
+pandoc = "latex"
+standalone = true
+
+[formats.rtf]
+kind = "document"
+pandoc = "rtf"
+standalone = true
+
+[formats.txt]
+kind = "document"
+pandoc = "plain"
+
+# --- Routes -----------------------------------------------------------------
+
+[[route]]
+backend = "image"
+from = ["png"]
+to = ["jpg"]
+
+[[route]]
+backend = "ffmpeg"
+from = ["wav", "mp3", "flac", "ogg", "opus", "m4a"]
+to = ["wav", "mp3", "flac", "ogg", "opus", "m4a"]
+
+[[route]]
+backend = "ffmpeg"
+from = ["mp4", "mov", "mkv", "webm"]
+to = ["mp4", "mov", "mkv", "webm", "wav", "mp3", "flac", "ogg", "opus", "m4a"]
+
+[[route]]
+backend = "pandoc"
+from = ["md", "html", "docx", "odt", "epub", "rst", "tex"]
+to = ["md", "html", "docx", "odt", "epub", "rst", "tex", "rtf", "txt"]

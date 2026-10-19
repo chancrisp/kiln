@@ -1,85 +1,62 @@
 //! Raster conversion through the `image` crate.
 
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use image::codecs::jpeg::JpegEncoder;
 use image::{DynamicImage, ExtendedColorType, ImageEncoder, ImageFormat, ImageReader};
 
+use crate::converter::{Context, Converter, Progress, Request};
 use crate::error::{Error, Result};
-use crate::output;
 
 const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1A, b'\n'];
 
 /// Transparent pixels are composited onto this, since JPG has no alpha.
 const MATTE: [u8; 3] = [255, 255, 255];
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JpegOptions {
-    /// 1 to 100. Higher is larger and closer to the source.
-    pub quality: u8,
-    /// Where to write the result. `None` writes next to the input.
-    pub out_dir: Option<PathBuf>,
-}
+pub struct ImageConverter;
 
-impl Default for JpegOptions {
-    fn default() -> Self {
-        Self {
-            quality: 90,
-            out_dir: None,
+impl Converter for ImageConverter {
+    fn id(&self) -> &'static str {
+        "image"
+    }
+
+    /// PNG to JPG. Transparent areas are flattened onto white, since JPG
+    /// has no alpha. Grayscale images stay grayscale.
+    fn convert(&self, req: &Request<'_>, ctx: &mut Context<'_>) -> Result<()> {
+        if (req.from.ext.as_str(), req.to.ext.as_str()) != ("png", "jpg") {
+            return Err(Error::Registry(format!(
+                "The image backend can't convert {} to {}.",
+                req.from.code(),
+                req.to.code()
+            )));
         }
+        let quality = req.options.jpeg_quality;
+        if !(1..=100).contains(&quality) {
+            return Err(Error::InvalidQuality(quality));
+        }
+        check_png(req.input)?;
+        (ctx.progress)(Progress::Indeterminate);
+
+        let file = File::open(req.input).map_err(|e| Error::io(req.input, e))?;
+        let img = ImageReader::with_format(BufReader::new(file), ImageFormat::Png)
+            .decode()
+            .map_err(|e| Error::Decode {
+                path: req.input.to_path_buf(),
+                reason: e.to_string(),
+            })?;
+        if ctx.cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+
+        let out = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(req.output)
+            .map_err(|e| Error::io(req.output, e))?;
+        write_jpeg(out, &img, quality)
     }
-}
-
-/// Convert a PNG to a JPG and return the path that was written.
-///
-/// The output is named after the input and never replaces an existing
-/// file: if `photo.jpg` exists the result is `photo (1).jpg`. Transparent
-/// areas are flattened onto white. Grayscale images stay grayscale.
-pub fn png_to_jpg(input: &Path, opts: &JpegOptions) -> Result<PathBuf> {
-    if !(1..=100).contains(&opts.quality) {
-        return Err(Error::InvalidQuality(opts.quality));
-    }
-    check_png(input)?;
-
-    let out_dir = match &opts.out_dir {
-        Some(dir) => dir.clone(),
-        None => input
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from(".")),
-    };
-    let out_dir = if out_dir.as_os_str().is_empty() {
-        PathBuf::from(".")
-    } else {
-        out_dir
-    };
-    if !out_dir.is_dir() {
-        return Err(Error::OutputDirNotFound(out_dir));
-    }
-
-    // Decode before claiming an output name, so a bad input leaves nothing
-    // behind.
-    let file = File::open(input).map_err(|e| Error::io(input, e))?;
-    let img = ImageReader::with_format(BufReader::new(file), ImageFormat::Png)
-        .decode()
-        .map_err(|e| Error::Decode {
-            path: input.to_path_buf(),
-            reason: e.to_string(),
-        })?;
-
-    let stem = input
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let (file, out_path) = output::create_unique(&out_dir, &stem, "jpg")?;
-
-    if let Err(e) = write_jpeg(file, &img, opts.quality) {
-        let _ = fs::remove_file(&out_path);
-        return Err(e);
-    }
-    Ok(out_path)
 }
 
 /// Reject anything that isn't an existing file starting with the PNG
@@ -100,11 +77,16 @@ fn check_png(input: &Path) -> Result<()> {
     let mut file = File::open(input).map_err(|e| Error::io(input, e))?;
     match file.read_exact(&mut sig) {
         Ok(()) if sig == PNG_SIGNATURE => Ok(()),
-        Ok(()) => Err(Error::NotPng(input.to_path_buf())),
-        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-            Err(Error::NotPng(input.to_path_buf()))
-        }
+        Ok(()) => Err(not_png(input)),
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Err(not_png(input)),
         Err(e) => Err(Error::io(input, e)),
+    }
+}
+
+fn not_png(input: &Path) -> Error {
+    Error::WrongContent {
+        path: input.to_path_buf(),
+        code: "PNG".to_owned(),
     }
 }
 
@@ -120,8 +102,12 @@ fn write_jpeg(file: File, img: &DynamicImage, quality: u8) -> Result<()> {
         let pixels = flatten_rgb(img);
         encoder.write_image(&pixels, w, h, ExtendedColorType::Rgb8)
     };
-    result.map_err(|e| Error::Encode(e.to_string()))?;
-    out.flush().map_err(|e| Error::Encode(e.to_string()))?;
+    let encode_err = |reason: String| Error::Encode {
+        code: "JPG".to_owned(),
+        reason,
+    };
+    result.map_err(|e| encode_err(e.to_string()))?;
+    out.flush().map_err(|e| encode_err(e.to_string()))?;
     Ok(())
 }
 
@@ -170,10 +156,5 @@ mod tests {
         assert_eq!(blend(10, 255, 255), 10);
         assert_eq!(blend(10, 0, 255), 255);
         assert_eq!(blend(0, 128, 255), 127);
-    }
-
-    #[test]
-    fn default_quality_is_90() {
-        assert_eq!(JpegOptions::default().quality, 90);
     }
 }

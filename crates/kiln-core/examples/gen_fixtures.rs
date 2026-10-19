@@ -1,8 +1,12 @@
-//! Regenerates the PNG fixtures in tests/fixtures.
+//! Regenerates the fixtures in tests/fixtures.
 //!
 //! cargo run -p kiln-core --example gen_fixtures
+//!
+//! Images are made with the image crate. Audio, video and documents need
+//! `ffmpeg` and `pandoc` on PATH.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use image::{GrayImage, ImageBuffer, Luma, Rgb, RgbImage, Rgba, RgbaImage};
 
@@ -39,4 +43,160 @@ fn main() {
 
     // Text with a .png extension.
     std::fs::write(dir.join("not_really.png"), b"this is plain text\n").unwrap();
+
+    media(&dir);
+    documents(&dir);
+}
+
+fn run(program: &str, args: &[&str], cwd: &Path) {
+    let status = Command::new(program)
+        .args(args)
+        .current_dir(cwd)
+        .status()
+        .unwrap_or_else(|e| panic!("couldn't start {program}: {e}"));
+    assert!(status.success(), "{program} {args:?} failed");
+}
+
+/// One second of audio and video, tiny and deterministic.
+fn media(dir: &Path) {
+    let ff = |args: &[&str]| {
+        let mut all = vec!["-hide_banner", "-loglevel", "error", "-y", "-bitexact"];
+        all.extend_from_slice(args);
+        run("ffmpeg", &all, dir);
+    };
+    let tone = "sine=frequency=440:sample_rate=22050:duration=1";
+    ff(&[
+        "-f",
+        "lavfi",
+        "-i",
+        tone,
+        "-ac",
+        "1",
+        "-c:a",
+        "pcm_s16le",
+        "sample.wav",
+    ]);
+    ff(&[
+        "-i",
+        "sample.wav",
+        "-c:a",
+        "libmp3lame",
+        "-b:a",
+        "32k",
+        "sample.mp3",
+    ]);
+    ff(&["-i", "sample.wav", "-c:a", "flac", "sample.flac"]);
+    ff(&[
+        "-i",
+        "sample.wav",
+        "-c:a",
+        "libvorbis",
+        "-q:a",
+        "0",
+        "sample.ogg",
+    ]);
+    ff(&[
+        "-i",
+        "sample.wav",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "16k",
+        "sample.opus",
+    ]);
+    ff(&[
+        "-i",
+        "sample.wav",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "32k",
+        "sample.m4a",
+    ]);
+
+    let picture = "testsrc=size=64x48:rate=10:duration=1";
+    let h264 = ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "40"];
+    for (name, audio) in [
+        ("sample.mp4", ["-c:a", "aac", "-b:a", "32k"]),
+        ("sample.mov", ["-c:a", "aac", "-b:a", "32k"]),
+        ("sample.mkv", ["-c:a", "libopus", "-b:a", "16k"]),
+    ] {
+        let mut args = vec!["-f", "lavfi", "-i", picture, "-f", "lavfi", "-i", tone];
+        args.extend_from_slice(&h264);
+        args.extend_from_slice(&audio);
+        args.extend_from_slice(&["-shortest", name]);
+        ff(&args);
+    }
+    ff(&[
+        "-f",
+        "lavfi",
+        "-i",
+        picture,
+        "-f",
+        "lavfi",
+        "-i",
+        tone,
+        "-c:v",
+        "libvpx-vp9",
+        "-b:v",
+        "0",
+        "-crf",
+        "50",
+        "-deadline",
+        "realtime",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "16k",
+        "-shortest",
+        "sample.webm",
+    ]);
+
+    // Text with a media extension.
+    std::fs::write(dir.join("corrupt.wav"), b"RIFF but not really\n").unwrap();
+}
+
+const MARKDOWN: &str = "---
+title: Kiln fixture
+---
+
+# Kiln fixture
+
+A small document with *emphasis*, **strong text** and a list:
+
+- clay
+- glaze
+- fire
+
+| Cone | Temperature |
+|------|-------------|
+| 06   | 999 C       |
+| 6    | 1222 C      |
+";
+
+fn documents(dir: &Path) {
+    std::fs::write(dir.join("sample.md"), MARKDOWN).unwrap();
+    for (out, to) in [
+        ("sample.html", "html"),
+        ("sample.docx", "docx"),
+        ("sample.odt", "odt"),
+        ("sample.epub", "epub"),
+        ("sample.rst", "rst"),
+        ("sample.tex", "latex"),
+    ] {
+        run(
+            "pandoc",
+            &[
+                "--standalone",
+                "-f",
+                "markdown",
+                "-t",
+                to,
+                "-o",
+                out,
+                "sample.md",
+            ],
+            dir,
+        );
+    }
 }

@@ -1,31 +1,33 @@
+//! The image backend, through the full `Kiln::convert` path.
+
+#[path = "../../../tests/support/mod.rs"]
+mod support;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use image::{ColorType, GenericImageView, ImageFormat};
-use kiln_core::{png_to_jpg, Error, JpegOptions};
+use kiln_core::{Error, Kiln, Options};
+use support::{files_in, fixture};
 use tempfile::TempDir;
 
-fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures")
-        .join(name)
-}
-
-/// Copy a fixture into a fresh temp dir so outputs land somewhere disposable.
 fn staged(name: &str) -> (TempDir, PathBuf) {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join(name);
-    fs::copy(fixture(name), &path).unwrap();
-    (dir, path)
+    support::stage(&fixture(name))
 }
 
-fn files_in(dir: &Path) -> Vec<String> {
-    let mut names: Vec<String> = fs::read_dir(dir)
-        .unwrap()
-        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-        .collect();
-    names.sort();
-    names
+#[derive(Default)]
+struct JpegOptions {
+    quality: Option<u8>,
+    out_dir: Option<PathBuf>,
+}
+
+fn png_to_jpg(input: &Path, opts: &JpegOptions) -> kiln_core::Result<PathBuf> {
+    let options = Options {
+        out_dir: opts.out_dir.clone(),
+        jpeg_quality: opts.quality.unwrap_or(90),
+        ..Options::default()
+    };
+    Kiln::new().convert(input, "jpg", &options)
 }
 
 fn assert_jpeg(path: &Path) -> image::DynamicImage {
@@ -154,7 +156,7 @@ fn quality_changes_the_output_size() {
     let low = png_to_jpg(
         &input,
         &JpegOptions {
-            quality: 10,
+            quality: Some(10),
             ..JpegOptions::default()
         },
     )
@@ -162,7 +164,7 @@ fn quality_changes_the_output_size() {
     let high = png_to_jpg(
         &input,
         &JpegOptions {
-            quality: 100,
+            quality: Some(100),
             ..JpegOptions::default()
         },
     )
@@ -175,7 +177,7 @@ fn out_of_range_quality_is_rejected() {
     let (dir, input) = staged("rgb_gradient.png");
     for q in [0, 101] {
         let opts = JpegOptions {
-            quality: q,
+            quality: Some(q),
             ..JpegOptions::default()
         };
         assert!(matches!(
@@ -205,7 +207,7 @@ fn a_folder_is_not_an_input() {
 fn non_png_content_is_rejected_whatever_the_extension() {
     let (dir, input) = staged("not_really.png");
     let err = png_to_jpg(&input, &JpegOptions::default()).unwrap_err();
-    assert!(matches!(err, Error::NotPng(_)));
+    assert!(matches!(err, Error::WrongContent { .. }));
     assert_eq!(files_in(dir.path()), ["not_really.png"]);
 }
 
@@ -223,7 +225,10 @@ fn error_messages_follow_the_voice_rules() {
     let errors = [
         Error::InputNotFound(dir.path().join("a.png")),
         Error::InputNotAFile(dir.path().to_path_buf()),
-        Error::NotPng(dir.path().join("a.png")),
+        Error::WrongContent {
+            path: dir.path().join("a.png"),
+            code: "PNG".into(),
+        },
         Error::OutputDirNotFound(dir.path().to_path_buf()),
         Error::InvalidQuality(0),
     ];
