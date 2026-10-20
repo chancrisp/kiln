@@ -89,3 +89,12 @@ fn a_missing_file_exits_2() {
     );
     assert!(out.stdout.is_empty());
 }
+
+#[test]
+fn letterboxed_video_is_worded_by_axis() {
+    let out = stdout(&suggest(&["letterbox.mp4"]));
+    assert!(
+        out.ends_with("(all)           Crop  Black bars above and below.\n"),
+        "{out}"
+    );
+}

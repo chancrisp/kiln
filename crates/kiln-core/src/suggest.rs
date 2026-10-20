@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::facts::{Facts, Look};
+use crate::facts::{Bars, Facts, Look};
 use crate::registry::Kind;
 use crate::tools::Tool;
 
@@ -273,6 +273,22 @@ fn convert_suggestion(files: &[Facts], offered: &Offered, habits: &Habits) -> Op
     })
 }
 
+/// The Crop reason for `files`, by the bars they have. Files whose bars
+/// differ share the numberless form.
+fn crop_reason(files: &[Facts]) -> &'static str {
+    let first = files.first().and_then(|f| f.bars);
+    if !files.iter().all(|f| f.bars == first) {
+        return "Black bars to crop.";
+    }
+    match first {
+        Some(Bars::Sides) => "Black bars on the sides.",
+        Some(Bars::AboveBelow) => "Black bars above and below.",
+        Some(Bars::Around) => "Black bars around the picture.",
+        // Crop doesn't apply then.
+        _ => "Black bars to crop.",
+    }
+}
+
 fn tool_suggestion(files: &[Facts], offered: &Offered) -> Option<Suggestion> {
     let every = |test: fn(&Facts) -> bool| files.iter().all(test);
     let several = files.len() >= 2;
@@ -290,8 +306,8 @@ fn tool_suggestion(files: &[Facts], offered: &Offered) -> Option<Suggestion> {
         ),
         (
             Tool::Crop,
-            every(|f| f.kind == Kind::Video && f.bars == Some(true)),
-            Reason::Fixed("Black bars on the sides."),
+            every(|f| f.kind == Kind::Video && f.bars.is_some_and(|b| b != Bars::None)),
+            Reason::Fixed(crop_reason(files)),
         ),
     ];
     let (tool, _, reason) = rules
@@ -399,7 +415,7 @@ mod tests {
         f
     }
 
-    fn with_bars(mut f: Facts, bars: bool) -> Facts {
+    fn with_bars(mut f: Facts, bars: Bars) -> Facts {
         f.bars = Some(bars);
         f
     }
@@ -595,11 +611,28 @@ mod tests {
             )
         );
 
-        let barred = with_bars(facts("mp4", Kind::Video), true);
+        let barred = |b| with_bars(facts("mp4", Kind::Video), b);
+        for (bars, reason) in [
+            (Bars::Sides, "Black bars on the sides."),
+            (Bars::AboveBelow, "Black bars above and below."),
+            (Bars::Around, "Black bars around the picture."),
+        ] {
+            assert_eq!(tool(&[barred(bars)]), tl(Tool::Crop, reason, None));
+            // A set whose bars agree keeps the worded reason.
+            assert_eq!(
+                tool(&[barred(bars), barred(bars)]),
+                tl(Tool::Crop, reason, None)
+            );
+        }
+        // A set whose bars differ shares the numberless form.
         assert_eq!(
-            tool(&[barred]),
-            tl(Tool::Crop, "Black bars on the sides.", None)
+            tool(&[barred(Bars::Sides), barred(Bars::AboveBelow)]),
+            tl(Tool::Crop, "Black bars to crop.", None)
         );
+        // No bars worth cropping, or not known, is no Crop.
+        assert_eq!(tool(&[barred(Bars::None)]), None);
+        assert_eq!(tool(&[facts("mp4", Kind::Video)]), None);
+        assert_eq!(tool(&[barred(Bars::Sides), barred(Bars::None)]), None);
     }
 
     #[test]

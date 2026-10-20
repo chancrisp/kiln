@@ -63,8 +63,9 @@ pub struct Facts {
     /// Audio and video: what ffprobe reports.
     pub media: Option<MediaInfo>,
     pub pdf: Option<PdfFacts>,
-    /// Video only: whether black bars were found.
-    pub bars: Option<bool>,
+    /// Video only: which black bars were found. `None` when the check
+    /// failed, was cut off or wasn't run.
+    pub bars: Option<Bars>,
     /// Likely size of the result, by target extension, for targets a rule may pick.
     pub estimates: BTreeMap<String, u64>,
     /// Likely size after Compress.
@@ -80,6 +81,42 @@ pub struct Picture {
     /// A GIF or APNG with more than one frame.
     pub animated: bool,
     pub look: Look,
+}
+
+/// Which black bars a video has, by axis. A bar counts only when it takes
+/// at least 4% of the frame on its axis, about 2% a side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bars {
+    /// No bars worth cropping.
+    None,
+    /// Bars on the left and right only.
+    Sides,
+    /// Bars on the top and bottom only.
+    AboveBelow,
+    /// Bars on both axes.
+    Around,
+}
+
+impl Bars {
+    /// The bars a `crop` (width, height) of a `frame` (width, height)
+    /// leaves out. An axis counts when the crop is at least 4% shorter
+    /// than the frame on it, compared exactly in integers: `(W - w) * 100
+    /// >= W * 4`. A crop with a zero side, or a zero frame, is `None`.
+    pub fn of(frame: (u32, u32), crop: (u32, u32)) -> Bars {
+        let ((fw, fh), (w, h)) = (frame, crop);
+        if fw == 0 || fh == 0 || w == 0 || h == 0 {
+            return Bars::None;
+        }
+        let thick = |whole: u32, kept: u32| {
+            u64::from(whole.saturating_sub(kept)) * 100 >= u64::from(whole) * 4
+        };
+        match (thick(fw, w), thick(fh, h)) {
+            (true, true) => Bars::Around,
+            (true, false) => Bars::Sides,
+            (false, true) => Bars::AboveBelow,
+            (false, false) => Bars::None,
+        }
+    }
 }
 
 /// Whether a picture reads as a photo or as flat artwork.
@@ -247,10 +284,10 @@ fn alpha_format(pix_fmt: &str) -> bool {
         || matches!(pix_fmt, "bgra" | "argb" | "abgr")
 }
 
-/// Whether FFmpeg's black-bar detector finds bars in the first
+/// Which bars FFmpeg's black-bar detector finds in the first
 /// `BAR_SCAN_SECONDS` of a `frame`-sized video. `None` when the run fails
 /// or is cut off.
-fn bars(path: &Path, frame: (u32, u32), opts: &Options, cancel: &CancelToken) -> Option<bool> {
+fn bars(path: &Path, frame: (u32, u32), opts: &Options, cancel: &CancelToken) -> Option<Bars> {
     if cancel.is_cancelled() {
         return None;
     }
@@ -271,9 +308,7 @@ fn bars(path: &Path, frame: (u32, u32), opts: &Options, cancel: &CancelToken) ->
         Some(BAR_SCAN_SECONDS),
     )
     .ok()?;
-    Some(
-        crate::tools::last_crop(&log).is_some_and(|(w, h, _, _)| (w, h) != frame && w > 0 && h > 0),
-    )
+    Some(crate::tools::last_crop(&log).map_or(Bars::None, |(w, h, _, _)| Bars::of(frame, (w, h))))
 }
 
 /// A PDF's page count and whether its first pages hold text. A PDF over
@@ -636,6 +671,25 @@ mod tests {
         ] {
             assert!(!alpha_format(f), "{f}");
         }
+    }
+
+    #[test]
+    fn bars_are_read_by_axis() {
+        let hd = (1920, 1080);
+        assert_eq!(Bars::of(hd, (1440, 1080)), Bars::Sides);
+        assert_eq!(Bars::of(hd, (1920, 800)), Bars::AboveBelow);
+        assert_eq!(Bars::of(hd, (1440, 800)), Bars::Around);
+        assert_eq!(Bars::of(hd, hd), Bars::None);
+        // About 1% a side is too thin to crop.
+        assert_eq!(Bars::of(hd, (1880, 1060)), Bars::None);
+        // 4% of the axis, 2% a side, is the least that counts.
+        assert_eq!(Bars::of((1000, 1000), (960, 961)), Bars::Sides);
+        assert_eq!(Bars::of((1000, 1000), (961, 960)), Bars::AboveBelow);
+        // A crop with no picture left, or larger than the frame, is no bars.
+        assert_eq!(Bars::of(hd, (0, 1080)), Bars::None);
+        assert_eq!(Bars::of(hd, (1920, 0)), Bars::None);
+        assert_eq!(Bars::of(hd, (1936, 1088)), Bars::None);
+        assert_eq!(Bars::of((0, 0), (0, 0)), Bars::None);
     }
 
     #[test]

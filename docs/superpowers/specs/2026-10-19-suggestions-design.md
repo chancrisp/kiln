@@ -202,7 +202,12 @@ Tools:
 | Video above 8 Mbit/s on average, or over 500 MB | Compress | "Large for its length. About 180 MB after." |
 | Two or more PDFs | Merge | "One PDF, in the order shown." |
 | Two or more images | Merge | "One PDF, a page each, in the order shown." |
-| Video with black bars | Crop | "Black bars on the sides." |
+| Video with black bars | Crop | "Black bars on the sides.", "Black bars above and below." or "Black bars around the picture." |
+
+Crop is worded by the bars found: left and right only, top and bottom only,
+or both. A bar counts only when it takes at least 4% of the frame on its
+axis, about 2% a side; thinner bars get no Crop. Several videos whose bars
+differ share the numberless form "Black bars to crop."
 
 Numbers in reasons come from `estimate` and are rounded to two significant
 figures. A JPG photo, an MP4 video and an MP3 get no convert suggestion:

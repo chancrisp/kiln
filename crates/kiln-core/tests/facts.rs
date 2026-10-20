@@ -11,7 +11,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use image::{Rgb, RgbImage};
-use kiln_core::{inspect, CancelToken, Facts, Kiln, Kind, Look, Options, PdfFacts};
+use kiln_core::{inspect, Bars, CancelToken, Facts, Kiln, Kind, Look, Options, PdfFacts};
 use support::fixture;
 
 fn f(name: &str) -> Facts {
@@ -240,12 +240,12 @@ fn a_scanned_pdf() {
 
 #[test]
 fn black_bars_are_found() {
-    assert_eq!(f("letterbox.mp4").bars, Some(true));
+    assert_eq!(f("letterbox.mp4").bars, Some(Bars::AboveBelow));
 }
 
 #[test]
 fn no_bars_are_found() {
-    assert_eq!(f("sample.mp4").bars, Some(false));
+    assert_eq!(f("sample.mp4").bars, Some(Bars::None));
 }
 
 #[test]
