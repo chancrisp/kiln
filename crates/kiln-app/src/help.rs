@@ -41,8 +41,14 @@ fn line(keys: impl Into<String>, what: impl Into<String>) -> HelpLine {
     }
 }
 
+/// Where results go, when this run has a holding folder.
+const HELD_NOTE: &str =
+    "Results wait in Kiln until you export them. Nothing is saved until you do.";
+
 /// Everything the overlay says, with the wheel keys as they are set now.
-pub fn help_content(keys: &KeyMap) -> Vec<HelpSection> {
+/// `holding` is whether this run has a holding folder: without one,
+/// results are saved next to each file, and the Results note says so.
+pub fn help_content(keys: &KeyMap, holding: bool) -> Vec<HelpSection> {
     let enter = |w: WheelKind| MenuItem::Wheel(w).parts(keys).1;
     let held = |w: WheelKind| format!("Hold {} and drop", keys.key_for(w).name());
     vec![
@@ -54,7 +60,7 @@ pub fn help_content(keys: &KeyMap) -> Vec<HelpSection> {
                 line("Ctrl+V", "Paste files copied in File Explorer."),
                 line(
                     "Right-click",
-                    "Right-click a file in the list to convert it, use a tool on it or act on it.",
+                    "Right-click a file in the list to convert it, use a tool on it or a file action.",
                 ),
                 line(held(WheelKind::Convert), "Choose a format to convert to."),
                 line(held(WheelKind::Tools), "Choose a tool."),
@@ -66,7 +72,11 @@ pub fn help_content(keys: &KeyMap) -> Vec<HelpSection> {
             lines: vec![
                 line(
                     "",
-                    "Results wait in Kiln until you export them. Nothing is saved until you do.",
+                    if holding {
+                        HELD_NOTE
+                    } else {
+                        crate::model::NO_HOLDING
+                    },
                 ),
                 line("Ctrl+S", "Export the selected results."),
                 line("Ctrl+Shift+S", "Export all: every result Kiln holds."),
@@ -202,7 +212,7 @@ mod tests {
 
     #[test]
     fn help_has_the_ways_in_results_and_shortcuts() {
-        let h = help_content(&KeyMap::default());
+        let h = help_content(&KeyMap::default(), true);
         let titles: Vec<_> = h.iter().map(|s| s.title).collect();
         assert_eq!(
             titles,
@@ -239,8 +249,16 @@ mod tests {
     }
 
     #[test]
+    fn without_a_holding_folder_help_says_results_are_saved_by_their_files() {
+        let h = help_content(&KeyMap::default(), false);
+        let results = find(&h, "Results");
+        assert_eq!(results.lines[0].what, crate::model::NO_HOLDING);
+        assert!(results.lines[0].what.contains("saved next to each file"));
+    }
+
+    #[test]
     fn the_table_lists_the_keys_the_window_handles() {
-        let h = help_content(&KeyMap::default());
+        let h = help_content(&KeyMap::default(), true);
         // The table's content, pinned. Nothing here ties it to the
         // handlers: each entry was checked by hand against `App::key`,
         // `WM_CONTEXTMENU` and `WM_LBUTTONDBLCLK`, and a key added there
@@ -288,7 +306,7 @@ mod tests {
     fn help_follows_the_wheel_keys() {
         let mut keys = KeyMap::default();
         keys.assign(WheelKind::Tools, Modifier::Shift);
-        let h = help_content(&keys);
+        let h = help_content(&keys, true);
         let ways = keys_of(find(&h, "Ways in"));
         assert_eq!(
             ways[4..],
@@ -311,7 +329,7 @@ mod tests {
         assert_eq!(ADD_FILES_TIP, "Add files (Ctrl+O)");
         assert_eq!(EXPORT_ALL_TIP, "Export all (Ctrl+Shift+S)");
         // Each shortcut a tip names is one the help table lists.
-        let h = help_content(&KeyMap::default());
+        let h = help_content(&KeyMap::default(), true);
         let listed = |k: &str| h.iter().flat_map(|s| &s.lines).any(|l| l.keys == k);
         for k in ["Ctrl+,", "F1", "Ctrl+S", "Ctrl+O", "Ctrl+Shift+S"] {
             assert!(listed(k), "{k}");
@@ -320,7 +338,7 @@ mod tests {
 
     #[test]
     fn help_reads_calmly() {
-        for s in help_content(&KeyMap::default()) {
+        for s in help_content(&KeyMap::default(), true) {
             for l in &s.lines {
                 assert!(l.what.ends_with('.'), "{}", l.what);
                 assert!(!l.what.contains('!'), "{}", l.what);
@@ -339,7 +357,7 @@ mod tests {
             ("Up, Down, Home, End", 135.3),
             ("Left, Right, Up, Down", 130.2),
         ];
-        let h = help_content(&KeyMap::default());
+        let h = help_content(&KeyMap::default(), true);
         for (keys, w) in WIDEST {
             assert!(h.iter().flat_map(|s| &s.lines).any(|l| l.keys == keys));
             assert!(w <= KEYS_WIDTH, "{keys}");
@@ -356,7 +374,7 @@ mod tests {
 
     #[test]
     fn lines_stack_and_notes_run_the_width() {
-        let h = help_content(&KeyMap::default());
+        let h = help_content(&KeyMap::default(), true);
         // A fake measure: 20 per line at 7 DIPs a character.
         let height = |s: &str, w: f32| {
             let per = (w / 7.0).floor().max(1.0) as usize;

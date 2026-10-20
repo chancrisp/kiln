@@ -680,6 +680,9 @@ struct App {
     /// The header or footer button Tab moved the keyboard to. `None` is
     /// the list. See `focused_button` for whether it's still there.
     button_focus: Option<FocusButton>,
+    /// Files dropped or sent from Explorer while a panel or dialog was up,
+    /// added once the list is in view again.
+    queued: Vec<PathBuf>,
 }
 
 impl App {
@@ -2062,6 +2065,8 @@ impl App {
                 }
             }
             None => {
+                // From the keyboard: the focus ring shows, as for any key.
+                self.files.keyboard_used();
                 let rows = self.files.selection();
                 let focus = self.files.selected().or(rows.first().copied());
                 (rows, focus)
@@ -2958,7 +2963,7 @@ impl App {
         }
         self.close_wheel();
         self.help = Some(HelpUi {
-            sections: help::help_content(&self.settings.keys),
+            sections: help::help_content(&self.settings.keys, self.holding.is_some()),
             scroll: 0.0,
             hover: false,
             pressed: false,
@@ -3810,7 +3815,14 @@ impl App {
             VK_V if ctrl => self.paste(true),
             // Ctrl+S exports the selected rows, Ctrl+Shift+S everything.
             VK_S if ctrl && shift => self.export_everything(),
-            VK_S if ctrl => self.export_rows(&self.files.selection()),
+            VK_S if ctrl => {
+                let rows = self.files.selection();
+                if rows.is_empty() {
+                    self.alert("Select a result to export.".to_owned());
+                } else {
+                    self.export_rows(&rows);
+                }
+            }
             // Space follows the selected row's link, with one row selected,
             // or stops it while it runs.
             VK_SPACE => {
@@ -3861,8 +3873,30 @@ impl App {
         self.wheel_point(at.0, at.1);
     }
 
+    /// Whether files that arrive now wait to be added: a panel or one of
+    /// Kiln's dialogs is up, and a row added beneath it would go unseen or
+    /// change the list a dialog was asked about.
+    fn adds_wait(&self) -> bool {
+        system::modal_open() || self.over() == Over::Panel
+    }
+
+    /// Add `paths` now, or once the list is in view again.
+    fn add_when_live(&mut self, paths: Vec<PathBuf>) {
+        if self.adds_wait() {
+            self.queued.extend(paths);
+        } else {
+            self.add(paths, false);
+        }
+    }
+
     fn dropped(&mut self, ev: &DragEvent) {
         self.drag.set(0.0, motion::QUICK_MS);
+        if self.adds_wait() {
+            self.queued.extend(ev.paths.iter().cloned());
+            self.drag_paths.clear();
+            self.invalidate();
+            return;
+        }
         let chosen = self
             .wheel
             .as_mut()
@@ -4770,6 +4804,7 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         teller: a11y::StatusTeller::default(),
         take_focus: false,
         button_focus: None,
+        queued: vec![],
     });
     let app = Box::into_raw(app);
     unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, app as isize) };
@@ -4992,6 +5027,12 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
 /// After each message, tell UI Automation each status set, at once, then
 /// bring its tree up to date, even while minimised, when nothing paints.
 fn after(app: &mut App, msg: u32, wparam: WPARAM) {
+    // Files that arrived under a panel or a dialog join the list once it's
+    // back in view.
+    if !app.queued.is_empty() && !app.adds_wait() {
+        let paths = std::mem::take(&mut app.queued);
+        app.add(paths, false);
+    }
     let sets: Vec<(String, bool)> = app
         .status_sets
         .drain(..)
@@ -5060,7 +5101,7 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
         WM_COPYDATA => {
             let files = unsafe { handoff::received(lparam) }?;
             if !files.is_empty() {
-                app.add(files, false);
+                app.add_when_live(files);
             }
             Some(LRESULT(1))
         }

@@ -89,7 +89,7 @@ picks**, beside it, clears the picks Kiln has counted.
 <table>
   <tr>
     <td align="center"><img src="docs/screenshots/m7/jobs-light-100.png" alt="A running job, a finished one and a failed one" width="400"><br><b>JOBS</b><br><sub>Run in the background, each with its own progress line and cancel</sub></td>
-    <td align="center"><img src="docs/screenshots/m7/settings-update-100.png" alt="The settings panel" width="400"><br><b>SETTINGS</b><br><sub>Output folder, theme, wheel keys, quality defaults and helper apps</sub></td>
+    <td align="center"><img src="docs/screenshots/m7/settings-update-100.png" alt="The settings panel" width="400"><br><b>SETTINGS</b><br><sub>Where exports start, theme, keys to hold while dropping, suggestions, quality defaults and helper apps</sub></td>
   </tr>
   <tr>
     <td align="center"><img src="docs/screenshots/m5/details-100.png" alt="The details dialog with a helper app's output" width="400"><br><b>DETAILS</b><br><sub>A failed job shows one plain line, with the helper app's full output a click away</sub></td>

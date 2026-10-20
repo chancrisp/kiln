@@ -924,7 +924,12 @@ fn settings(s: &SettingsIn) -> Node {
             Control::OutputReset | Control::EngineReset(_) => {
                 Node::new(Id::Setting(c), Role::Button, "Reset", r)
             }
-            Control::EngineGet(_) => Node::new(Id::Setting(c), Role::Hyperlink, "Get it", r),
+            Control::EngineGet(e) => Node::new(
+                Id::Setting(c),
+                Role::Hyperlink,
+                format!("Get {}", e.label()),
+                r,
+            ),
             Control::Theme(t) => {
                 Node::new(Id::Setting(c), Role::RadioButton, t.label(), r).selected(t == s.theme)
             }
@@ -1628,7 +1633,8 @@ mod tests {
         let last = crate::settings::Engine::ALL[3];
         let row = named(&t, Role::Group, last.label());
         named(row, Role::Text, "Not found");
-        named(row, Role::Hyperlink, "Get it");
+        named(row, Role::Hyperlink, &format!("Get {}", last.label()));
+        assert_eq!(last.label(), "Calibre");
         named(row, Role::Button, "Choose");
         assert_eq!(row.help.as_deref(), Some(last.purpose()));
     }
@@ -1656,7 +1662,7 @@ mod tests {
     #[test]
     fn help_reads_each_section() {
         let lines = empty_lines(&Settings::default());
-        let sections = help_content(&KeyMap::default());
+        let sections = help_content(&KeyMap::default(), true);
         let mut i = input(&lines, vec![]);
         i.help = Some(&sections);
         let t = tree(&i);
