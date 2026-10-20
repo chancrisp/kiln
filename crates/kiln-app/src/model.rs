@@ -345,6 +345,28 @@ impl Entry {
             .is_some_and(|outputs| outputs.iter().any(|p| !exists(p)))
     }
 
+    /// The link at the right of the row: "Show details" on a failed row
+    /// with more to show, "Export" on a row holding results.
+    pub fn link(&self) -> Option<&'static str> {
+        match &self.job {
+            JobState::Failed { details, .. } if !details.is_empty() => Some("Show details"),
+            _ if self.held().is_some() => Some("Export"),
+            _ => None,
+        }
+    }
+
+    /// Where an exported row's results went: the folder and the files.
+    pub fn saved(&self) -> Option<(&Path, &[PathBuf])> {
+        match &self.job {
+            JobState::Done {
+                outputs,
+                saved: Some(folder),
+                ..
+            } => Some((folder, outputs)),
+            _ => None,
+        }
+    }
+
     /// [`Entry::line`], except a held result that has gone says so.
     pub fn line_checked(&self, exists: impl Fn(&Path) -> bool) -> (String, Tone) {
         if self.is_gone(exists) {
@@ -529,13 +551,67 @@ impl FileList {
             .collect()
     }
 
-    /// How many result files are held (not rows: a split counts its parts).
+    /// How many result files are held (not rows: a split counts its parts,
+    /// and a merge's one result counts once however many rows share it).
     pub fn held_count(&self) -> usize {
-        self.entries
-            .iter()
-            .filter_map(Entry::held)
-            .map(<[PathBuf]>::len)
-            .sum()
+        self.held_files(|_| true).len()
+    }
+
+    /// Every held result file of the rows `rows` picks, once each, in list
+    /// order.
+    pub fn held_files(&self, rows: impl Fn(usize) -> bool) -> Vec<PathBuf> {
+        let mut seen = std::collections::HashSet::new();
+        let mut files: Vec<PathBuf> = Vec::new();
+        for (i, e) in self.entries.iter().enumerate() {
+            let Some(held) = e.held().filter(|_| rows(i)) else {
+                continue;
+            };
+            for p in held {
+                if seen.insert(p) {
+                    files.push(p.clone());
+                }
+            }
+        }
+        files
+    }
+
+    /// What leaving the rows `rows` (removing them, or starting something
+    /// new on them) would lose: their held files that no other row holds.
+    pub fn held_only_by(&self, rows: impl Fn(usize) -> bool) -> Vec<PathBuf> {
+        let others = self.held_files(|i| !rows(i));
+        self.held_files(rows)
+            .into_iter()
+            .filter(|p| !others.contains(p))
+            .collect()
+    }
+
+    /// Record exported results: `moved` maps each held file that went out
+    /// to where it went, all into `folder`. A row whose results all went
+    /// out is saved there; a row with some left keeps holding those.
+    pub fn exported(&mut self, moved: &[(PathBuf, PathBuf)], folder: &Path) {
+        let moved_to = |p: &PathBuf| moved.iter().find(|(from, _)| from == p).map(|(_, to)| to);
+        for e in &mut self.entries {
+            let Some(held) = e.held() else {
+                continue;
+            };
+            if !held.iter().any(|p| moved_to(p).is_some()) {
+                continue;
+            }
+            let left: Vec<PathBuf> = held
+                .iter()
+                .filter(|p| moved_to(p).is_none())
+                .cloned()
+                .collect();
+            let JobState::Done { outputs, saved, .. } = &mut e.job else {
+                continue;
+            };
+            if left.is_empty() {
+                *outputs = outputs.iter().filter_map(moved_to).cloned().collect();
+                *saved = Some(folder.to_path_buf());
+            } else {
+                *outputs = left;
+            }
+        }
     }
 
     pub fn entries_mut(&mut self) -> &mut [Entry] {
@@ -1159,6 +1235,99 @@ mod tests {
         assert_eq!(list.held_count(), 4);
         assert_eq!(FileList::default().held_count(), 0);
         assert!(FileList::default().held().is_empty());
+    }
+
+    #[test]
+    fn rows_link_to_details_or_export() {
+        let mut failed = row("a.png");
+        failed.job = JobState::Failed {
+            message: "Couldn't convert the file to JPG.".into(),
+            details: "engine output".into(),
+        };
+        assert_eq!(failed.link(), Some("Show details"));
+        failed.job = JobState::Failed {
+            message: "Couldn't convert the file to JPG.".into(),
+            details: String::new(),
+        };
+        assert_eq!(failed.link(), None);
+        let held = held_row("a.png", &["held/a.jpg"], None);
+        assert_eq!(held.link(), Some("Export"));
+        assert_eq!(held.saved(), None);
+        let saved = held_row("a.png", &[r"C:\Out\a.jpg"], Some(r"C:\Out"));
+        assert_eq!(saved.link(), None);
+        assert_eq!(
+            saved.saved(),
+            Some((Path::new(r"C:\Out"), &[PathBuf::from(r"C:\Out\a.jpg")][..]))
+        );
+        assert_eq!(row("idle.png").link(), None);
+    }
+
+    #[test]
+    fn a_merged_result_counts_once() {
+        // Merge gives both its rows the same one result.
+        let list = FileList {
+            entries: vec![
+                held_row("a.mp3", &["held/a merged.mp3"], None),
+                held_row("b.mp3", &["held/a merged.mp3"], None),
+                held_row("c.png", &["held/c.jpg"], None),
+            ],
+            selected: None,
+        };
+        assert_eq!(list.held_count(), 2);
+        assert_eq!(
+            list.held_files(|i| i < 2),
+            vec![PathBuf::from("held/a merged.mp3")]
+        );
+        // Removing one merge row loses nothing: the other still holds it.
+        assert!(list.held_only_by(|i| i == 0).is_empty());
+        assert_eq!(
+            list.held_only_by(|i| i != 2),
+            vec![PathBuf::from("held/a merged.mp3")]
+        );
+        assert_eq!(
+            list.held_only_by(|i| i == 2),
+            vec![PathBuf::from("held/c.jpg")]
+        );
+    }
+
+    #[test]
+    fn exported_rows_are_saved_and_the_rest_stay_held() {
+        let mut list = FileList {
+            entries: vec![
+                held_row("a.png", &["held/a.jpg"], None),
+                held_row("b.pdf", &["held/p 1.png", "held/p 2.png"], None),
+                held_row("c.mp3", &["held/m.mp3"], None),
+                held_row("d.mp3", &["held/m.mp3"], None),
+                held_row("e.png", &["held/e.jpg"], None),
+            ],
+            selected: None,
+        };
+        let out = Path::new(r"C:\Out");
+        let moved = vec![
+            ("held/a.jpg".into(), out.join("a.jpg")),
+            ("held/p 1.png".into(), out.join("p 1.png")),
+            ("held/m.mp3".into(), out.join("m (1).mp3")),
+        ];
+        list.exported(&moved, out);
+        let e = list.entries();
+        assert_eq!(
+            e[0].job,
+            JobState::Done {
+                action: Action::Convert("jpg".into()),
+                outputs: vec![out.join("a.jpg")],
+                saved: Some(out.to_path_buf()),
+            }
+        );
+        // Part of a split went out: the row keeps holding the rest.
+        assert_eq!(e[1].held(), Some(&[PathBuf::from("held/p 2.png")][..]));
+        // Both merge rows follow their shared result.
+        for row in &e[2..4] {
+            assert!(row.held().is_none());
+            assert_eq!(row.line().0, "Saved to Out.");
+        }
+        // Untouched rows stay as they were.
+        assert_eq!(e[4].held(), Some(&[PathBuf::from("held/e.jpg")][..]));
+        assert_eq!(list.held_count(), 2);
     }
 
     #[test]

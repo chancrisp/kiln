@@ -1,4 +1,4 @@
-//! `%APPDATA%\Kiln\settings.toml`: where results go, which key opens which
+//! `%APPDATA%\Kiln\settings.toml`: where exports start, which key opens which
 //! wheel, the theme, quality defaults and engine paths. Every field is
 //! optional; anything left out takes its default.
 
@@ -448,6 +448,17 @@ pub fn default_path() -> Option<PathBuf> {
     Some(PathBuf::from(appdata).join("Kiln").join("settings.toml"))
 }
 
+/// `%LOCALAPPDATA%\Kiln\held`, where finished results wait to be exported,
+/// if LOCALAPPDATA is set.
+pub fn held_root() -> Option<PathBuf> {
+    held_root_in(std::env::var_os("LOCALAPPDATA"))
+}
+
+fn held_root_in(local: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    let local = local.filter(|v| !v.is_empty())?;
+    Some(PathBuf::from(local).join("Kiln").join("held"))
+}
+
 /// Where settings are kept, and whether the file there could be read.
 ///
 /// A file that couldn't be read is never written over by a pick being
@@ -622,6 +633,16 @@ mod tests {
         // the held folder, which the app sets.
         assert_eq!(o.out_dir, None);
         assert_eq!(o.engines.ffmpeg, s.engines.ffmpeg);
+    }
+
+    #[test]
+    fn results_are_held_under_local_app_data() {
+        assert_eq!(
+            held_root_in(Some(r"C:\Users\me\AppData\Local".into())),
+            Some(PathBuf::from(r"C:\Users\me\AppData\Local\Kiln\held"))
+        );
+        assert_eq!(held_root_in(Some("".into())), None);
+        assert_eq!(held_root_in(None), None);
     }
 
     #[test]

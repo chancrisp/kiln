@@ -24,7 +24,7 @@ background, right on your PC.
 - **Suggestions.** Kiln looks inside the files you add and, when one choice clearly helps, points at it with a reason.
 - **Quality you can set.** Resolution, frame rate, bitrate and page DPI, offered only where they fit the file, with an estimate of the result.
 - **Offline.** Converting never touches the network. Nothing is uploaded, ever.
-- **Nothing is overwritten.** Results land next to the input, or in a folder you choose. A taken name becomes `name (1).jpg`.
+- **Nothing is saved until you export it**, and Kiln never overwrites a file without asking. Results wait inside Kiln until you export them, one at a time or all at once, to a folder you pick. Exporting into a folder never replaces a file there: a taken name becomes `name (1).jpg`.
 - **Small and quick.** A single native executable of about 7.5 MB, drawn with Direct2D. No web view. The window is up in about 215 ms.
 - **Keyboard first.** Arrow keys pick a row, Enter opens the wheel, Escape closes it.
 - **Light and dark.** Follows the Windows app mode and every monitor's DPI.
@@ -100,7 +100,8 @@ picks**, beside it, clears the picks Kiln has counted.
 Kiln knows 85 formats and converts between 1,245 pairs. When no single engine
 does a pair, Kiln chains two steps through a shared format, such as HEIC to
 JPG through PNG, or MOBI to PDF through DOCX. The steps run in one temporary
-folder, and only the finished file lands next to the input.
+folder, and only the finished file is kept, held inside Kiln until you
+export it.
 
 | Kind | Reads | Converts to | Engine |
 |---|---|---|---|
@@ -209,7 +210,8 @@ Every change is saved straight away to `%APPDATA%\Kiln\settings.toml`, which
 you can also edit by hand:
 
 ```toml
-output_folder = 'D:\Converted'   # leave out to write next to each file
+output_folder = 'D:\Converted'   # where export dialogs start; leave out
+                                 # for the last folder you exported to
 theme = "system"                 # system, dark or light
 suggestions = true               # false turns suggestions off
 
@@ -252,6 +254,9 @@ kiln tool TOOL INPUTS... [-o DIR]
 kiln formats FILE
 kiln suggest FILE...
 ```
+
+`kiln convert` and `kiln tool` write next to the input, or into `-o DIR`,
+as soon as they finish. Only the app holds results until you export them.
 
 `kiln` exits with 0 on success, 2 when the request can't be done (an unknown
 format, or an unsupported pair or tool), and 1 when a conversion fails.

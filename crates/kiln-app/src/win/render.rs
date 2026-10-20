@@ -2,7 +2,9 @@
 //! DPI maps them to pixels, so 100%, 150% and 200% scaling share one path.
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::f32::consts::{PI, TAU};
+use std::path::PathBuf;
 
 use windows::core::Result;
 use windows::Win32::Foundation::{D2DERR_RECREATE_TARGET, HWND, RECT};
@@ -88,6 +90,13 @@ pub struct RowAnim {
 pub struct View<'a> {
     pub palette: &'a Palette,
     pub entries: &'a [Entry],
+    /// Lines that stand in for a row's own second line, by the row's
+    /// file: a failed export, or a held result that's gone.
+    pub notes: &'a HashMap<PathBuf, (String, Tone)>,
+    /// The footer's "Export all (n)" label, while results are held.
+    pub export_all: Option<&'a str>,
+    pub export_hover: bool,
+    pub export_pressed: bool,
     pub selected: Option<usize>,
     pub hover_row: Option<usize>,
     pub hover_cancel: bool,
@@ -700,11 +709,10 @@ impl Draw<'_> {
 
         let x = r.x + 16.0 + CHIP_MIN_WIDTH.max(chip_w) + 16.0;
         let running = matches!(e.job, JobState::Running { .. });
-        let failed_with_details =
-            matches!(&e.job, JobState::Failed { details, .. } if !details.is_empty());
+        let link = e.link();
         let right = if running {
             layout::row_cancel(r).x - 8.0
-        } else if failed_with_details {
+        } else if link.is_some() {
             layout::row_link(r).x - 8.0
         } else {
             r.right() - 16.0
@@ -718,7 +726,7 @@ impl Draw<'_> {
             a,
         );
 
-        let (line, tone) = e.line();
+        let (line, tone) = v.notes.get(&e.path).cloned().unwrap_or_else(|| e.line());
         let (c, la) = match tone {
             Tone::Muted => (p.text_muted, a),
             // The result cools into place over the settle fade.
@@ -743,6 +751,12 @@ impl Draw<'_> {
             }
         }
         self.label(&line, &self.text.caption, &line_rect, c, la);
+        // An exported row's "Saved to" opens its folder: underlined while
+        // the pointer is on it, like a link.
+        if hovered && v.hover_link && e.saved().is_some() {
+            let tw = self.text.measure(&line, &self.text.caption).min(w);
+            self.hline(x, x + tw, line_rect.y + 15.0, c, la * 0.8);
+        }
 
         match &e.job {
             JobState::Running { fraction, .. } => {
@@ -764,22 +778,23 @@ impl Draw<'_> {
                     self.progress(r, Some(1.0), 0.0, p, a * fade)?;
                 }
             }
-            JobState::Failed { details, .. } if !details.is_empty() => {
-                let link = layout::row_link(r);
-                let hot = hovered && v.hover_link;
-                let c = if hot { p.text } else { p.text_muted };
-                let tw = self.text.measure("Show details", &self.text.caption);
-                let lx = link.right() - tw;
-                self.label(
-                    "Show details",
-                    &self.text.caption,
-                    &Rect::new(lx, link.y, tw + 1.0, link.h),
-                    c,
-                    a,
-                );
-                self.hline(lx, lx + tw, link.y + 15.0, c, a * 0.8);
-            }
             _ => {}
+        }
+        // "Show details" on a failed row, "Export" on a held one.
+        if let Some(text) = link {
+            let link = layout::row_link(r);
+            let hot = hovered && v.hover_link;
+            let c = if hot { p.text } else { p.text_muted };
+            let tw = self.text.measure(text, &self.text.caption);
+            let lx = link.right() - tw;
+            self.label(
+                text,
+                &self.text.caption,
+                &Rect::new(lx, link.y, tw + 1.0, link.h),
+                c,
+                a,
+            );
+            self.hline(lx, lx + tw, link.y + 15.0, c, a * 0.8);
         }
         Ok(())
     }
@@ -857,13 +872,20 @@ impl Draw<'_> {
         let (Some(footer), Some(button)) = (l.footer, l.clear_button) else {
             return Ok(());
         };
+        let export = v
+            .export_all
+            .map(|label| (label, layout::export_all_button(&button)));
+        let left = export.map_or(button.x, |(_, b)| b.x);
         let status = Rect::new(
             footer.x + 4.0,
             footer.y,
-            footer.w - button.w - 16.0,
+            (left - 12.0 - footer.x).max(0.0),
             footer.h,
         );
         self.label(v.status, &self.text.caption, &status, p.text_muted, 1.0);
+        if let Some((label, b)) = export {
+            self.button(label, &b, v.export_hover, v.export_pressed, p);
+        }
         self.button("Clear", &button, v.clear_hover, v.clear_pressed, p);
         Ok(())
     }
@@ -1411,6 +1433,9 @@ impl Draw<'_> {
             };
             let c = if muted { p.text_muted } else { p.text };
             self.label(text, &self.text.body, &r, c, 1.0);
+            if let (Some(hint), Some(hr)) = (row.hint, row.hint_rect) {
+                self.label(hint, &self.text.caption_wrap, &hr, p.text_muted, 1.0);
+            }
         }
 
         // Segmented groups, outlined once each after their fills.

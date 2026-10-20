@@ -156,6 +156,25 @@ pub fn row_link(row: &Rect) -> Rect {
     )
 }
 
+/// A row's second line, where a saved row's "Saved to" can be clicked.
+pub fn row_line(row: &Rect) -> Rect {
+    Rect::new(row.x + 16.0, row.y + 28.0, (row.w - 32.0).max(0.0), 20.0)
+}
+
+/// Width of the footer's "Export all (n)" button.
+pub const EXPORT_ALL_WIDTH: f32 = 128.0;
+
+/// The footer's "Export all (n)" button, left of Clear. It shows only
+/// while results are held.
+pub fn export_all_button(clear: &Rect) -> Rect {
+    Rect::new(
+        clear.x - 8.0 - EXPORT_ALL_WIDTH,
+        clear.y,
+        EXPORT_ALL_WIDTH,
+        clear.h,
+    )
+}
+
 /// The details dialog: panel, title, body and close button.
 pub struct Dialog {
     pub panel: Rect,
@@ -249,6 +268,8 @@ pub struct SettingsRow {
     pub value: Option<Rect>,
     /// A line explaining the row, for rows that need one.
     pub hint: Option<&'static str>,
+    /// Where the hint goes: a muted line under the row.
+    pub hint_rect: Option<Rect>,
 }
 
 pub struct SettingsLayout {
@@ -264,6 +285,8 @@ pub struct SettingsLayout {
 }
 
 pub const SETTINGS_ROW: f32 = 40.0;
+/// The muted hint under a settings row, room for two caption lines.
+pub const SETTINGS_HINT: f32 = 32.0;
 pub const SETTINGS_LABEL: f32 = 112.0;
 /// A label in the second column of the quality page.
 const SETTINGS_LABEL_2: f32 = 80.0;
@@ -305,7 +328,12 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
     let title = Rect::new(panel.x + p, panel.y + p, panel.w - 2.0 * p, 32.0);
     let right = panel.right() - p;
     let x0 = panel.x + p + SETTINGS_LABEL + 8.0;
-    let row_y = |i: usize| title.bottom() + 8.0 + i as f32 * SETTINGS_ROW;
+    // On General, the rows after Start exports in sit below its hint.
+    let hinted = shape.tab == SettingsTab::General;
+    let row_y = |i: usize| {
+        let hint = if hinted && i > 0 { SETTINGS_HINT } else { 0.0 };
+        title.bottom() + 8.0 + i as f32 * SETTINGS_ROW + hint
+    };
     let ctl = |x: f32, i: usize, w: f32| Rect::new(x, row_y(i) + 4.0, w, BUTTON_HEIGHT);
 
     let mut rows = Vec::new();
@@ -315,6 +343,7 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
         label_rect: Rect::new(panel.x + p, row_y(i) + 8.0, SETTINGS_LABEL, 24.0),
         value,
         hint: None,
+        hint_rect: None,
     };
 
     let tabs_x = right - SettingsTab::ALL.len() as f32 * TAB_WIDTH;
@@ -359,8 +388,16 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
                 Control::OutputChoose,
                 shape.output_custom.then_some(Control::OutputReset),
             );
+            // The hint sits under the value, below the row's buttons.
+            let hint_rect = Rect::new(
+                x0,
+                row_y(0) + SETTINGS_ROW - 4.0,
+                (right - x0).max(0.0),
+                SETTINGS_HINT,
+            );
             rows.push(SettingsRow {
                 hint: Some(crate::settings::START_EXPORTS_HINT),
+                hint_rect: Some(hint_rect),
                 ..row("Start exports in", 0, Some(v))
             });
 
@@ -412,6 +449,7 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
                     label_rect: Rect::new(lx, row_y(i) + 8.0, x - 8.0 - lx, 24.0),
                     value: None,
                     hint: None,
+                    hint_rect: None,
                 });
             };
             let (c, r) = (&mut controls, &mut rows);
@@ -759,6 +797,59 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_export_hint_has_its_own_line() {
+        for (w, h) in [(480.0, 360.0), (720.0, 480.0), (1600.0, 1000.0)] {
+            for output_custom in [false, true] {
+                let s = settings(
+                    w,
+                    h,
+                    SettingsShape {
+                        output_custom,
+                        ..SettingsShape::default()
+                    },
+                );
+                let hint = s.rows[0].hint_rect.expect("Start exports in has a hint");
+                assert_grid(&hint, "hint");
+                assert!(hint.y >= s.rows[0].label_rect.bottom());
+                assert!(hint.bottom() <= s.rows[1].label_rect.y);
+                for (c, r) in &s.controls {
+                    assert!(apart(&hint, r), "hint overlaps {c:?} at {w}x{h}");
+                }
+                // The page still fits the panel every page shares, above
+                // the buttons along its bottom.
+                let check = s.controls.iter().find(|(c, _)| *c == Control::CheckUpdates);
+                let last = s
+                    .controls
+                    .iter()
+                    .filter(|(c, _)| matches!(c, Control::Suggestions(_) | Control::ForgetPicks))
+                    .map(|(_, r)| r.bottom())
+                    .fold(0.0, f32::max);
+                assert!(last + 16.0 <= check.unwrap().1.y, "at {w}x{h}");
+            }
+        }
+        let quality = page(SettingsTab::Quality);
+        assert!(quality.rows.iter().all(|r| r.hint_rect.is_none()));
+        assert_eq!(page(SettingsTab::General).panel, quality.panel);
+    }
+
+    #[test]
+    fn export_all_sits_left_of_clear() {
+        for (w, h) in [(480.0, 360.0), (720.0, 480.0)] {
+            let l = layout(w, h, 2);
+            let (footer, clear) = (l.footer.unwrap(), l.clear_button.unwrap());
+            let b = export_all_button(&clear);
+            assert_grid(&b, "export all");
+            assert_eq!(clear.x - b.right(), 8.0);
+            assert_eq!((b.y, b.h), (clear.y, clear.h));
+            assert!(b.x > footer.x + footer.w / 2.0);
+        }
+        let r = layout(720.0, 480.0, 1).rows[0];
+        let line = row_line(&r);
+        assert!(line.x >= r.x + 16.0 && line.right() <= r.right() - 16.0);
+        assert!(line.y >= r.y && line.bottom() <= r.bottom());
     }
 
     #[test]

@@ -138,7 +138,8 @@ test enforces this.
 ## Progress and results
 
 - **Progress** is a 2 px line along the bottom of the job row, filled with celadon. Its leading edge glows slightly brighter, like a glaze taking heat. This is the only gradient in Kiln. While a job runs, the glow breathes slowly over 2.4 s, like coals. When the engine can't report progress, the whole line holds a low glow that breathes the same way. There are no spinners.
-- **Success:** the row settles and the output name appears in bone, fading in over 200 ms. There's no sound or confetti.
+- **Success:** the row settles and `Ready:` with the output name appears in bone, fading in over 200 ms, as in `Ready: photo.jpg`. There's no sound or confetti. The result waits inside Kiln until it's exported.
+- **Export:** a held row has an "Export" link where a failed row has "Show details", and Ctrl+S does the same. Once exported, the line reads `Saved to <folder>.`, and clicking it shows the file in Explorer. The footer's **Export all (3)** sits beside Clear while anything is held. A failed export is one line in brick: `Couldn't save to D:\Locked. Pick another folder.`
 - **Failure:** the row shows one plain line in brick, the first line the engine printed with log tags removed. When there's more, a "Show details" link opens the full engine output.
 
 ## Voice
