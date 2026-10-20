@@ -391,6 +391,65 @@ struct DetailsUi {
     last_copy: Option<(bool, Instant)>,
 }
 
+/// What sits over the file list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Over {
+    Nothing,
+    /// A wheel, open or fading.
+    Wheel,
+    /// A sheet, Settings, the details dialog or help. It covers a wheel
+    /// too.
+    Panel,
+}
+
+impl Over {
+    fn of(wheel: bool, sheet: bool, settings: bool, details: bool, help: bool) -> Self {
+        if sheet || settings || details || help {
+            Over::Panel
+        } else if wheel {
+            Over::Wheel
+        } else {
+            Over::Nothing
+        }
+    }
+
+    /// Whether the list beneath takes clicks, double-clicks, links, the
+    /// right-click menu, scrolling and tooltips.
+    fn list_live(self) -> bool {
+        self == Over::Nothing
+    }
+
+    /// Whether a drag may pour a wheel: not under a panel.
+    fn wheel_may_pour(self) -> bool {
+        self != Over::Panel
+    }
+}
+
+/// What the tooltips' rectangles depend on, so they are measured again
+/// only when it changes, not on every animation frame.
+#[derive(PartialEq)]
+struct TipKey {
+    size: (f32, f32),
+    scroll: f32,
+    over: Over,
+    add: Option<layout::Rect>,
+    export: Option<layout::Rect>,
+    /// Each row in view: its index, rectangle, chip code and shown line,
+    /// whether it's being exported, its job's kind and whether it holds a
+    /// result.
+    rows: Vec<TipRow>,
+}
+
+type TipRow = (
+    usize,
+    layout::Rect,
+    String,
+    String,
+    bool,
+    std::mem::Discriminant<JobState>,
+    bool,
+);
+
 /// The help overlay while it is open. Keys go to it, and its Close has
 /// the focus, until it closes.
 struct HelpUi {
@@ -485,6 +544,9 @@ struct App {
     help_hover: bool,
     /// The native tooltips over the drawn controls, if Windows made them.
     tips: Option<Tips>,
+    /// The tooltips' rectangles as last measured, and what they were
+    /// measured for.
+    tip_cache: Option<(TipKey, Vec<(usize, layout::Rect)>)>,
     status: String,
     clear_hover: bool,
     clear_pressed: bool,
@@ -1362,11 +1424,7 @@ impl App {
     /// Double-click on a held row: open its result in its usual app, so it
     /// can be checked before it's kept. False if `(x, y)` isn't on one.
     fn open_held_at(&mut self, x: f32, y: f32) -> bool {
-        if self.wheel.is_some()
-            || self.sheet.is_some()
-            || self.settings_ui.is_some()
-            || self.details.is_some()
-        {
+        if !self.over().list_live() {
             return false;
         }
         let (Some(i), false, false) = self.hit_row(x, y) else {
@@ -2522,8 +2580,14 @@ impl App {
             hover: false,
             pressed: false,
         });
+        // Nothing beneath stays lit or acts on a release under help.
         self.help_hover = false;
         self.settings_hover = false;
+        self.hover_row = None;
+        self.hover_cancel = false;
+        self.hover_link = false;
+        (self.clear_hover, self.export_hover, self.add_hover) = (false, false, false);
+        (self.clear_pressed, self.export_pressed, self.add_pressed) = (false, false, false);
         self.invalidate();
     }
 
@@ -2924,11 +2988,18 @@ impl App {
 
     /// Whether `(x, y)` is on a row's link, with nothing over the list.
     fn on_link(&self, x: f32, y: f32) -> bool {
-        self.wheel.is_none()
-            && self.sheet.is_none()
-            && self.settings_ui.is_none()
-            && self.details.is_none()
-            && self.hit_row(x, y).2
+        self.over().list_live() && self.hit_row(x, y).2
+    }
+
+    /// What sits over the list now.
+    fn over(&self) -> Over {
+        Over::of(
+            self.wheel.is_some(),
+            self.sheet.is_some(),
+            self.settings_ui.is_some(),
+            self.details.is_some(),
+            self.help.is_some(),
+        )
     }
 
     // Input.
@@ -3325,11 +3396,7 @@ impl App {
     /// (Shift convert, Ctrl tools, Alt actions, unless settings say
     /// otherwise); letting go of the key lets it fade.
     fn drag_over(&mut self, ev: &DragEvent) {
-        if self.settings_ui.is_some()
-            || self.details.is_some()
-            || self.sheet.is_some()
-            || self.help.is_some()
-        {
+        if !self.over().wheel_may_pour() {
             return;
         }
         let at = self.screen_dips(ev.x, ev.y);
@@ -3535,11 +3602,19 @@ impl App {
         if let Err(e) = self.renderer.draw(&view) {
             log(&format!("draw failed: {e}"));
         }
-        let tools = self.tip_tools();
-        let dpi = self.dpi;
-        if let Some(t) = &mut self.tips {
-            t.sync(&tools, dpi);
+        let key = self.tip_key();
+        if self.tip_cache.as_ref().is_none_or(|(k, _)| *k != key) {
+            let tools = self.tip_tools();
+            self.tip_cache = Some((key, tools));
         }
+        // Removing the tool that's showing hides it at once, and the
+        // control tells the window. Out of `self`, that notice finds no
+        // tooltip control and goes to DefWindowProc.
+        let mut tips = self.tips.take();
+        if let (Some(t), Some((_, tools))) = (&mut tips, &self.tip_cache) {
+            t.sync(tools, self.dpi);
+        }
+        self.tips = tips;
     }
 
     // Tooltips.
@@ -3557,15 +3632,46 @@ impl App {
         })
     }
 
+    /// The rows in view, or partly in view.
+    fn visible_rows(&self) -> std::ops::Range<usize> {
+        let panel = self.layout().panel;
+        let first = (self.scroll / ROW_HEIGHT).floor().max(0.0) as usize;
+        let visible = (panel.h / ROW_HEIGHT).ceil() as usize + 1;
+        first.min(self.files.len())..(first + visible).min(self.files.len())
+    }
+
+    /// What the tooltips' rectangles depend on now. Cheap: nothing is
+    /// measured.
+    fn tip_key(&self) -> TipKey {
+        let rows = self
+            .visible_rows()
+            .filter_map(|i| {
+                let e = self.files.entries().get(i)?;
+                Some((
+                    i,
+                    self.row_rect(i)?,
+                    e.code.clone(),
+                    self.shown_line(i)?,
+                    self.row_saving(i),
+                    std::mem::discriminant(&e.job),
+                    e.held().is_some(),
+                ))
+            })
+            .collect();
+        TipKey {
+            size: self.renderer.size_dips(),
+            scroll: self.scroll,
+            over: self.over(),
+            add: self.add_button(),
+            export: self.export_button(),
+            rows,
+        }
+    }
+
     /// Every tooltip's id and rectangle as the window is now. None while
     /// a wheel, panel or dialog is up.
     fn tip_tools(&self) -> Vec<(usize, layout::Rect)> {
-        if self.wheel.is_some()
-            || self.sheet.is_some()
-            || self.settings_ui.is_some()
-            || self.details.is_some()
-            || self.help.is_some()
-        {
+        if !self.over().list_live() {
             return vec![];
         }
         let l = self.layout();
@@ -3579,9 +3685,7 @@ impl App {
             let bottom = r.bottom().min(panel.bottom());
             layout::Rect::new(r.x, top, r.w, (bottom - top).max(0.0))
         };
-        let first = (self.scroll / ROW_HEIGHT).floor().max(0.0) as usize;
-        let visible = (panel.h / ROW_HEIGHT).ceil() as usize + 1;
-        for i in first..(first + visible).min(self.files.len()) {
+        for i in self.visible_rows() {
             let (Some(r), Some(line)) = (self.row_rect(i), self.shown_line(i)) else {
                 continue;
             };
@@ -3593,7 +3697,8 @@ impl App {
             if matches!(e.job, JobState::Running { .. }) {
                 tools.push((id + 1, clip(layout::row_cancel(&r))));
             }
-            if !saving && e.link(self.renderer.line_cut(&r, e)) == Some("Export") {
+            // Only a failed row's link depends on its line being cut.
+            if !saving && e.link(false) == Some("Export") {
                 tools.push((id + 2, clip(layout::row_link(&r))));
             }
         }
@@ -3829,6 +3934,7 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         help: None,
         help_hover: false,
         tips: None,
+        tip_cache: None,
         status: String::new(),
         clear_hover: false,
         clear_pressed: false,
@@ -4180,7 +4286,7 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
                 app.scroll_details(TextScroll::Wheel(raw as f32 / WHEEL_DELTA as f32));
             } else if app.help.is_some() {
                 app.scroll_help(TextScroll::Wheel(raw as f32 / WHEEL_DELTA as f32));
-            } else if app.wheel.is_none() && app.sheet.is_none() {
+            } else if app.over().list_live() {
                 let delta = raw as f32 / WHEEL_DELTA as f32;
                 app.scroll -= delta * ROW_HEIGHT;
                 app.clamp_scroll();
@@ -4202,12 +4308,7 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
                 app.open_sheet(spot);
                 return Some(LRESULT(0));
             }
-            if app.wheel.is_some()
-                || app.details.is_some()
-                || app.settings_ui.is_some()
-                || app.sheet.is_some()
-                || app.help.is_some()
-            {
+            if !app.over().list_live() {
                 return Some(LRESULT(0));
             }
             let at = (lparam.0 != -1).then(|| (lo(lparam), hi(lparam)));
@@ -4331,6 +4432,33 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn help_covers_the_list_like_any_panel() {
+        use super::Over;
+        // Help alone, or over a fading wheel, is a panel: the list beneath
+        // takes no clicks, links or tooltips, and a drag pours no wheel.
+        for wheel in [false, true] {
+            let help = Over::of(wheel, false, false, false, true);
+            assert_eq!(help, Over::Panel);
+            assert!(!help.list_live() && !help.wheel_may_pour());
+        }
+        for (sheet, settings, details) in [
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+        ] {
+            assert_eq!(
+                Over::of(false, sheet, settings, details, false),
+                Over::Panel
+            );
+        }
+        // A wheel keeps the list's clicks but lets a drag change it.
+        let wheel = Over::of(true, false, false, false, false);
+        assert!(!wheel.list_live() && wheel.wheel_may_pour());
+        let nothing = Over::of(false, false, false, false, false);
+        assert!(nothing.list_live() && nothing.wheel_may_pour());
+    }
+
     use super::*;
 
     #[test]

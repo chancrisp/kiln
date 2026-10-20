@@ -98,7 +98,7 @@ window between them as well.
 - [ ] Every button, key button, theme segment and the dialog's Close show a soft inner shadow while held, and act only when released over them.
 - [ ] Check for updates says "Checking for updates…", then the result in one calm line beside the button. With no network it says "Couldn't reach GitHub.". When a newer version exists, the button reads "Get the update" and opens the releases page.
 - [ ] Output folder: Choose picks a folder and results go there; Reset goes back to "Next to each file".
-- [ ] Labels read "Sound quality", "Sharpness (DPI)" and "Keys to hold while dropping" (on two lines), and the tabs "General", "Quality" and "Helper apps". None is cut off at the smallest window size.
+- [ ] Labels read "Sound quality", "Sharpness (DPI)" and "Keys to hold while dropping" (the last two on two lines), and the tabs "General", "Quality" and "Helper apps". None is cut off at the smallest window size.
 - [ ] Keys to hold while dropping: pressing a key button moves that wheel to the next key and swaps with the wheel that had it. Dragging follows the new keys at once.
 - [ ] Helper apps shows "Found on PATH", "Not installed" or the chosen path for FFmpeg, Pandoc and LibreOffice. LibreOffice installed in Program Files shows its path without being chosen. Choose takes an .exe; jobs use it straight away.
 - [ ] Every change is saved to %APPDATA%\Kiln\settings.toml. A broken file starts Kiln with defaults and a footer line saying why.

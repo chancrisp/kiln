@@ -234,7 +234,9 @@ pub fn wheel_centre(radius: f32) -> WheelCentre {
         name: line(-32.0, 28.0, width(-32.0, 28.0)),
         key: line(-4.0, 16.0, width(-4.0, 16.0)),
         source: line(12.0, 16.0, width(12.0, 16.0)),
-        options: line(-8.0, 24.0, width(-8.0, 24.0)),
+        // On the key line, reaching 2 DIPs into the empty space under the
+        // name and over the source, where no text is drawn.
+        options: line(-6.0, 20.0, width(-6.0, 20.0)),
     }
 }
 
@@ -536,6 +538,10 @@ pub const SETTINGS_ROW: f32 = 40.0;
 /// The General page's row for the wheel keys. Too long for one line at
 /// the label's width, it wraps onto two.
 pub const WHEEL_KEYS_LABEL: &str = "Keys to hold while dropping";
+/// The Quality page's page DPI, which sets how sharp every page drawn as
+/// an image comes out, not only PDF's. It wraps onto two lines in the
+/// second column, as the sheet's knob of the same name doesn't need to.
+pub const PAGE_DPI_LABEL: &str = "Sharpness (DPI)";
 /// The muted hint under a settings row, room for two caption lines.
 pub const SETTINGS_HINT: f32 = 32.0;
 pub const SETTINGS_LABEL: f32 = 112.0;
@@ -707,9 +713,15 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
                     (panel.x + p, x0)
                 };
                 controls.push((Control::Step(s), ctl(x, i, STEP_WIDTH)));
+                // A label too long for one line takes the row's height.
+                let (y, h) = if label == PAGE_DPI_LABEL {
+                    (row_y(i), SETTINGS_ROW)
+                } else {
+                    (row_y(i) + 8.0, 24.0)
+                };
                 rows.push(SettingsRow {
                     label,
-                    label_rect: Rect::new(lx, row_y(i) + 8.0, x - 8.0 - lx, 24.0),
+                    label_rect: Rect::new(lx, y, x - 8.0 - lx, h),
                     value: None,
                     hint: None,
                     hint_rect: None,
@@ -723,7 +735,7 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
             presets(c, 2, DefaultSetting::Images);
             r.push(row("Images", 2, None));
             stepper(c, r, ("Image size", 3, false), DefaultSetting::ImageSize);
-            stepper(c, r, ("PDF pages", 3, true), DefaultSetting::PageDpi);
+            stepper(c, r, (PAGE_DPI_LABEL, 3, true), DefaultSetting::PageDpi);
             stepper(c, r, ("Sound quality", 4, false), DefaultSetting::Audio);
         }
         SettingsTab::Engines => {
@@ -1334,34 +1346,43 @@ mod tests {
         assert!(c.name.w >= 80.0);
         assert!(c.source.w >= 93.0);
         // "Options… (Tab)" takes the key line's place: 79 DIPs in the
-        // caption, its hit area 24 tall and inside the disc too.
+        // caption, its hit area 20 tall and inside the disc too.
         let o = c.options;
         assert_eq!(o.x, -o.w / 2.0);
-        assert!(o.w >= 80.0 && o.h >= 24.0, "{o:?}");
+        assert!(o.w >= 80.0 && o.h >= 20.0, "{o:?}");
         assert!(o.y <= c.key.y && o.bottom() >= c.key.bottom());
         for (x, y) in [(o.x, o.y), (o.right(), o.bottom())] {
             assert!(x * x + y * y <= r * r, "{o:?} leaves the disc");
         }
-        // Above it the name still reads whole.
-        assert!(o.y >= c.name.y + 16.0);
+        // It reaches no more than 2 DIPs into the name's box or the
+        // source's, which hold no text there.
+        assert!(o.y >= c.name.bottom() - 2.0 && o.bottom() <= c.source.y + 2.0);
     }
 
     #[test]
     fn settings_labels_fit_at_the_smallest_window() {
         // DirectWrite widths in 14 px Segoe UI: every label on one line in
-        // its rect, except the keys label, which takes two.
-        const BODY: [(&str, f32); 9] = [
+        // its rect, except two, which take two lines.
+        const BODY: [(&str, f32); 8] = [
             ("Start exports in", 93.2),
             ("Theme", 42.0),
             ("Suggestions", 75.3),
             ("Resolution", 65.0),
             ("Frame rate", 66.1),
             ("Image size", 65.3),
-            ("PDF pages", 65.2),
             ("Sound quality", 85.2),
             ("Video", 35.9),
         ];
-        const KEYS: [(&str, f32); 2] = [("Keys to hold", 76.4), ("while dropping", 93.3)];
+        // "Keys to hold while" is 112.3, a hair over the 112 it has, so
+        // the break falls after "hold". Were it to fall after "while", both
+        // lines would still fit, as "dropping" is 57.3.
+        const TWO_LINES: [(&str, [(&str, f32); 2]); 2] = [
+            (
+                WHEEL_KEYS_LABEL,
+                [("Keys to hold", 76.4), ("while dropping", 93.3)],
+            ),
+            (PAGE_DPI_LABEL, [("Sharpness", 62.8), ("(DPI)", 29.9)]),
+        ];
         const TABS: [(&str, f32); 3] =
             [("General", 47.6), ("Quality", 43.9), ("Helper apps", 74.4)];
         let (w, h) = MIN_WINDOW;
@@ -1376,11 +1397,15 @@ mod tests {
             );
             for row in &s.rows {
                 let r = row.label_rect;
-                if row.label == WHEEL_KEYS_LABEL {
+                if let Some((_, parts)) = TWO_LINES.iter().find(|(l, _)| *l == row.label) {
                     // Two lines of about 19 DIPs, in the row's height.
                     assert!(r.h >= 38.0, "{r:?}");
-                    for (part, pw) in KEYS {
-                        assert!(pw <= r.w, "{part}");
+                    for (part, pw) in parts {
+                        assert!(*pw <= r.w, "{part}");
+                    }
+                    // Still clear of the controls.
+                    for (c, cr) in &s.controls {
+                        assert!(apart(&r, cr), "{} overlaps {c:?}", row.label);
                     }
                     continue;
                 }
@@ -1404,6 +1429,7 @@ mod tests {
             assert!(first.x - s.title.x >= 96.0);
         }
         assert_eq!(WHEEL_KEYS_LABEL, "Keys to hold while dropping");
+        assert_eq!(PAGE_DPI_LABEL, "Sharpness (DPI)");
         // The sheet's labels: "Sharpness (DPI)" is the longest.
         let sheet = sheet(w, h, &[Knob::Preset, Knob::PageDpi, Knob::AudioBitrate]);
         for (name, lw) in [("Sharpness (DPI)", 96.4), ("Sound quality", 85.2)] {
@@ -1508,7 +1534,7 @@ mod tests {
                 "Frame rate",
                 "Images",
                 "Image size",
-                "PDF pages",
+                "Sharpness (DPI)",
                 "Sound quality"
             ]
         );

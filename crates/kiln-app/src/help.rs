@@ -114,7 +114,11 @@ pub fn help_content(keys: &KeyMap) -> Vec<HelpSection> {
             lines: vec![
                 line("Tab, Shift+Tab", "Move between controls."),
                 line("Left, Right", "Change the value under focus."),
-                line("Enter or Space", "Press the control under focus."),
+                line("Space", "Press the control under focus."),
+                line(
+                    "Enter",
+                    "Convert from the options sheet, close the details, or press the control under focus in Settings.",
+                ),
                 line("Page Up, Page Down", "Scroll long text."),
                 line("Ctrl+C", "Copy the details."),
                 line("Escape", "Close the panel."),
@@ -233,8 +237,10 @@ mod tests {
     #[test]
     fn the_table_lists_the_keys_the_window_handles() {
         let h = help_content(&KeyMap::default());
-        // Every key `App::key` and `WM_CONTEXTMENU` answer in the list,
-        // and nothing more.
+        // The table's content, pinned. Nothing here ties it to the
+        // handlers: each entry was checked by hand against `App::key`,
+        // `WM_CONTEXTMENU` and `WM_LBUTTONDBLCLK`, and a key added there
+        // needs a line here and in `help_content`.
         assert_eq!(
             keys_of(find(&h, "Keyboard shortcuts")),
             [
@@ -256,6 +262,20 @@ mod tests {
         assert_eq!(
             keys_of(find(&h, "In a wheel")),
             ["Left, Right, Up, Down", "Tab", "Enter or Space", "Escape"]
+        );
+        // Space presses in every panel; Enter does something different in
+        // each, so it has a line of its own.
+        assert_eq!(
+            keys_of(find(&h, "In panels")),
+            [
+                "Tab, Shift+Tab",
+                "Left, Right",
+                "Space",
+                "Enter",
+                "Page Up, Page Down",
+                "Ctrl+C",
+                "Escape"
+            ]
         );
     }
 
