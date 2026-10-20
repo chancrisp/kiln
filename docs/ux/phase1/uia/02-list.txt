@@ -1,0 +1,64 @@
+Kiln UIA dump: 02-list
+State: Three files listed (harbour.png, interview.mov, glaze test.png), suggestions arrived, last row selected
+Captured: 2026-10-19T21:33:16, kiln-app release build, 125% scale (no monitor runs at 100%), scratch APPDATA
+
+== Raw view (everything UIA exposes) ==
+- name="Kiln" | type=Window | automationId="" | class="KilnWindow" | rect=x=288 y=288 w=918 h=647 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+
+== Control view (what Narrator walks) ==
+- name="Kiln" | type=Window | automationId="" | class="KilnWindow" | rect=x=288 y=288 w=918 h=647 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+
+== Content view ==
+- name="Kiln" | type=Window | automationId="" | class="KilnWindow" | rect=x=288 y=288 w=918 h=647 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+
+== Focused element ==
+name="Kiln" | type=Window | automationId="" | class="KilnWindow" | rect=x=288 y=288 w=918 h=647 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+
+== ElementFromPoint probes (points in client DIPs, scaled to px by the window DPI) ==
+gear button (688,28) -> name="Kiln" | type=Window | automationId="" | class="KilnWindow" | rect=x=288 y=288 w=918 h=647 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+first row / drop panel (200,100) -> name="Kiln" | type=Window | automationId="" | class="KilnWindow" | rect=x=288 y=288 w=918 h=647 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+list centre (360,220) -> name="Kiln" | type=Window | automationId="" | class="KilnWindow" | rect=x=288 y=288 w=918 h=647 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+Clear button (668,444) -> name="Kiln" | type=Window | automationId="" | class="KilnWindow" | rect=x=288 y=288 w=918 h=647 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+row link area (620,110) -> name="Kiln" | type=Window | automationId="" | class="KilnWindow" | rect=x=288 y=288 w=918 h=647 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+
+Client rect: 900 x 600 px
+
+== MSAA view (oleacc AccessibleChildren from Windows PowerShell 5.1; that process is DPI-unaware, so rects are in 96-DPI virtualised coordinates) ==
+OBJID_WINDOW (whole window incl. non-client):
+- name="Kiln" role=window state=0x160004 rect=230,230,734,518 default=""
+  - name="System" role=menu bar state=0x100000 rect=238,238,22,22 default=""
+    - name="System" role=menu item state=0x40100000 rect=238,238,22,22 default="Open"
+      - name="System" role=popup menu state=0x8000 rect=0,0,0,0 default=""
+        - name="Restore" role=menu item state=0x1 rect=0,0,0,0 default=""
+        - name="Move" role=menu item state=0x0 rect=0,0,0,0 default="Execute"
+        - name="Size" role=menu item state=0x0 rect=0,0,0,0 default="Execute"
+        - name="Minimize" role=menu item state=0x0 rect=0,0,0,0 default="Execute"
+        - name="Maximize" role=menu item state=0x0 rect=0,0,0,0 default="Execute"
+        - name="" role=separator state=0x1 rect=0,0,0,0 default=""
+        - name="Close	Alt+F4" role=menu item state=0x100 rect=0,0,0,0 default="Execute"
+  - name="" role=title bar state=0x100000 rect=254,233,704,28 default=""
+    - name="IME" role=push button state=0x8000 rect=0,0,0,0 default=""
+    - name="Minimize" role=push button state=0x0 rect=815,231,48,30 default="Press"
+    - name="Maximize" role=push button state=0x0 rect=863,231,47,30 default="Press"
+    - name="Context help" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Close" role=push button state=0x0 rect=910,231,48,30 default="Press"
+  - name="Application" role=menu bar state=0x8000 rect=0,0,0,0 default=""
+  - name="Kiln" role=client state=0x100004 rect=238,261,720,480 default=""
+  - name="Vertical" role=scroll bar state=0x8000 rect=0,0,0,0 default=""
+    - name="Line up" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Page up" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Position" role=indicator state=0x8000 rect=0,0,0,0 default=""
+    - name="Page down" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Line down" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+  - name="Horizontal" role=scroll bar state=0x8000 rect=0,0,0,0 default=""
+    - name="Column left" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Page left" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Position" role=indicator state=0x8000 rect=0,0,0,0 default=""
+    - name="Page right" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Column right" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+  - name="" role=grip state=0x8001 rect=0,0,0,0 default=""
+
+OBJID_CLIENT (client area):
+- name="Kiln" role=client state=0x100004 rect=238,261,720,480 default=""
+
+

@@ -1,0 +1,514 @@
+# Kiln user-visible strings (Phase 1 of the UX audit)
+
+Read-only inventory. Nothing in the source was changed. Log-only strings, test-only strings and comments are skipped.
+
+## Method
+
+- Searched `crates/kiln-app/src`, `crates/kiln-core/src` and `crates/kiln-cli/src` by reading each file and by pattern: `format!(`, `"..."` literals passed to draw, label and status calls, `#[error(`, `thiserror`, `Display`, `.label()`, `help =` and `///` on clap arguments, `bail`, `Err(` with a text, and `status_line`, `batch_summary`, `describe` and `reason` helpers.
+- Layout checks use the constants in `layout.rs` and `render.rs`: window 720 by 480 (minimum 480 by 360), panel padding 16, row height 56, footer 40. Text is clipped and ellipsised on one line, except the Settings update note and the Details dialog body.
+- Format names: the code pattern is listed once. A wheel code is always the canonical extension upper-cased (`registry.rs:44-46`); the row chip uses the file's own extension, so alias extensions show a different chip. Only those aliases are listed. The More ring has kind groups drawn as icons only, so no group name exists to list.
+- A Header surface was added for the window title and wordmark, which appear on every screen.
+- "unclear" in When shown means the string is built in code but I could not confirm it reaches a screen.
+
+## Totals
+
+Total strings: **307**. Flagged at least once: **239**.
+
+| Surface | Strings |
+|---|---|
+| Header | 2 |
+| Empty state | 4 |
+| Row | 42 |
+| Footer | 29 |
+| Convert wheel | 7 |
+| Tools wheel | 7 |
+| Actions wheel | 4 |
+| More ring | 2 |
+| Options sheet | 21 |
+| Settings·General | 35 |
+| Settings·Quality | 9 |
+| Settings·Engines | 10 |
+| Dialog | 10 |
+| Error | 70 |
+| CLI | 33 |
+| Core reason | 22 |
+| **Total** | **307** |
+
+## Flag codes
+
+| Flag | Meaning |
+|---|---|
+| TERM | Same concept has another name elsewhere |
+| JARGON | Term the owner may not know |
+| VAGUE | Does not say what will happen or what is meant |
+| NOACTION | Problem named but no next step |
+| HIDDEN | Needed to use the app but not shown where needed |
+| CONCAT | Built from pieces, so wording or grammar can break |
+| TRUNC | Likely cut off at 720 px or less |
+| METAPHOR | Figurative where plain words would do |
+| VOICE | Breaks the DESIGN.md voice rules |
+
+## Strings by surface
+
+### Header
+
+| # | String | Surface | When shown | Source | Flags |
+|---|---|---|---|---|---|
+| 1 | `Kiln` | Header | Window title bar text, always | `crates/kiln-app/src/win/mod.rs:2143` |  |
+| 2 | `Kiln` | Header | Wordmark in the header, always (serif) | `crates/kiln-app/src/win/render.rs:532` |  |
+
+### Empty state
+
+| # | String | Surface | When shown | Source | Flags |
+|---|---|---|---|---|---|
+| 3 | `Drop files here` | Empty state | List is empty | `crates/kiln-app/src/win/render.rs:577` |  |
+| 4 | `Fire raw files into finished ones.` | Empty state | List is empty (tagline) | `crates/kiln-app/src/win/render.rs:585` | METAPHOR |
+| 5 | `Hold {convert key} while dropping to convert, {tools key} for tools, or {actions key} for file actions.` | Empty state | List is empty; keys come from Settings (default Shift, Ctrl, Alt). Gone as soon as one file is added | `crates/kiln-app/src/settings.rs:187-194` | CONCAT, TERM, HIDDEN |
+| 6 | `Everything converts on this PC. Nothing is uploaded.` | Empty state | List is empty | `crates/kiln-app/src/win/render.rs:601` |  |
+
+### Row
+
+| # | String | Surface | When shown | Source | Flags |
+|---|---|---|---|---|---|
+| 7 | `{EXT}` | Row | Chip on every row: the file's own extension upper-cased ("JPEG" stays JPEG, not JPG) | `crates/kiln-app/src/model.rs:432` | JARGON, TERM |
+| 8 | `—` | Row | Chip when the file has no extension | `crates/kiln-app/src/win/render.rs:694` | VAGUE |
+| 9 | `{folder}  ·  {size}  ·  {reach}` | Row | Second line before Kiln has looked inside the file (folder is the full path) | `crates/kiln-app/src/model.rs:224` | CONCAT, TRUNC |
+| 10 | `No conversions for this type` | Row | Second line, file type has no targets | `crates/kiln-app/src/model.rs:220` | VAGUE, TERM |
+| 11 | `Converts to {format}` | Row | Second line, exactly one target | `crates/kiln-app/src/model.rs:221` | TERM |
+| 12 | `Converts to {n} formats` | Row | Second line, two or more targets | `crates/kiln-app/src/model.rs:222` | TERM, CONCAT |
+| 13 | `{folder}  ·  {description}  ·  {size}  ·  Suggested: {label}, about {size}` | Row | Second line once facts arrive (Suggestions on). Parts joined with a middle dot. Full folder path comes first, so the suggestion is the part that gets cut off | `crates/kiln-app/src/model.rs:195-214` | CONCAT, TRUNC |
+| 14 | `Suggested: {label}, about {size}` | Row | Second line, suggestion with a size estimate | `crates/kiln-app/src/model.rs:209` | CONCAT, TERM |
+| 15 | `Suggested: {label}` | Row | Second line, suggestion with no estimate | `crates/kiln-app/src/model.rs:210` | TERM, VAGUE |
+| 16 | `{w} × {h} photo` | Row | Second line, image classed as photo | `crates/kiln-app/src/model.rs:246` |  |
+| 17 | `{w} × {h} graphic` | Row | Second line, image classed as graphic | `crates/kiln-app/src/model.rs:246` | JARGON |
+| 18 | `{w} × {h} video, {duration}` | Row | Second line, video with size and length | `crates/kiln-app/src/model.rs:254` |  |
+| 19 | `{w} × {h} video` | Row | Second line, video with no length | `crates/kiln-app/src/model.rs:255` |  |
+| 20 | `video, {duration}` | Row | Second line, video with no frame size | `crates/kiln-app/src/model.rs:256` |  |
+| 21 | `audio, {duration}` | Row | Second line, audio file | `crates/kiln-app/src/model.rs:260` |  |
+| 22 | `1 page` | Row | Second line, PDF with one page | `crates/kiln-app/src/model.rs:264` |  |
+| 23 | `{n} pages` | Row | Second line, PDF | `crates/kiln-app/src/model.rs:265` |  |
+| 24 | `{pages}, no text` | Row | Second line, PDF with no text layer (scanned) | `crates/kiln-app/src/model.rs:268` | VAGUE, JARGON |
+| 25 | `1 byte / {n} bytes / {x.y} KB / MB / GB / TB` | Row | Size part of every second line (decimal units) | `crates/kiln-app/src/model.rs:486-506` |  |
+| 26 | `Converting to {EXT}` | Row | Row while a conversion runs | `crates/kiln-app/src/model.rs:46` | TERM |
+| 27 | `Compressing / Cropping / Trimming / Splitting / Merging` | Row | Row while a tool runs | `crates/kiln-app/src/model.rs:48-52` |  |
+| 28 | `Moving` | Row | Row while a Move runs (a Move is near-instant, so rarely seen) | `crates/kiln-app/src/model.rs:55` |  |
+| 29 | `{first output name}` | Row | Row after a successful job (primary text); the row never says "Converted" | `crates/kiln-app/src/model.rs:176-186` |  |
+| 30 | `{first output name} and 1 more` | Row | Row after a job that wrote two files | `crates/kiln-app/src/model.rs:183` | CONCAT |
+| 31 | `{first output name} and {n} more` | Row | Row after a job that wrote three or more files | `crates/kiln-app/src/model.rs:184` | CONCAT |
+| 32 | `Moved to {folder name}` | Row | Row after a successful Move | `crates/kiln-app/src/model.rs:170` | TERM |
+| 33 | `Cancelled.` | Row | Row after the job was cancelled | `crates/kiln-app/src/model.rs:189` | TERM |
+| 34 | `{message}` | Row | Row after a failed job: first line of the error, in brick colour (see Error section) | `crates/kiln-app/src/model.rs:188` | TRUNC |
+| 35 | `Show details` | Row | Link on a failed row that has engine output | `crates/kiln-app/src/win/render.rs:771,774` | TERM |
+| 36 | `Converted to {EXT}` | Row | Built by done() for the job record; unclear whether any screen shows it | `crates/kiln-app/src/model.rs:63` | TERM |
+| 37 | `Compressed / Cropped / Trimmed / Split / Merged` | Row | Built by past() for the footer summary; rows never show it | `crates/kiln-app/src/model.rs:70-77` |  |
+| 38 | `Moved` | Row | Past tense of Move, used by the footer summary; unclear whether shown | `crates/kiln-app/src/model.rs:65` |  |
+| 39 | `{stem} compressed` | Row | Output file name after Compress (shown as the row text) | `crates/kiln-core/src/tools.rs:64` |  |
+| 40 | `{stem} cropped` | Row | Output file name after Crop | `crates/kiln-core/src/tools.rs:65` |  |
+| 41 | `{stem} trimmed` | Row | Output file name after Trim | `crates/kiln-core/src/tools.rs:66` |  |
+| 42 | `{stem} part {n}` | Row | Output file names after Split on video or audio | `crates/kiln-core/src/tools.rs:422` | TERM |
+| 43 | `{stem} page {n}` | Row | Output file names after Split on a PDF | `crates/kiln-core/src/tools.rs:264` | TERM |
+| 44 | `{stem} merged` | Row | Output file name after Merge | `crates/kiln-core/src/tools.rs:443` |  |
+| 45 | `{stem} page {n} / {stem} slide {n}` | Row | Output file names when a document or slide deck becomes images | `crates/kiln-core/src/job.rs:326-334` | TERM |
+| 46 | `{stem} ({n}).{ext}` | Row | Output name when the file name is taken | `crates/kiln-core/src/output.rs:82` |  |
+| 47 | `untitled` | Row | Output stem when a file name has nothing usable left | `crates/kiln-core/src/output.rs:53` |  |
+| 48 | `{stem} ({n}).{ext}` | Row | Name given to a moved file when the destination already has that name | `crates/kiln-app/src/actions.rs:141` |  |
+
+### Footer
+
+| # | String | Surface | When shown | Source | Flags |
+|---|---|---|---|---|---|
+| 49 | `Added {n} file(s).` | Footer | After files are dropped | `crates/kiln-app/src/model.rs:464` | CONCAT |
+| 50 | `{n} file was / files were already in the list.` | Footer | After dropping a file already listed | `crates/kiln-app/src/model.rs:467-470` | CONCAT, VAGUE |
+| 51 | `Skipped {n} item(s) that isn't / aren't a file / files.` | Footer | After dropping a folder or missing path | `crates/kiln-app/src/model.rs:473-476` | CONCAT, NOACTION, TERM |
+| 52 | `{n} file(s).` | Footer | After removing a row with Delete, or when a drop adds nothing | `crates/kiln-app/src/model.rs:479` | VAGUE, CONCAT |
+| 53 | `Working on {n} file(s).` | Footer | When a convert or tool batch starts | `crates/kiln-app/src/win/mod.rs:1073` | TERM, CONCAT |
+| 54 | `Cancelled.` | Footer | Whole batch cancelled | `crates/kiln-app/src/model.rs:95` |  |
+| 55 | `Couldn't convert {the file \| n files} to {EXT}.` | Footer | Whole batch failed (convert) | `crates/kiln-app/src/model.rs:104` | NOACTION, CONCAT |
+| 56 | `Couldn't {compress\|crop\|trim\|split\|merge} {the file \| n files}.` | Footer | Whole batch failed (tool) | `crates/kiln-app/src/model.rs:106` | NOACTION, CONCAT |
+| 57 | `Couldn't merge the files.` | Footer | Merge failed | `crates/kiln-app/src/model.rs:116` | NOACTION |
+| 58 | `Converted {n} file(s) to {EXT}.` | Footer | Whole convert batch worked | `crates/kiln-app/src/model.rs:118` | CONCAT |
+| 59 | `Converted {ok} of {n} files to {EXT}.` | Footer | Part of a convert batch worked | `crates/kiln-app/src/model.rs:121` | CONCAT |
+| 60 | `{Compressed\|Cropped\|Trimmed\|Split} {n} file(s).` | Footer | Whole tool batch worked | `crates/kiln-app/src/model.rs:125` | CONCAT |
+| 61 | `{Compressed\|Cropped\|Trimmed\|Split} {ok} of {n} files.` | Footer | Part of a tool batch worked | `crates/kiln-app/src/model.rs:126` | CONCAT |
+| 62 | `Merged {n} files into one.` | Footer | Merge worked | `crates/kiln-app/src/model.rs:115` | CONCAT |
+| 63 | `{failed} didn't work.` | Footer | Appended to a partial-success summary | `crates/kiln-app/src/model.rs:131` | VAGUE, NOACTION, TERM, CONCAT |
+| 64 | `{cancelled} cancelled.` | Footer | Appended to a summary when some jobs were cancelled | `crates/kiln-app/src/model.rs:110,134` | CONCAT, TERM |
+| 65 | `Moved {n} file(s) to {folder name}.` | Footer | After a Move | `crates/kiln-app/src/actions.rs:64-65` | CONCAT |
+| 66 | `Couldn't move the files to {folder name}.` | Footer | Every move failed | `crates/kiln-app/src/actions.rs:63` | NOACTION |
+| 67 | `{failed} didn't move.` | Footer | Appended when some moves failed | `crates/kiln-app/src/actions.rs:68` | VAGUE, NOACTION, CONCAT |
+| 68 | `Copied the path.` | Footer | After Copy path on one file | `crates/kiln-app/src/actions.rs:53` |  |
+| 69 | `Copied {n} paths.` | Footer | After Copy path on several files | `crates/kiln-app/src/actions.rs:55` |  |
+| 70 | `Couldn't copy the path: {os error}` | Footer | Clipboard failed | `crates/kiln-app/src/win/mod.rs:1178` | NOACTION, CONCAT, JARGON |
+| 71 | `Opened Terminal in {folder name}.` | Footer | After Open in Terminal | `crates/kiln-app/src/win/mod.rs:1186` | TERM |
+| 72 | `Windows Terminal isn't installed. Get it from the Microsoft Store.` | Footer | Open in Terminal when Windows Terminal is missing | `crates/kiln-app/src/win/mod.rs:1188` | TERM |
+| 73 | `Couldn't open Terminal: {os error}` | Footer | Open in Terminal failed for another reason | `crates/kiln-app/src/win/mod.rs:1191` | NOACTION, CONCAT, JARGON, TERM |
+| 74 | `Kiln can't move a file while a job is using it.` | Footer | Move chosen on a row that is running | `crates/kiln-app/src/win/mod.rs:1206` | JARGON, NOACTION, TERM |
+| 75 | `{settings error}. Using the defaults.` | Footer | App start, settings.toml unreadable (see Error section) | `crates/kiln-app/src/win/mod.rs:1291` | CONCAT, TRUNC, JARGON, NOACTION |
+| 76 | `Tab or right-click for {CODE} options.` | Footer | While a Convert target is lit on an open wheel and no suggestion footer applies | `crates/kiln-app/src/win/mod.rs:758` | CONCAT, TERM, HIDDEN |
+| 77 | `Suggested: {label}. {reason}` | Footer | While a suggested target is lit on an open wheel | `crates/kiln-app/src/wheel.rs:407` | CONCAT, TERM |
+
+### Convert wheel
+
+| # | String | Surface | When shown | Source | Flags |
+|---|---|---|---|---|---|
+| 78 | `Convert` | Convert wheel | Wheel centre title | `crates/kiln-app/src/wheel.rs:41` | TERM |
+| 79 | `{EXT}  (pattern: format extension upper-cased, e.g. PNG, JPG, MP4, DOCX, EPUB)` | Convert wheel | Every target segment on the wheel, in monospace; the same code is used in the sheet title and footer | `crates/kiln-core/src/registry.rs:44-46` | JARGON |
+| 80 | `{SOURCE EXT}` | Convert wheel | Wheel centre under the title while nothing is lit (the file's own extension, so JPEG or TIF appears for aliases) | `crates/kiln-app/src/wheel.rs:285-298` | TERM, JARGON |
+| 81 | `MIXED` | Convert wheel | Wheel centre when the dropped files have different extensions | `crates/kiln-app/src/wheel.rs:296` | VAGUE, JARGON |
+| 82 | `{SOURCE} → {TARGET}` | Convert wheel | Wheel centre while a target is lit (pairs of 13 or more characters, such as TEXTILE → DOCX, are wider than the 104 px centre) | `crates/kiln-app/src/win/render.rs:1139` | TRUNC |
+| 83 | `More` | Convert wheel | Ninth segment when a file has more than eight targets | `crates/kiln-app/src/win/render.rs:1109` | TERM, VAGUE |
+| 84 | `JPEG, JFIF shown as JPG; TIF as TIFF; PNM/PGM/PBM/PAM as PPM; NRW as NEF; SRF/SR2 as ARW; OGA as OGG; AIF as AIFF; MPEG/VOB as MPG; MTS/M2TS as TS; SSA as ASS; MARKDOWN as MD; HTM as HTML; TEXT as TXT; ASCIIDOC as ADOC; MEDIAWIKI as WIKI; DOCBOOK as DBK; AZW as AZW3; VSD as VSDX; HEIF/HIF as HEIC` | Convert wheel | Row chip and wheel centre show the file's own extension; wheel segments and the sheet title show the canonical code. Only formats whose shown code can differ from the extension | `crates/kiln-core/formats.toml` | TERM |
+
+### Tools wheel
+
+| # | String | Surface | When shown | Source | Flags |
+|---|---|---|---|---|---|
+| 85 | `Tools` | Tools wheel | Wheel centre title | `crates/kiln-app/src/wheel.rs:42` | TERM |
+| 86 | `Compress` | Tools wheel | Segment, large video or PDF/PNG/JPG files | `crates/kiln-core/src/tools.rs:37` | JARGON |
+| 87 | `Crop` | Tools wheel | Segment, images with plain borders or video with black bars | `crates/kiln-core/src/tools.rs:38` | VAGUE |
+| 88 | `Trim` | Tools wheel | Segment, video or audio with silent or black edges | `crates/kiln-core/src/tools.rs:39` | VAGUE |
+| 89 | `Split` | Tools wheel | Segment, PDF, video or audio | `crates/kiln-core/src/tools.rs:40` | VAGUE |
+| 90 | `Merge` | Tools wheel | Segment, two or more files of the same type | `crates/kiln-core/src/tools.rs:41` |  |
+| 91 | `{SOURCE EXT}` | Tools wheel | Wheel centre under the title | `crates/kiln-app/src/wheel.rs:285-298` | TERM |
+
+### Actions wheel
+
+| # | String | Surface | When shown | Source | Flags |
+|---|---|---|---|---|---|
+| 92 | `Actions` | Actions wheel | Wheel centre title | `crates/kiln-app/src/wheel.rs:43` | TERM |
+| 93 | `Copy path` | Actions wheel | Segment | `crates/kiln-app/src/actions.rs:26` | TERM |
+| 94 | `Move` | Actions wheel | Segment (opens a folder picker) | `crates/kiln-app/src/actions.rs:27` | VAGUE, TERM |
+| 95 | `Open in Terminal` | Actions wheel | Segment | `crates/kiln-app/src/actions.rs:28` | TERM |
+
+### More ring
+
+| # | String | Surface | When shown | Source | Flags |
+|---|---|---|---|---|---|
+| 96 | `(icons only) image, video, audio, document, sheet, slides, subtitle` | More ring | Each kind group in the outer ring starts with its icon, in that order; the group name is never written | `crates/kiln-app/src/wheel.rs:122-145` | VAGUE, HIDDEN |
+| 97 | `{EXT}` | More ring | Each extra target, grouped by kind then A to Z; seven-letter codes (TEXTILE, NUMBERS) are wider than the 52 px label slot | `crates/kiln-app/src/win/render.rs:1195` | TRUNC, JARGON |
+
+### Options sheet
+
+| # | String | Surface | When shown | Source | Flags |
+|---|---|---|---|---|---|
+| 98 | `Convert to {CODE}` | Options sheet | Sheet title, one file | `crates/kiln-app/src/win/mod.rs:1941` | TERM, CONCAT |
+| 99 | `Convert {n} files to {CODE}` | Options sheet | Sheet title, several files | `crates/kiln-app/src/win/mod.rs:1942` | TERM, CONCAT |
+| 100 | `{file name \| n files}  ·  {w} × {h}  ·  {fps} fps  ·  {duration}` | Options sheet | Context line under the title (size in bytes when nothing else is known) | `crates/kiln-app/src/quality.rs:379-401` | CONCAT, TRUNC, JARGON |
+| 101 | `Reading the file…` | Options sheet | Result line while the file is probed | `crates/kiln-app/src/win/mod.rs:1948` | TERM |
+| 102 | `Quality` | Options sheet | Row label (preset) | `crates/kiln-app/src/quality.rs:345` | TERM |
+| 103 | `Resolution` | Options sheet | Row label, video output | `crates/kiln-app/src/quality.rs:346` | TERM |
+| 104 | `Size` | Options sheet | Row label, image output (value is in pixels) | `crates/kiln-app/src/quality.rs:347` | VAGUE, TERM |
+| 105 | `Frame rate` | Options sheet | Row label | `crates/kiln-app/src/quality.rs:348` | TERM |
+| 106 | `Audio` | Options sheet | Row label (value is a bitrate) | `crates/kiln-app/src/quality.rs:349` | VAGUE, JARGON, TERM |
+| 107 | `Page detail` | Options sheet | Row label for PDF or slides to image (value is DPI) | `crates/kiln-app/src/quality.rs:350` | VAGUE, JARGON, TERM |
+| 108 | `Small / High / Best` | Options sheet | Segmented control for Quality | `crates/kiln-core/src/quality.rs:28-30` | VAGUE, TERM |
+| 109 | `Auto` | Options sheet | Stepper value when size, frame rate or audio rate is chosen automatically | `crates/kiln-app/src/quality.rs:214,221` | VAGUE |
+| 110 | `Original` | Options sheet | Stepper value that keeps the source size or frame rate | `crates/kiln-app/src/quality.rs:215` | TRUNC |
+| 111 | `{n} fps` | Options sheet | Frame-rate stepper value | `crates/kiln-app/src/quality.rs:216` | JARGON |
+| 112 | `{n}p` | Options sheet | Resolution stepper value for video (2160p, 1440p, 1080p ...) | `crates/kiln-app/src/quality.rs:218` | JARGON |
+| 113 | `{n} px` | Options sheet | Size stepper value for images | `crates/kiln-app/src/quality.rs:219` | JARGON |
+| 114 | `{n} kbps` | Options sheet | Audio stepper value | `crates/kiln-app/src/quality.rs:222` | JARGON, TRUNC |
+| 115 | `{n} dpi` | Options sheet | Page detail stepper value | `crates/kiln-app/src/quality.rs:223` | JARGON |
+| 116 | `{w} × {h}  ·  About {size}` | Options sheet | Result line, bottom left of the sheet | `crates/kiln-app/src/quality.rs:406-419` | CONCAT, TRUNC |
+| 117 | `Cancel` | Options sheet | Sheet button | `crates/kiln-app/src/win/render.rs:1533` | TERM |
+| 118 | `Convert` | Options sheet | Sheet primary button | `crates/kiln-app/src/win/render.rs:1534` | TERM |
+
+### Settings·General
+
+| # | String | Surface | When shown | Source | Flags |
+|---|---|---|---|---|---|
+| 119 | `Settings` | Settings·General | Panel title, every tab | `crates/kiln-app/src/win/render.rs:1329` |  |
+| 120 | `General` | Settings·General | Tab label | `crates/kiln-app/src/layout.rs:211` |  |
+| 121 | `Quality` | Settings·General | Tab label | `crates/kiln-app/src/layout.rs:212` | TERM |
+| 122 | `Engines` | Settings·General | Tab label | `crates/kiln-app/src/layout.rs:213` | JARGON, TERM |
+| 123 | `Close` | Settings·General | Settings button, every tab | `crates/kiln-app/src/win/render.rs:1337` | TERM |
+| 124 | `Check for updates` | Settings·General | Settings button, every tab, until an update is found | `crates/kiln-app/src/update.rs:79` |  |
+| 125 | `Get the update` | Settings·General | Settings button when a newer version exists (opens the releases page) | `crates/kiln-app/src/update.rs:78` | VAGUE |
+| 126 | `Kiln {version}` | Settings·General | Update note beside the button, before any check | `crates/kiln-app/src/update.rs:66` |  |
+| 127 | `Checking for updates…` | Settings·General | Update note while checking | `crates/kiln-app/src/update.rs:67` |  |
+| 128 | `Kiln {version} is the latest version.` | Settings·General | Update note, up to date | `crates/kiln-app/src/update.rs:68` |  |
+| 129 | `Kiln {version} is available.` | Settings·General | Update note, newer release found | `crates/kiln-app/src/update.rs:69` |  |
+| 130 | `No releases are published yet.` | Settings·General | Update note, GitHub returns 404 | `crates/kiln-app/src/update.rs:70` |  |
+| 131 | `GitHub's answer didn't name a version.` | Settings·General | Update note, reply could not be read | `crates/kiln-app/src/update.rs:52` | NOACTION, VAGUE, JARGON |
+| 132 | `GitHub is limiting requests. Try again later.` | Settings·General | Update note, HTTP 403 or 429 | `crates/kiln-app/src/update.rs:56` |  |
+| 133 | `GitHub didn't answer as expected.` | Settings·General | Update note, other HTTP status | `crates/kiln-app/src/update.rs:58` | NOACTION, VAGUE |
+| 134 | `Couldn't reach GitHub.` | Settings·General | Update note, offline | `crates/kiln-app/src/update.rs:59` | NOACTION |
+| 135 | `Output folder` | Settings·General | Row label | `crates/kiln-app/src/layout.rs:359` | TERM |
+| 136 | `Next to each file` | Settings·General | Output folder value when none is chosen | `crates/kiln-app/src/win/mod.rs:1338` |  |
+| 137 | `{folder path}` | Settings·General | Output folder value when chosen (truncated beside the Reset button) | `crates/kiln-app/src/win/mod.rs:1337` | TRUNC |
+| 138 | `Choose` | Settings·General | Output folder button | `crates/kiln-app/src/win/render.rs:1422` | VAGUE |
+| 139 | `Reset` | Settings·General | Output folder button once a folder is set | `crates/kiln-app/src/win/render.rs:1426` | TERM |
+| 140 | `Theme` | Settings·General | Row label | `crates/kiln-app/src/layout.rs:367` |  |
+| 141 | `System / Dark / Light` | Settings·General | Theme segmented control | `crates/kiln-app/src/settings.rs:68-70` |  |
+| 142 | `Wheel keys` | Settings·General | Row label | `crates/kiln-app/src/layout.rs:376` | TERM, JARGON, VAGUE |
+| 143 | `Convert  SHIFT / Tools  CTRL / Actions  ALT` | Settings·General | Three key buttons; clicking one cycles its key and swaps with the wheel that had it. Keys in capitals, unlike the empty-state hint | `crates/kiln-app/src/win/render.rs:1464-1468; crates/kiln-app/src/settings.rs:99-101` | HIDDEN, TERM |
+| 144 | `Suggestions` | Settings·General | Row label | `crates/kiln-app/src/layout.rs:388` | VAGUE, TERM |
+| 145 | `On / Off` | Settings·General | Suggestions segmented control | `crates/kiln-app/src/win/render.rs:1436` | VAGUE |
+| 146 | `Forget picks` | Settings·General | Button next to Suggestions; greyed until Kiln has recorded picks. No confirmation, no count | `crates/kiln-app/src/win/render.rs:1441,1447` | JARGON, TERM, VAGUE |
+| 147 | `# Kiln settings. Kiln rewrites this file when you change settings in the app; comments you add here are not kept.` | Settings·General | Top of settings.toml, only if the owner opens the file by hand | `crates/kiln-app/src/settings.rs:332-334` | JARGON |
+| 148 | `# output_folder = 'C:\Users\you\Converted'   # unset: next to each file` | Settings·General | settings.toml header, when opened by hand | `crates/kiln-app/src/settings.rs:336` | JARGON, TERM |
+| 149 | `# theme = 'system'  # system, dark or light` | Settings·General | settings.toml header, when opened by hand | `crates/kiln-app/src/settings.rs:337` |  |
+| 150 | `# [keys]  # shift, ctrl or alt, one each` | Settings·General | settings.toml header, when opened by hand | `crates/kiln-app/src/settings.rs:339` | TERM |
+| 151 | `# [quality]  # video and images: small, high or best; resolution, fps and image_size: original or a number; audio_kbps: auto or a number; page_dpi: 36 to 600` | Settings·General | settings.toml header, when opened by hand | `crates/kiln-app/src/settings.rs:340-344` | JARGON, TERM |
+| 152 | `# [engines]  # full paths to ffmpeg.exe, pandoc.exe, soffice.exe (libreoffice) and ebook-convert.exe (calibre)` | Settings·General | settings.toml header, when opened by hand | `crates/kiln-app/src/settings.rs:345-347` | JARGON, TERM |
+| 153 | `# [habits]  # picks per source type, counted on this PC` | Settings·General | settings.toml header, when opened by hand | `crates/kiln-app/src/settings.rs:348` | JARGON, TERM |
+
+### Settings·Quality
+
+| # | String | Surface | When shown | Source | Flags |
+|---|---|---|---|---|---|
+| 154 | `Video` | Settings·Quality | Row label (preset for video output) | `crates/kiln-app/src/layout.rs:412` | TERM, VAGUE |
+| 155 | `Resolution` | Settings·Quality | Row label (stepper) | `crates/kiln-app/src/layout.rs:413` | TERM |
+| 156 | `Frame rate` | Settings·Quality | Second-column label | `crates/kiln-app/src/layout.rs:414` | TERM |
+| 157 | `Images` | Settings·Quality | Row label (preset for image output) | `crates/kiln-app/src/layout.rs:416` | TERM, VAGUE |
+| 158 | `Image size` | Settings·Quality | Row label (stepper) | `crates/kiln-app/src/layout.rs:417` | TERM |
+| 159 | `PDF pages` | Settings·Quality | Second-column label (stepper holds the DPI of PDF or slides saved as images) | `crates/kiln-app/src/layout.rs:418` | VAGUE, JARGON, TERM |
+| 160 | `Audio` | Settings·Quality | Row label (stepper holds the audio bitrate) | `crates/kiln-app/src/layout.rs:419` | VAGUE, JARGON, TERM |
+| 161 | `Small / High / Best` | Settings·Quality | Segmented controls for Video and Images | `crates/kiln-core/src/quality.rs:28-30` | VAGUE, TERM |
+| 162 | `Original / {n}p / {n} fps / {n} px / {n} kbps / {n} dpi / Auto` | Settings·Quality | Stepper values; the 96 px stepper leaves 56 px for text, so "320 kbps" and "Original" are on the edge | `crates/kiln-app/src/quality.rs:211-224` | JARGON, TRUNC |
+
+### Settings·Engines
+
+| # | String | Surface | When shown | Source | Flags |
+|---|---|---|---|---|---|
+| 163 | `FFmpeg` | Settings·Engines | Row label | `crates/kiln-app/src/settings.rs:233` | JARGON, VAGUE |
+| 164 | `Pandoc` | Settings·Engines | Row label | `crates/kiln-app/src/settings.rs:234` | JARGON, VAGUE |
+| 165 | `LibreOffice` | Settings·Engines | Row label | `crates/kiln-app/src/settings.rs:235` | JARGON, VAGUE |
+| 166 | `Calibre` | Settings·Engines | Row label | `crates/kiln-app/src/settings.rs:236` | JARGON, VAGUE |
+| 167 | `{full path}` | Settings·Engines | Value when the owner chose a file | `crates/kiln-app/src/settings.rs:291` | TRUNC, JARGON |
+| 168 | `Not found at {full path}` | Settings·Engines | Value when the chosen file is gone | `crates/kiln-app/src/settings.rs:292` | TRUNC, NOACTION |
+| 169 | `Found on PATH` | Settings·Engines | Value when found through the PATH variable | `crates/kiln-app/src/settings.rs:293` | JARGON |
+| 170 | `Not installed` | Settings·Engines | Value when nothing is found; no link or instruction on this screen | `crates/kiln-app/src/settings.rs:295` | NOACTION, VAGUE |
+| 171 | `Choose` | Settings·Engines | Button for each engine row | `crates/kiln-app/src/win/render.rs:1422` | VAGUE |
+| 172 | `Reset` | Settings·Engines | Button once a path is set | `crates/kiln-app/src/win/render.rs:1426` | TERM |
+
+### Dialog
+
+| # | String | Surface | When shown | Source | Flags |
+|---|---|---|---|---|---|
+| 173 | `Write results to` | Dialog | Folder picker title from Settings > Output folder > Choose | `crates/kiln-app/src/win/mod.rs:1404` | TERM |
+| 174 | `Move the file to` | Dialog | Folder picker title for Move, one file | `crates/kiln-app/src/win/mod.rs:1210` | TERM |
+| 175 | `Move the files to` | Dialog | Folder picker title for Move, several files | `crates/kiln-app/src/win/mod.rs:1212` | TERM |
+| 176 | `Choose {ffmpeg\|pandoc\|soffice\|ebook-convert}.exe` | Dialog | Program picker title from Settings > Engines > Choose | `crates/kiln-app/src/win/mod.rs:1432` | JARGON, TERM, CONCAT |
+| 177 | `Programs` | Dialog | File-type name in the program picker (*.exe) | `crates/kiln-app/src/win/system.rs:87` | JARGON |
+| 178 | `Details` | Dialog | Title of the failed-job dialog | `crates/kiln-app/src/win/render.rs:1301` | TERM, VAGUE |
+| 179 | `{raw engine output}` | Dialog | Body of the Details dialog: monospace, wraps, clipped at the panel (no scroll) | `crates/kiln-app/src/win/render.rs:1303-1310` | JARGON, TRUNC, HIDDEN |
+| 180 | `Close` | Dialog | Details dialog button | `crates/kiln-app/src/win/render.rs:1313` | TERM |
+| 181 | `Kiln couldn't start: {windows message}\n\nError code {0x...}.` | Dialog | Message box when the window cannot be created | `crates/kiln-app/src/win/mod.rs:2079-2084` | JARGON, NOACTION |
+| 182 | `Kiln` | Dialog | Title of that message box | `crates/kiln-app/src/win/mod.rs:2084` |  |
+
+### Error
+
+| # | String | Surface | When shown | Source | Flags |
+|---|---|---|---|---|---|
+| 183 | `{path} doesn't exist.` | Error | Input file missing | `crates/kiln-core/src/error.rs:8` | NOACTION |
+| 184 | `{path} isn't a file.` | Error | Input is a folder | `crates/kiln-core/src/error.rs:11` | NOACTION |
+| 185 | `{path} isn't a {CODE} file.` | Error | File content does not match its extension | `crates/kiln-core/src/error.rs:14` | NOACTION, VAGUE, TERM |
+| 186 | `Kiln can't convert {EXT \| extensionless} files.` | Error | Unsupported or missing extension | `crates/kiln-core/src/error.rs:17` | NOACTION, JARGON |
+| 187 | `{EXT} isn't a format Kiln knows.` | Error | Unknown target format (CLI mostly) | `crates/kiln-core/src/error.rs:20` | NOACTION, TERM |
+| 188 | `Can't convert {from} to {to}. Supported formats: {list}.` | Error | CLI in practice (the app offers supported pairs only) | `crates/kiln-core/src/error.rs:23` | CONCAT, TRUNC |
+| 189 | `The output folder {path} doesn't exist.` | Error | Chosen output folder was deleted | `crates/kiln-core/src/error.rs:30` | NOACTION, TERM |
+| 190 | `Couldn't read the image in {path}: {reason}` | Error | Image decode failed (reason is the decoder's own text) | `crates/kiln-core/src/error.rs:33` | NOACTION, CONCAT, JARGON, TRUNC |
+| 191 | `Couldn't write the {CODE}: {reason}` | Error | Image encode failed | `crates/kiln-core/src/error.rs:36` | NOACTION, CONCAT, JARGON, TERM |
+| 192 | `JPG quality must be between 1 and 100, got {n}.` | Error | CLI only | `crates/kiln-core/src/error.rs:39` | TERM |
+| 193 | `{engine} isn't installed. Get it from Settings > Engines.` | Error | Engine missing; Settings > Engines only lets you point at a file, it offers no download | `crates/kiln-core/src/error.rs:42` | VAGUE, JARGON, TERM |
+| 194 | `{engine} couldn't convert the file: {summary}` | Error | Any engine failure, also for tools (a failed Trim says "convert") | `crates/kiln-core/src/error.rs:47` | CONCAT, JARGON, TERM, NOACTION, VOICE, TRUNC |
+| 195 | `{tool message}` | Error | ToolUnavailable and NothingToDo pass their text straight through | `crates/kiln-core/src/error.rs:55,60` |  |
+| 196 | `Cancelled.` | Error | Job cancelled | `crates/kiln-core/src/error.rs:63` |  |
+| 197 | `formats.toml: {message}` | Error | Built-in format list is invalid (developer error) | `crates/kiln-core/src/error.rs:66` | JARGON, NOACTION |
+| 198 | `No free file name for {path} after {n} tries.` | Error | Name collision loop gave up | `crates/kiln-core/src/error.rs:69` | NOACTION, JARGON |
+| 199 | `{path}: {os error}` | Error | Any file-system error | `crates/kiln-core/src/error.rs:72` | NOACTION, VAGUE, JARGON |
+| 200 | `Merge needs two or more files of the same type.` | Error | Merge with one file | `crates/kiln-core/src/tools.rs:210` | TERM |
+| 201 | `Merge needs files of the same type.` | Error | Merge with mixed types | `crates/kiln-core/src/tools.rs:226` | TERM |
+| 202 | `Kiln can't {tool id} {CODE and CODE} files.` | Error | Tool does not apply to this type (CLI mainly) | `crates/kiln-core/src/tools.rs:229` | CONCAT, NOACTION, TERM |
+| 203 | `There's no plain border to crop.` | Error | Crop on an image with no border | `crates/kiln-core/src/tools.rs:277` |  |
+| 204 | `There are no black bars to crop.` | Error | Crop on a video with no bars | `crates/kiln-core/src/tools.rs:308` |  |
+| 205 | `There's no black, silent stretch at the start or end to trim.` | Error | Trim on a video | `crates/kiln-core/src/tools.rs:342` | VAGUE |
+| 206 | `There's no silence at the start or end to trim.` | Error | Trim on audio | `crates/kiln-core/src/tools.rs:373` |  |
+| 207 | `Couldn't tell how long this file is.` | Error | Trim could not read the duration | `crates/kiln-core/src/tools.rs:555` | NOACTION |
+| 208 | `This file is already as small as Kiln can make it.` | Error | Compress gained nothing | `crates/kiln-core/src/tools.rs:570` |  |
+| 209 | `The PDF has only one page, so there's nothing to split.` | Error | Split on a one-page PDF | `crates/kiln-core/src/pdf.rs:503` |  |
+| 210 | `The video has no subtitle track.` | Error | Video to SRT, VTT or ASS | `crates/kiln-core/src/ffmpeg.rs:265` |  |
+| 211 | `The video's subtitles are pictures, not text, so they can't become {CODE}.` | Error | Video to subtitle with bitmap subtitles | `crates/kiln-core/src/ffmpeg.rs:273` | JARGON |
+| 212 | `FFmpeg can't convert {from} to {to}.` | Error | Registry mismatch (developer error; unclear whether reachable) | `crates/kiln-core/src/ffmpeg.rs:244` | JARGON, NOACTION, TERM |
+| 213 | `The PDF backend can't convert {from} to {to}.` | Error | Registry mismatch (developer error; unclear whether reachable) | `crates/kiln-core/src/pdf.rs:45` | JARGON, NOACTION, TERM |
+| 214 | `The image backend can't convert {from} to {to}. / can't read {EXT}. / can't write {EXT}.` | Error | Registry mismatch (developer error; unclear whether reachable) | `crates/kiln-core/src/raster.rs:47,192,301` | JARGON, NOACTION, TERM |
+| 215 | `{from} to {to} uses Pandoc, but a format has no pandoc name. / uses LibreOffice, but {format} has no libreoffice filter.` | Error | Registry mismatch (developer error; unclear whether reachable) | `crates/kiln-core/src/pandoc.rs:21; crates/kiln-core/src/libreoffice.rs:41` | JARGON, NOACTION |
+| 216 | `"{name}" isn't a backend Kiln has.` | Error | Registry mismatch (developer error; unclear whether reachable) | `crates/kiln-core/src/job.rs:66` | JARGON, NOACTION, TERM |
+| 217 | `Windows can't read this camera's RAW files. Install the Raw Image Extension from the Microsoft Store.` | Error | RAW photo with no Windows codec (one of the few errors with a next step) | `crates/kiln-core/src/raster.rs:372` | JARGON |
+| 218 | `camera RAW files can only be read on Windows.` | Error | Non-Windows build | `crates/kiln-core/src/raster.rs:501` | VOICE, JARGON, NOACTION |
+| 219 | `the PDF is protected with a password.` | Error | Summary after "{engine} couldn't convert the file:" | `crates/kiln-core/src/pdf.rs:80,90,204` | NOACTION, VOICE |
+| 220 | `the PDF has no pages.` | Error | Summary | `crates/kiln-core/src/pdf.rs:83,181` | NOACTION, VOICE |
+| 221 | `the PDF couldn't be read ({reason}).` | Error | Summary | `crates/kiln-core/src/pdf.rs:92` | NOACTION, VOICE, JARGON |
+| 222 | `the PDF's text couldn't be read.` | Error | Summary | `crates/kiln-core/src/pdf.rs:102,134` | NOACTION, VOICE |
+| 223 | `the PDF has no text to take out. Its pages may be scanned images.` | Error | Summary, PDF to text | `crates/kiln-core/src/pdf.rs:107` | NOACTION, VOICE, JARGON |
+| 224 | `a page couldn't be drawn ({reason}).` | Error | Summary | `crates/kiln-core/src/pdf.rs:174` | NOACTION, VOICE, JARGON |
+| 225 | `the PDF couldn't be written ({reason}).` | Error | Summary | `crates/kiln-core/src/pdf.rs:427` | NOACTION, VOICE, JARGON |
+| 226 | `Windows couldn't {open the PDF \| read the PDF \| draw page {n}} (0x{code}) / : {message}` | Error | Summary | `crates/kiln-core/src/pdf.rs:206,209,233,234,261` | JARGON, NOACTION, VOICE |
+| 227 | `drawing PDF pages needs the PDF renderer in Windows.` | Error | Non-Windows build | `crates/kiln-core/src/pdf.rs:282` | VOICE, JARGON, NOACTION |
+| 228 | `it stopped with exit code {n}.` | Error | Summary when an engine prints nothing | `crates/kiln-core/src/process.rs:189` | JARGON, NOACTION, VOICE |
+| 229 | `it was stopped by the system.` | Error | Summary when an engine is killed | `crates/kiln-core/src/process.rs:190` | VAGUE, NOACTION, VOICE |
+| 230 | `it wrote several files where the next step needs one.` | Error | Summary for a multi-step conversion | `crates/kiln-core/src/job.rs:314` | JARGON, NOACTION, VOICE |
+| 231 | `it finished without writing a file.` | Error | Summary | `crates/kiln-core/src/job.rs:383; crates/kiln-core/src/libreoffice.rs:117` | NOACTION, VOICE |
+| 232 | `it stopped without saying why.` | Error | Summary, LibreOffice | `crates/kiln-core/src/libreoffice.rs:96` | NOACTION, VOICE, VAGUE |
+| 233 | `{engine's first line of output}` | Error | Summary taken from the engine's own output (any wording, any language) | `crates/kiln-core/src/process.rs:183-191` | JARGON, NOACTION, VOICE, TRUNC |
+| 234 | `Kiln stopped this job because of a problem in Kiln itself.` | Error | A worker panicked | `crates/kiln-core/src/runner.rs:51` | JARGON, NOACTION, VAGUE, TERM |
+| 235 | `{name} isn't a file.` | Error | Move: source is not a file | `crates/kiln-app/src/actions.rs:90` | NOACTION |
+| 236 | `{name} isn't there any more.` | Error | Move: source was deleted | `crates/kiln-app/src/actions.rs:92` | NOACTION |
+| 237 | `{folder} isn't a folder.` | Error | Move: destination invalid | `crates/kiln-app/src/actions.rs:95` | NOACTION |
+| 238 | `{name} is already in that folder.` | Error | Move: same folder | `crates/kiln-app/src/actions.rs:99` | NOACTION |
+| 239 | `{name} couldn't be moved: {os error}` | Error | Move failed | `crates/kiln-app/src/actions.rs:112` | NOACTION, CONCAT, JARGON |
+| 240 | `{name} was copied, but the original couldn't be removed: {os error}` | Error | Move: copy worked, delete failed | `crates/kiln-app/src/actions.rs:116` | NOACTION, CONCAT, JARGON, TRUNC |
+| 241 | `there's no free name in that folder` | Error | Move: collision loop gave up | `crates/kiln-app/src/actions.rs:151` | NOACTION, VOICE |
+| 242 | `settings.toml couldn't be read: {toml message}` | Error | Footer at start, bad settings file | `crates/kiln-app/src/settings.rs:357` | JARGON, NOACTION, CONCAT, TRUNC |
+| 243 | `settings.toml has a quality value out of range` | Error | Footer at start | `crates/kiln-app/src/settings.rs:362` | JARGON, NOACTION, VAGUE |
+| 244 | `settings.toml gives two wheels the same key` | Error | Footer at start | `crates/kiln-app/src/settings.rs:367` | JARGON, NOACTION |
+| 245 | `settings.toml couldn't be opened: {os error}` | Error | Footer at start | `crates/kiln-app/src/settings.rs:390` | JARGON, NOACTION, CONCAT |
+| 246 | `Settings can't be saved because APPDATA isn't set.` | Error | Footer after changing a setting | `crates/kiln-app/src/settings.rs:477` | JARGON, NOACTION |
+| 247 | `Settings couldn't be saved: {os error}` | Error | Footer after changing a setting | `crates/kiln-app/src/settings.rs:484,489` | NOACTION, CONCAT, JARGON |
+| 248 | `'{s}' isn't small, high or best` | Error | Inside the settings.toml read error | `crates/kiln-app/src/quality.rs:450` | JARGON, TERM |
+| 249 | `{n} isn't a size` | Error | Inside the settings.toml read error | `crates/kiln-app/src/quality.rs:479` | JARGON, VAGUE |
+| 250 | `'{w}' isn't auto, original or a number` | Error | Inside the settings.toml read error | `crates/kiln-app/src/quality.rs:481` | JARGON |
+| 251 | `'{w}' isn't auto or a number` | Error | Inside the settings.toml read error | `crates/kiln-app/src/quality.rs:509` | JARGON |
+| 252 | `The Kiln app runs on Windows. Use the kiln command line here.` | Error | App binary built for another OS | `crates/kiln-app/src/main.rs:11` | TERM |
+
+### CLI
+
+| # | String | Surface | When shown | Source | Flags |
+|---|---|---|---|---|---|
+| 253 | `Convert files locally.` | CLI | kiln --help, one-line about | `crates/kiln-cli/src/main.rs:13` |  |
+| 254 | `Convert a file to another format. The result is written next to the input and never replaces an existing file. Converting a paged document to an image writes one file per page; each path is printed.` | CLI | kiln convert --help | `crates/kiln-cli/src/main.rs:21-23` | JARGON |
+| 255 | `The file to convert.` | CLI | <INPUT> help | `crates/kiln-cli/src/main.rs:25` |  |
+| 256 | `The output format, such as jpg, mp3 or docx.` | CLI | <FORMAT> help | `crates/kiln-cli/src/main.rs:27` | TERM |
+| 257 | `Write the result here instead of next to the input.` | CLI | --out-dir help (convert) | `crates/kiln-cli/src/main.rs:29` | TERM |
+| 258 | `Path to the FFmpeg executable. Defaults to the one on PATH.` | CLI | --ffmpeg help (repeated per command) | `crates/kiln-cli/src/main.rs:34` | JARGON, TERM |
+| 259 | `Path to the Pandoc executable. Defaults to the one on PATH.` | CLI | --pandoc help (repeated per command) | `crates/kiln-cli/src/main.rs:37` | JARGON, TERM |
+| 260 | `Path to LibreOffice's soffice.exe. Defaults to the one on PATH, then its default install folder.` | CLI | --libreoffice help (repeated per command) | `crates/kiln-cli/src/main.rs:40-41` | JARGON, TERM |
+| 261 | `Path to Calibre's ebook-convert.exe. Defaults to the one on PATH, then its default install folder.` | CLI | --calibre help (repeated per command) | `crates/kiln-cli/src/main.rs:44-45` | JARGON, TERM |
+| 262 | `Run a file tool: compress, crop, trim, split or merge. Results are written next to the first input; originals are never changed.` | CLI | kiln tool --help | `crates/kiln-cli/src/main.rs:49-50` | TERM |
+| 263 | `compress, crop, trim, split or merge.` | CLI | <TOOL> help | `crates/kiln-cli/src/main.rs:52` | TERM |
+| 264 | `The files to work on. Merge takes two or more of one type.` | CLI | <INPUTS> help (tool) | `crates/kiln-cli/src/main.rs:54` | TERM |
+| 265 | `Write results here instead of next to the input.` | CLI | --out-dir help (tool) | `crates/kiln-cli/src/main.rs:57` | TERM |
+| 266 | `Suggest a conversion for each file, then a tool for the whole set and, for several files, a conversion they share. Picks made in the app are ignored, so the output is the same every time.` | CLI | kiln suggest --help | `crates/kiln-cli/src/main.rs:75-77` | TERM, JARGON, VAGUE |
+| 267 | `The files to look at.` | CLI | <INPUTS> help (suggest) | `crates/kiln-cli/src/main.rs:79` |  |
+| 268 | `List the formats a file can be converted to.` | CLI | kiln formats --help | `crates/kiln-cli/src/main.rs:97` |  |
+| 269 | `The file, or just a name with its extension.` | CLI | <INPUT> help (formats) | `crates/kiln-cli/src/main.rs:99` |  |
+| 270 | `small, high or best. Sets compression for video, lossy audio and lossy images.` | CLI | -p/--preset help | `crates/kiln-cli/src/main.rs:108-109` | JARGON, TERM |
+| 271 | `JPG quality, 1 to 100. Defaults to the preset's (75, 90 or 97).` | CLI | -q/--quality help | `crates/kiln-cli/src/main.rs:112` | TERM, JARGON |
+| 272 | `Largest size: lines for video ("720" for 720p), pixels on the long side for images and animations. "original" keeps the source's.` | CLI | --size help | `crates/kiln-cli/src/main.rs:115-116` | JARGON, CONCAT, TERM |
+| 273 | `Highest frame rate for video and animations, or "original".` | CLI | --fps help | `crates/kiln-cli/src/main.rs:119` | JARGON |
+| 274 | `Audio bitrate in kbit/s for lossy audio.` | CLI | --audio-kbps help | `crates/kiln-cli/src/main.rs:122` | JARGON, TERM |
+| 275 | `Pixels per inch for pages and slides written as images.` | CLI | --dpi help | `crates/kiln-cli/src/main.rs:125` | JARGON, TERM |
+| 276 | `N\|original   KBPS   DPI   DIR   PATH` | CLI | Value names in the usage lines | `crates/kiln-cli/src/main.rs:30,117,120,123,126` | JARGON |
+| 277 | `Usage: kiln <COMMAND> / Commands: convert tool suggest formats help / Options: -h, --help Print help / -V, --version Print version` | CLI | clap-generated help and usage text | `crates/kiln-cli/src/main.rs:12-14` | TERM |
+| 278 | `{value} isn't a preset. Use small, high or best.` | CLI | Bad --preset | `crates/kiln-cli/src/main.rs:131` | TERM |
+| 279 | `{value} isn't a number or "original".` | CLI | Bad --size or --fps | `crates/kiln-cli/src/main.rs:141` | NOACTION, TERM |
+| 280 | `kiln: {message}` | CLI | Prefix on every CLI error | `crates/kiln-cli/src/main.rs:196,233,270` |  |
+| 281 | `kiln: {name} isn't a tool. Tools: compress, crop, trim, split, merge.` | CLI | Unknown tool name | `crates/kiln-cli/src/main.rs:212` | TERM |
+| 282 | `kiln: {path} doesn't exist.` | CLI | suggest with a missing file | `crates/kiln-cli/src/main.rs:246` | NOACTION |
+| 283 | `(all)` | CLI | suggest output: row name for suggestions covering the whole set | `crates/kiln-cli/src/main.rs:321,325` | JARGON |
+| 284 | `No suggestion.` | CLI | suggest output when nothing applies | `crates/kiln-cli/src/main.rs:347` | VAGUE |
+| 285 | `{output path} / {CODE} per line` | CLI | convert, tool and formats print plain paths and codes, no wording | `crates/kiln-cli/src/main.rs:191,228,274` |  |
+
+### Core reason
+
+| # | String | Surface | When shown | Source | Flags |
+|---|---|---|---|---|---|
+| 286 | `A photo. JPG keeps the look at about {size}.` | Core reason | Suggestion reason, photo-like image with an estimate | `crates/kiln-core/src/suggest.rs:158` | CONCAT, JARGON |
+| 287 | `A photo. JPG keeps the look.` | Core reason | Same, no estimate | `crates/kiln-core/src/suggest.rs:160` | VAGUE |
+| 288 | `You usually pick {EXT}.` | Core reason | Suggestion reason from habits (3 or more of the same pick) | `crates/kiln-core/src/suggest.rs:161` | TERM, VAGUE |
+| 289 | `Large for its length. About {size} after.` | Core reason | Compress reason, with estimate | `crates/kiln-core/src/suggest.rs:163` | VAGUE, CONCAT |
+| 290 | `Large for its length.` | Core reason | Compress reason, no estimate | `crates/kiln-core/src/suggest.rs:165` | VAGUE |
+| 291 | `Same motion at a fraction of the size.` | Core reason | Animated GIF to MP4 | `crates/kiln-core/src/suggest.rs:178` | VAGUE |
+| 292 | `Opens anywhere. The original stays as it is.` | Core reason | HEIC or camera RAW to JPG | `crates/kiln-core/src/suggest.rs:184` |  |
+| 293 | `Sharp edges and transparency, and it opens anywhere.` | Core reason | Graphics or transparent images to PNG | `crates/kiln-core/src/suggest.rs:197` |  |
+| 294 | `Plays on any phone, PC or browser.` | Core reason | Video to MP4 | `crates/kiln-core/src/suggest.rs:201` |  |
+| 295 | `Plays anywhere at a fraction of the size.` | Core reason | WAV, AIFF, WMA, AC3, OGG, OPUS, AAC or WV to MP3 | `crates/kiln-core/src/suggest.rs:204` | VAGUE |
+| 296 | `Opens in Word and Google Docs.` | Core reason | Word-like documents to DOCX | `crates/kiln-core/src/suggest.rs:205` |  |
+| 297 | `The spreadsheet format everyone can open.` | Core reason | To XLSX | `crates/kiln-core/src/suggest.rs:206` | VAGUE |
+| 298 | `The slide format everyone can open.` | Core reason | To PPTX | `crates/kiln-core/src/suggest.rs:207` | VAGUE |
+| 299 | `Opens in most e-book readers.` | Core reason | To EPUB | `crates/kiln-core/src/suggest.rs:208` |  |
+| 300 | `Works with almost every player.` | Core reason | ASS or VTT to SRT | `crates/kiln-core/src/suggest.rs:209` |  |
+| 301 | `One PDF, in the order shown.` | Core reason | Suggested Merge for PDFs | `crates/kiln-core/src/suggest.rs:300` | VAGUE |
+| 302 | `One PDF, a page each, in the order shown.` | Core reason | Suggested Merge for images | `crates/kiln-core/src/suggest.rs:305` | VAGUE |
+| 303 | `Black bars on the sides.` | Core reason | Suggested Crop | `crates/kiln-core/src/suggest.rs:284` |  |
+| 304 | `Black bars above and below.` | Core reason | Suggested Crop | `crates/kiln-core/src/suggest.rs:285` |  |
+| 305 | `Black bars around the picture.` | Core reason | Suggested Crop | `crates/kiln-core/src/suggest.rs:286` |  |
+| 306 | `Black bars to crop.` | Core reason | Suggested Crop, mixed or unknown bars | `crates/kiln-core/src/suggest.rs:281,288` |  |
+| 307 | `about {size}: "{n} KB", "{n} MB", "{n.n} GB"` | Core reason | Size estimate wording used inside reasons and row details | `crates/kiln-core/src/suggest.rs:345-367` |  |
+
+## Terminology
+
+| Concept | Names in use | Conflict | Suggested direction |
+|---|---|---|---|
+| tool | Tools (wheel title); Compress, Crop, Trim, Split, Merge (segments); "{tool} isn't a tool" (CLI); "kiln tool" (CLI); "Couldn't {tool}" (footer) | Tools / tool vs Actions vs "file actions"; "tool" is also how the CLI names a verb. Not one of the three is explained on a screen. | Pick one noun for the Tools wheel and use it in the hint, the title and the CLI. |
+| action | Actions (wheel title); "file actions" (empty-state hint); Copy path, Move, Open in Terminal | "Actions" vs "file actions" vs "tools". Copy path/Move/Open in Terminal are not about conversion at all. | Name the wheel by what it holds, then use the same words in the hint. |
+| convert | Convert (wheel title, sheet title, sheet button); Converting to / Converted to / Converts to; "Convert" in the empty-state hint; "convert" in CLI | One word is the wheel, the verb, the button, the row state and the CLI command. Tools also fail with "couldn't convert the file". | Keep it for the verb. Name the wheel and the sheet separately. |
+| wheel | Settings > Wheel keys; "wheel" in internal text only; the circle is called Convert/Tools/Actions | The word is used once, in Settings, and the empty state calls the same thing "while dropping". | Either name the circle on the drop screen or drop the word from Settings. |
+| More | More (ninth segment); "and {n} more" (row); no group names in the More ring | "More" means more formats on the wheel and more output files in a row. | Name it by what it holds. |
+| target | Converts to {format} (row); "{SRC} → {TARGET}" (centre); "Suggested: {label}" | The word target never appears; the thing is a format on the row, a code on the wheel and a label in the footer. | Settle on format and use it everywhere. |
+| format | "Converts to {n} formats" (row); "isn't a format Kiln knows"; "type" in "No conversions for this type" and "of the same type" (Merge); "{CODE} file" in "isn't a {CODE} file"; "kind" icons in the More ring | format vs type vs kind vs extension (the chip) vs code (the wheel label). | Use format for what the file is; avoid type. |
+| preset / quality | Quality (sheet row, Settings tab); Small/High/Best; Video and Images (Settings rows); "preset" (CLI --preset); "quality" (CLI --quality, JPG 1-100) | Quality is the row, the tab and a separate JPG number in the CLI. In Settings the same preset is called Video or Images. | Call the three-step control one thing in all places. |
+| size / resolution | Resolution (video); Size (image, pixels); Image size (Settings); "About {size}" (file bytes); "{n}p"; "{n} px" | Size means pixels in one place and bytes in another. | Use resolution for pixels, size only for bytes. |
+| audio / bitrate | Audio (row label); "{n} kbps"; "kbit/s" and --audio-kbps (CLI) | The row is named for the medium, the value is a rate. | Label it by what it changes, such as Audio quality. |
+| engine | Engines (tab); "{engine} isn't installed"; backend (core errors); program (picker "Choose {program}.exe"); executable (CLI); Programs (file filter) | engine vs backend vs program vs executable vs product name. | Pick program or engine and say what each one does. |
+| file / row / job | "Added {n} files." (footer); row (code only); "job" in "while a job is using it" and "problem in Kiln itself"; "item" in "Skipped {n} items" | file vs item vs job. The owner only ever sees files. | Say file everywhere. |
+| Clear / Remove / Reset / Forget / Cancel / Close | Clear (empties the whole list, no confirmation); Delete or Backspace removes one row (no label); Reset (Settings); Forget picks; Cancel (sheet, running row cross); Close (Settings, Details) | Six words for undoing or leaving, and Clear and Delete do different things with no on-screen hint. | Reserve each word for one meaning. |
+| picks / habits / suggestions | Suggestions (Settings row); Suggested: (row and footer); "You usually pick {EXT}"; Forget picks; [habits] (settings.toml); "Picks made in the app" (CLI) | Suggestions, picks and habits are one feature. | Pick one name and use it in the toggle, the button and the reason. |
+| failed / didn't work / couldn't | "Couldn't convert", "{n} didn't work", "{n} didn't move", "{engine} couldn't convert the file", "was copied, but ... couldn't be removed" | Five ways to say that something failed. | One pattern: what failed, then what to do. |
+| part / page | "{stem} part {n}" (Split media); "{stem} page {n}" (Split PDF, document to image); "{stem} slide {n}"; "PDF pages" (Settings, means DPI) | Part vs page for similar output; "pages" means a count in the row and resolution in Settings. | Keep page for paper, part for time. |
+| Terminal | "Open in Terminal" (segment); "Opened Terminal in {folder}."; "Windows Terminal isn't installed" | Terminal vs Windows Terminal. | Use Windows Terminal once. |
+| modifier keys | "Shift, Ctrl, Alt" (hint); "SHIFT, CTRL, ALT" (Settings buttons); "shift, ctrl or alt" (settings.toml) | Case differs between hint and buttons. | Use one form. |
+
+## Flags summary
+
+| Flag | Count |
+|---|---|
+| TERM | 114 |
+| JARGON | 95 |
+| VAGUE | 61 |
+| NOACTION | 68 |
+| HIDDEN | 5 |
+| CONCAT | 46 |
+| TRUNC | 21 |
+| METAPHOR | 1 |
+| VOICE | 18 |
+
+### The 15 worst strings
+
+| # | String | Why | Flags |
+|---|---|---|---|
+| 1 | `{engine} couldn't convert the file: {summary}` | Every engine failure and every tool failure lands on this line. A failed Trim says "convert". The part after the colon is a lowercase fragment, sometimes raw engine text, so sentence case and the full stop are not kept. It is also cut off at one line in the row. | TERM, VOICE, NOACTION, TRUNC |
+| 2 | `Fire raw files into finished ones.` | The only place the voice rules allow "fire", and it is a metaphor. It is the first sentence a new owner reads. | METAPHOR |
+| 3 | `{n} didn't work.  /  {failed} didn't move.` | Appended to a summary with no reason and no way to find which files failed. "Work" is not a word used for failures anywhere else. | VAGUE, NOACTION, TERM |
+| 4 | `{engine} isn't installed. Get it from Settings > Engines.` | Settings > Engines only lets you point at an existing file. It has no download or link, so the next step leads to a dead end. "Engine" appears nowhere else the owner sees. | VAGUE, JARGON, TERM |
+| 5 | `Not installed (Settings > Engines)` | The status for a missing engine has no button, link or instruction. Row labels are product names with no hint what each one converts. | NOACTION, VAGUE |
+| 6 | `it stopped with exit code {n}.  /  it was stopped by the system.` | Fallback summaries. Exit code is developer language, and nothing says what to do. The lowercase fragment breaks the voice rules. | JARGON, NOACTION, VOICE |
+| 7 | `Hold {key} while dropping to convert, {tools key} for tools, or {actions key} for file actions.` | The only place the three wheels are explained, and it disappears as soon as a file is added. Three names for related things (convert, tools, file actions) and the later labels say Actions. | HIDDEN, TERM, CONCAT |
+| 8 | `Wheel keys  (Convert SHIFT / Tools CTRL / Actions ALT)` | Clicking a button cycles the key and swaps it with another wheel. Nothing says so. "Wheel" is not a word used on the drop screen. | HIDDEN, TERM, JARGON |
+| 9 | `Tab or right-click for {CODE} options.` | The only on-screen hint that the options sheet exists, and it shows only while a target is lit. "Options" is not the sheet's title ("Convert to ..."). | HIDDEN, TERM, CONCAT |
+| 10 | `Audio / Page detail / PDF pages / Size  (labels on the sheet and in Settings)` | The values are bitrate (kbps) and DPI, units only a specialist knows. "PDF pages" sets the resolution of the pages, not their number. "Size" is pixels, not file size. | VAGUE, JARGON, TERM |
+| 11 | `Forget picks` | Wipes what Kiln has learned with no confirmation and no count. "Picks" is called habits in the file and "You usually pick" in suggestions. | JARGON, TERM, VAGUE |
+| 12 | `settings.toml couldn't be read: {toml message}. Using the defaults.` | Names a file the owner has never seen and prints parser text in the one-line footer, where it is cut off. No next step and nothing says where the file lives. | JARGON, NOACTION, TRUNC, CONCAT |
+| 13 | `Kiln can't move a file while a job is using it.` | "Job" is used nowhere else in the interface (it is "file" or "row"). The message does not say to wait or when to retry. | JARGON, NOACTION, TERM |
+| 14 | `{folder}  ·  {description}  ·  {size}  ·  Suggested: {label}, about {size}` | The full folder path comes first, so on a normal path the suggestion is the part that is cut off at about 105 characters. The suggestion is the most useful part. | TRUNC, CONCAT |
+| 15 | `Details dialog body ({raw engine output})` | Raw stderr, wrapped and clipped with no scroll, so the line that matters is often out of sight. The title "Details" and the link "Show details" say nothing about what is inside. | JARGON, TRUNC, HIDDEN |
+
+## Gestures and behaviour with no on-screen text
+
+These are part of the HIDDEN problem. None is labelled or has a tooltip (the app has no tooltip code).
+
+| Input | Effect |
+|---|---|
+| Delete or Backspace | Removes the selected row. Footer then says "{n} file(s)." |
+| Space | Shows details for the selected failed row (same as the Show details link). |
+| Ctrl+, | Opens Settings. |
+| Enter (with an optional wheel modifier) | Opens a wheel for the selected file. |
+| Home, End, Up, Down | Move the selection. Esc deselects. |
+| Right-click, Apps key, Shift+F10 | Opens the Convert wheel for the selected row. |
+| Tab or right-click on a lit target | Opens the options sheet. Only hinted while a target is lit. |
+| Drop without a modifier | Adds files only. The modifier hint is gone once files are listed. |
+| Click a Wheel keys button | Cycles its modifier and swaps with the wheel that had it. |
+| Mouse wheel | Scrolls the list. |
+| Cross icon on a running row | Cancels that job. No label or tooltip. |
+| Clear | Empties the whole list with no confirmation. |

@@ -1,0 +1,25 @@
+Kiln UIA dump: 04b-settings-tab-focus
+State: Settings open, Tab pressed once (keyboard focus ring on the General tab)
+Captured: 2026-10-19T21:31:30, kiln-app release build, 125% scale (no monitor runs at 100%), scratch APPDATA
+
+== Raw view (everything UIA exposes) ==
+- name="Kiln" | type=Window | automationId="" | class="KilnWindow" | rect=x=256 y=256 w=918 h=647 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+
+== Control view (what Narrator walks) ==
+- name="Kiln" | type=Window | automationId="" | class="KilnWindow" | rect=x=256 y=256 w=918 h=647 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+
+== Content view ==
+- name="Kiln" | type=Window | automationId="" | class="KilnWindow" | rect=x=256 y=256 w=918 h=647 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+
+== Focused element ==
+name="Kiln" | type=Window | automationId="" | class="KilnWindow" | rect=x=256 y=256 w=918 h=647 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+
+== ElementFromPoint probes (points in client DIPs, scaled to px by the window DPI) ==
+gear button (688,28) -> name="Kiln" | type=Window | automationId="" | class="KilnWindow" | rect=x=256 y=256 w=918 h=647 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+first row / drop panel (200,100) -> name="Kiln" | type=Window | automationId="" | class="KilnWindow" | rect=x=256 y=256 w=918 h=647 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+list centre (360,220) -> name="Kiln" | type=Window | automationId="" | class="KilnWindow" | rect=x=256 y=256 w=918 h=647 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+Clear button (668,444) -> name="Kiln" | type=Window | automationId="" | class="KilnWindow" | rect=x=256 y=256 w=918 h=647 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+row link area (620,110) -> name="Kiln" | type=Window | automationId="" | class="KilnWindow" | rect=x=256 y=256 w=918 h=647 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+
+Client rect: 900 x 600 px
+
