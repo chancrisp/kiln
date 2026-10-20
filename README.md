@@ -320,7 +320,10 @@ docs/screenshots   previews from each milestone
    `cargo run -p kiln-core --example gen_fixtures`.
 4. Run `cargo test --workspace`. `crates/kiln-cli/tests/pairs.rs` converts
    every supported pair, so the new type is tested both ways.
-5. Add it to the Formats table above. A test checks that this README names
+5. Give it a plain name in `describe_format`, in
+   [`crates/kiln-core/src/names.rs`](crates/kiln-core/src/names.rs), such as
+   "a small image for the web". A test fails until every extension has one.
+6. Add it to the Formats table above. A test checks that this README names
    every format in the registry.
 
 A format that needs a new engine gets a new backend: implement the

@@ -103,10 +103,11 @@ test enforces this.
   - The tools that fit them. Merge needs two or more files of one type.
 - **More.** The convert wheel holds at most eight targets, the ones people reach for first. When there are more, the ninth segment is **More** (three dots).
   - Pointing at More pours an outer ring from behind the dish over 160 ms, scaling from 66% with opacity. Pointing at another inner segment draws it back over 120 ms.
-  - The ring runs from 144 to 208 DIPs. Its targets are grouped by kind, each group led by its kind's icon in muted stone, with a hairline divider only where a group starts. Codes are monospace, without icons.
+  - The ring runs from 144 to 208 DIPs. Its targets are grouped by kind, each group led by a heading: the kind's icon in muted stone with its name under it in muted caption text (Images, Video, Audio, Documents, Sheets, Slides, Subtitles). A heading takes two and a half slots, a code one, with a hairline divider only where a group starts. Codes are monospace, without icons.
   - The 8 DIP groove between the dish and the ring is solid ground, so nothing behind shows through.
   - The centre reads `MP4 → AVI` while a target is lit, so the pair is always spelled out.
-- **Options.** Tab or right-click on a target opens its options sheet instead of converting. The footer says so while a target is lit: "Tab or right-click for MP3 options."
+- **Names.** While a convert target is lit, in the wheel or the More ring, the footer says what it is in place of the generic hint: `WEBP: a small image for the web`, `WV: WavPack, lossless audio`. The code is upper-cased and the description comes from `describe_format` in kiln-core: lower case after the colon unless it opens with a proper name, no full stop, at most 40 characters. With nothing lit, the footer goes back to what it said. `wheel::target_label` composes the line, and the options sheet reuses it.
+- **Options.** Tab or right-click on a target opens its options sheet instead of converting.
 - **Suggestion.** When Kiln has a suggestion for the files, the suggested segment gets a 4 px celadon dot centred 6 px above its icon. Places never change.
   - When the suggestion is in More, the More segment and the suggestion's slot in the outer ring both get the dot. In the ring, where codes have no icon, the dot sits 6 px above the code.
   - When facts arrive while the wheel is open, the dot fades in over 160 ms. Nothing moves or pulses.
@@ -118,7 +119,8 @@ test enforces this.
 
 - A panel centred over a scrim. It rises 8 px and fades in over 160 ms, and fades out over 120 ms.
 - **Title** in the serif: "Convert to MOV", or "Convert 3 files to MOV".
-- **Context** below it in muted UI text: the file and what it is, as in `long take.mp4 · 1280 × 720 · 25 fps · 1:30`. While the file is read, it says "Reading the file…".
+- **Format** below it in muted caption text: the target as the wheel's footer names it, as in `MOV: QuickTime video from Apple`.
+- **Context** below that in muted UI text: the file and what it is, as in `long take.mp4 · 1280 × 720 · 25 fps · 1:30`. While the file is read, it says "Reading the file…".
 - **Rows** show only the settings that change this pair's result, so a PNG to JPG sheet has two rows and an MP3 to OGG sheet one. Each value is a segmented control (Small, High, Best) or a stepper.
 - A **stepper** shows its value between two chevrons. Clicking the left or right end, or Left and Right on the keyboard, steps through choices that fit the file. A 720p clip never offers 1080p.
 - **Result** at the bottom left: the size it will come out at and a rough file size, as in `1280 × 720 · About 25 MB`. It updates as values change. Kiln leaves the file size out where it can't be estimated well.

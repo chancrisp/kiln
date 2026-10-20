@@ -28,7 +28,7 @@ The first version.
 - `kiln` command line: `convert`, `tool` and `formats`, with `--preset`, `--size`, `--fps`, `--audio-kbps` and `--dpi`.
 - The Windows app:
   - A drop target and file list.
-  - The glaze wheel, with Convert, Tools and Actions. The convert wheel keeps eight common targets close, and a More segment pours a second ring with every other format, grouped by kind.
+  - The glaze wheel, with Convert, Tools and Actions. The convert wheel keeps eight common targets close, and a More segment pours a second ring with every other format, grouped by kind and named (Images, Video, Audio, Documents). A lit format says what it is in the footer and on the options sheet, as in "WEBP: a small image for the web".
   - An options sheet: Tab or right-click on a format in the wheel shows only the quality settings that fit the file, what the file is, and an estimate of the result.
   - Settings in three tabs, General, Quality and Engines, with quality defaults for video, images, audio and PDF pages.
   - Progress, results and errors shown in each row, plus a details dialog. The progress line glows and breathes while a job runs.

@@ -1772,7 +1772,7 @@ impl App {
     }
 
     /// The footer's hint on the open wheel: the suggestion's reason while
-    /// nothing else is lit, or how to reach a lit format's options.
+    /// nothing else is lit, or what the lit format is.
     fn wheel_hint(&self) -> Option<String> {
         let w = self.wheel.as_ref().filter(|w| w.is_open())?;
         if let Some(s) = &w.suggestion {
@@ -1785,8 +1785,9 @@ impl App {
                 }
             }
         }
-        let (_, to, _) = self.sheet_target(w.hover)?;
-        Some(format!("Tab or right-click for {} options.", to.code()))
+        // A lit convert target says what it is, in place of the hint on how
+        // to reach its options.
+        wheel::lit_footer(w.hover.and_then(|spot| w.wheel.item(spot)))
     }
 
     /// Advance the animations: start a pulsed job, drop a faded wheel or
@@ -3235,6 +3236,7 @@ impl App {
                 1 => format!("Convert to {}", s.to.code()),
                 n => format!("Convert {n} files to {}", s.to.code()),
             };
+            let target = wheel::target_label(&s.to.ext);
             let infos = s.infos.as_deref();
             let one = infos.and_then(|i| (i.len() == 1).then(|| &i[0]));
             let context = q::source_line(&s.names, s.bytes, one);
@@ -3242,7 +3244,7 @@ impl App {
                 None => "Reading the file…".to_owned(),
                 Some(i) => q::result_line(&s.from, &s.to, &s.quality, i),
             };
-            (title, context, result)
+            (title, target, context, result)
         });
         let held = self.files.held_count();
         let export_all = (held > 0).then(|| model::export_all_label(held));
@@ -3306,9 +3308,10 @@ impl App {
             }),
             settings_hover: self.settings_hover,
             sheet: match (&self.sheet, &sheet_layout, &sheet_lines) {
-                (Some(s), Some(l), Some((title, context, result))) => Some(SheetView {
+                (Some(s), Some(l), Some((title, target, context, result))) => Some(SheetView {
                     layout: l,
                     title,
+                    target,
                     context,
                     result,
                     rows: &sheet_rows,

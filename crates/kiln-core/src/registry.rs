@@ -271,6 +271,15 @@ impl Registry {
         self.formats.get(ext)
     }
 
+    /// Every extension the registry reads or writes: each format's own, and
+    /// its aliases. Lowercase, no dot.
+    pub fn extensions(&self) -> impl Iterator<Item = &str> {
+        self.formats
+            .keys()
+            .chain(self.aliases.keys())
+            .map(String::as_str)
+    }
+
     /// The format of a file, judged by its extension.
     pub fn format_of(&self, path: &Path) -> Option<&Format> {
         self.format(path.extension()?.to_str()?)

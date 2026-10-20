@@ -240,38 +240,80 @@ pub fn split_common(mut items: Vec<Item>) -> (Vec<Item>, Vec<Item>) {
     (items, more)
 }
 
-/// One slot of the outer ring: an item, or the kind icon that starts a
+/// How much of the outer ring a group's heading takes, against one for a
+/// format. The heading holds an icon with its name under it, which a
+/// format's slot is too narrow for once the ring is full.
+pub const HEADING_WEIGHT: f32 = 2.5;
+
+/// One slot of the outer ring: an item, or the heading that starts a
 /// group.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OuterSlot {
     pub a0: f32,
     pub a1: f32,
-    /// Index into `Wheel::more`; `None` for a group's icon.
+    /// Index into `Wheel::more`; `None` for a group's heading.
     pub item: Option<usize>,
     pub icon: &'static str,
+    /// The group's name, on a heading.
+    pub heading: Option<&'static str>,
 }
 
-/// The outer ring's slots, clockwise from the top: each group's kind
-/// icon, then its formats.
+/// The plain name of a kind of format, muted beside its icon on the outer
+/// ring.
+pub fn kind_label(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Image => "Images",
+        Kind::Audio => "Audio",
+        Kind::Video => "Video",
+        Kind::Document => "Documents",
+        Kind::Spreadsheet => "Sheets",
+        Kind::Presentation => "Slides",
+        Kind::Subtitle => "Subtitles",
+    }
+}
+
+/// The outer ring's slots, clockwise from the top: each group's heading
+/// (its kind icon and name), then its formats. The first slot is centred
+/// at the top.
 pub fn outer_slots(more: &[Item]) -> Vec<OuterSlot> {
-    let mut plan: Vec<(Option<usize>, &'static str)> = vec![];
+    type Plan = (Option<usize>, &'static str, Option<&'static str>);
+    let mut plan: Vec<Plan> = vec![];
     let mut group = None;
     for (i, item) in more.iter().enumerate() {
         let g = kind_order(item.kind);
         if group != Some(g) {
             group = Some(g);
-            plan.push((None, item.icon));
+            plan.push((None, item.icon, item.kind.map(kind_label)));
         }
-        plan.push((Some(i), item.icon));
+        plan.push((Some(i), item.icon, None));
     }
-    let n = plan.len();
+    let weight = |item: Option<usize>| if item.is_none() { HEADING_WEIGHT } else { 1.0 };
+    let total: f32 = plan.iter().map(|p| weight(p.0)).sum();
+    let unit = TAU / total;
+    let mut a = -PI / 2.0 - unit * weight(plan.first().and_then(|p| p.0)) / 2.0;
     plan.into_iter()
-        .enumerate()
-        .map(|(k, (item, icon))| {
-            let (a0, a1) = segment(k, n);
-            OuterSlot { a0, a1, item, icon }
+        .map(|(item, icon, heading)| {
+            let a0 = a;
+            a += unit * weight(item);
+            OuterSlot {
+                a0,
+                a1: a,
+                item,
+                icon,
+                heading,
+            }
         })
         .collect()
+}
+
+/// Which outer slot an angle (clockwise from the positive x axis) falls in.
+fn outer_slot_at(slots: &[OuterSlot], angle: f32) -> Option<&OuterSlot> {
+    let first = slots.first()?;
+    let rel = (angle - first.a0).rem_euclid(TAU);
+    slots
+        .iter()
+        .find(|s| rel < s.a1 - first.a0)
+        .or(slots.last())
 }
 
 /// Where an outer slot's label is centred, relative to the wheel.
@@ -279,6 +321,64 @@ pub fn outer_point(slot: &OuterSlot) -> (f32, f32) {
     let mid = (slot.a0 + slot.a1) / 2.0;
     let r = (R_MORE_INNER + R_MORE_OUTER) / 2.0;
     (r * mid.cos(), r * mid.sin())
+}
+
+/// Side of a heading's icon, in DIPs (the 24 unit icon at 0.75).
+pub const HEADING_ICON: f32 = 18.0;
+/// Height of a heading's name line.
+pub const HEADING_LINE: f32 = 14.0;
+/// Space between a heading's icon and its name.
+pub const HEADING_GAP: f32 = 2.0;
+/// Most the name's text can be, per character, at the caption size. The
+/// layout keeps clear of the neighbours by this much, so the real text,
+/// which is narrower, never touches them.
+pub const HEADING_CHAR: f32 = 6.5;
+
+/// A box in wheel space: left, top, width, height.
+pub type Box4 = (f32, f32, f32, f32);
+
+/// Where a heading draws, relative to the wheel's centre: the icon's box
+/// and the name's, stacked and centred on the slot. The name is as wide as
+/// its text can get. Beside the ring's left and right the name is nearly as
+/// wide as the band, so the stack slides along the slot's middle line to
+/// keep every corner inside the band.
+pub fn heading_boxes(slot: &OuterSlot) -> Option<(Box4, Box4)> {
+    let name = slot.heading?;
+    let mid = (slot.a0 + slot.a1) / 2.0;
+    let w = name.chars().count() as f32 * HEADING_CHAR;
+    let tall = HEADING_ICON + HEADING_GAP + HEADING_LINE;
+    let at = |r: f32| -> (Box4, Box4) {
+        let (x, y) = (r * mid.cos(), r * mid.sin());
+        let top = y - tall / 2.0;
+        (
+            (x - HEADING_ICON / 2.0, top, HEADING_ICON, HEADING_ICON),
+            (
+                x - w / 2.0,
+                top + HEADING_ICON + HEADING_GAP,
+                w,
+                HEADING_LINE,
+            ),
+        )
+    };
+    let in_band = |b: Box4| {
+        let (x, y, bw, bh) = b;
+        [(x, y), (x + bw, y), (x, y + bh), (x + bw, y + bh)]
+            .into_iter()
+            .all(|(px, py)| {
+                let r = (px * px + py * py).sqrt();
+                (R_MORE_INNER + 1.0..=R_MORE_OUTER - 1.0).contains(&r)
+            })
+    };
+    let centre = (R_MORE_INNER + R_MORE_OUTER) / 2.0;
+    for nudge in 0..=12 {
+        for sign in [1.0, -1.0] {
+            let boxes = at(centre + sign * nudge as f32);
+            if in_band(boxes.0) && in_band(boxes.1) {
+                return Some(boxes);
+            }
+        }
+    }
+    Some(at(centre))
 }
 
 /// "PNG" when every file shares a type, "MIXED" otherwise.
@@ -373,7 +473,8 @@ pub fn hit(w: &Wheel, x: f32, y: f32, more_open: bool) -> Option<Spot> {
     }
     if outer && d > edge && d <= R_MORE_OUTER + REACH {
         let slots = outer_slots(&w.more);
-        return slots[slot_at(from_top, slots.len())].item.map(Spot::Outer);
+        let angle = dy.atan2(dx);
+        return outer_slot_at(&slots, angle)?.item.map(Spot::Outer);
     }
     None
 }
@@ -405,6 +506,28 @@ pub fn start_spot(w: &Wheel, s: Option<&Suggested>) -> Spot {
 /// reason.
 pub fn suggestion_footer(label: &str, reason: &str) -> String {
     format!("Suggested: {label}. {reason}")
+}
+
+/// A format as the wheel names it: "WEBP: a small image for the web". A
+/// format Kiln has no description for is just its code. The footer, the
+/// options sheet and the screen reader's names for the segments all use
+/// this.
+pub fn target_label(ext: &str) -> String {
+    let code = ext.trim_start_matches('.').to_ascii_uppercase();
+    match kiln_core::describe_format(ext) {
+        Some(what) => format!("{code}: {what}"),
+        None => code,
+    }
+}
+
+/// The footer while a convert target is lit: what the format is. Tools,
+/// file actions and More have nothing to say, and leave the footer as it
+/// was.
+pub fn lit_footer(item: Option<&Item>) -> Option<String> {
+    match &item?.action {
+        Action::Convert(ext) => Some(target_label(ext)),
+        _ => None,
+    }
 }
 
 /// Whether the footer gives the suggestion's reason: while nothing is lit,
@@ -740,6 +863,158 @@ mod tests {
         assert!(shows_suggestion(Some(Outer(5)), &[Inner(8), Outer(5)]));
         assert!(!shows_suggestion(Some(Inner(1)), &[Inner(2)]));
         assert!(!shows_suggestion(None, &[]));
+    }
+
+    #[test]
+    fn a_target_is_named_with_what_it_is() {
+        assert_eq!(target_label("webp"), "WEBP: a small image for the web");
+        assert_eq!(target_label(".QOI"), "QOI: a fast, lossless image");
+        assert_eq!(target_label("wv"), "WV: WavPack, lossless audio");
+        assert_eq!(target_label("dbk"), "DBK: a DocBook document");
+        // Nothing to say about a format Kiln doesn't know: just its code.
+        assert_eq!(target_label("xyz"), "XYZ");
+    }
+
+    #[test]
+    fn the_footer_names_a_lit_convert_target() {
+        let w = real(WheelKind::Convert, "a.png");
+        let jpg = w.items.iter().find(|i| i.label == "JPG").unwrap();
+        assert_eq!(
+            lit_footer(Some(jpg)).as_deref(),
+            Some("JPG: a photo that opens anywhere")
+        );
+        // Nothing lit, so the old hint stays.
+        assert_eq!(lit_footer(None), None);
+        // A tool has no format to name.
+        let tools = real(WheelKind::Tools, "a.mp4");
+        assert_eq!(lit_footer(tools.items.first()), None);
+        // Every format on every wheel has something to say.
+        for item in w.items.iter().chain(&w.more) {
+            let said = lit_footer(Some(item)).unwrap();
+            assert!(said.starts_with(&format!("{}: ", item.label)), "{said}");
+        }
+    }
+
+    #[test]
+    fn each_group_is_named_for_its_kind() {
+        assert_eq!(kind_label(Kind::Image), "Images");
+        assert_eq!(kind_label(Kind::Audio), "Audio");
+        assert_eq!(kind_label(Kind::Video), "Video");
+        assert_eq!(kind_label(Kind::Document), "Documents");
+        let w = with_more();
+        let slots = outer_slots(&w.more);
+        for s in &slots {
+            assert_eq!(s.heading.is_some(), s.item.is_none());
+        }
+        let names: Vec<_> = slots.iter().filter_map(|s| s.heading).collect();
+        assert_eq!(names, ["Images", "Video", "Audio"]);
+    }
+
+    #[test]
+    fn the_outer_slots_tile_the_ring() {
+        let w = with_more();
+        let slots = outer_slots(&w.more);
+        assert!((slots[0].a0 + slots[0].a1 - 2.0 * (-PI / 2.0)).abs() < 1e-4);
+        for pair in slots.windows(2) {
+            assert!((pair[0].a1 - pair[1].a0).abs() < 1e-5);
+        }
+        assert!((slots.last().unwrap().a1 - slots[0].a0 - TAU).abs() < 1e-4);
+        // A heading is wider than a format.
+        assert!(slots[0].a1 - slots[0].a0 > slots[1].a1 - slots[1].a0);
+    }
+
+    /// Whether a box in wheel space lies wholly in the slot's piece of the
+    /// outer ring.
+    fn box_in_slot(b: Box4, slot: &OuterSlot) -> bool {
+        let (x, y, w, h) = b;
+        [(x, y), (x + w, y), (x, y + h), (x + w, y + h)]
+            .into_iter()
+            .all(|(px, py)| {
+                let r = (px * px + py * py).sqrt();
+                let rel = (py.atan2(px) - slot.a0).rem_euclid(TAU);
+                (R_MORE_INNER + 1.0..=R_MORE_OUTER - 1.0).contains(&r)
+                    && rel <= slot.a1 - slot.a0 - 0.01
+            })
+    }
+
+    #[test]
+    fn a_heading_stays_in_its_slot_for_every_source_format() {
+        let reg = kiln_core::Registry::builtin();
+        let mut checked = 0;
+        for ext in reg.extensions() {
+            let w = real(WheelKind::Convert, &format!("a.{ext}"));
+            for slot in outer_slots(&w.more) {
+                let Some((icon, name)) = heading_boxes(&slot) else {
+                    continue;
+                };
+                checked += 1;
+                assert!(box_in_slot(icon, &slot), "{ext}: the icon leaves its slot");
+                assert!(
+                    box_in_slot(name, &slot),
+                    "{ext}: {:?} leaves its slot {:?} {:?} n={}",
+                    slot.heading,
+                    slot,
+                    name,
+                    outer_slots(&w.more).len()
+                );
+                // The name sits under the icon, not over it.
+                assert!(name.1 >= icon.1 + icon.3);
+            }
+        }
+        assert!(checked > 20, "only {checked} headings checked");
+    }
+
+    #[test]
+    fn headings_clear_the_window_edge_at_the_smallest_window() {
+        let (ww, wh) = crate::layout::MIN_WINDOW;
+        let reg = kiln_core::Registry::builtin();
+        for ext in reg.extensions() {
+            let mut w = real(WheelKind::Convert, &format!("a.{ext}"));
+            if w.more.is_empty() {
+                continue;
+            }
+            // Opened at each corner and the middle, the way a wheel opens
+            // anywhere in the window.
+            for (x, y) in [
+                (0.0, 0.0),
+                (ww, 0.0),
+                (0.0, wh),
+                (ww, wh),
+                (ww / 2.0, wh / 2.0),
+            ] {
+                let (c, scale) = place(x, y, ww, wh, w.extent());
+                w.center = c;
+                w.scale = scale;
+                for slot in outer_slots(&w.more) {
+                    let Some((icon, name)) = heading_boxes(&slot) else {
+                        continue;
+                    };
+                    for (bx, by, bw, bh) in [icon, name] {
+                        let (l, t) = (c.0 + bx * scale, c.1 + by * scale);
+                        let (r, b) = (l + bw * scale, t + bh * scale);
+                        assert!(l >= 0.0 && t >= 0.0 && r <= ww && b <= wh, "{ext}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn hits_on_the_outer_ring_follow_the_weighted_slots() {
+        let w = Wheel {
+            center: (300.0, 300.0),
+            ..with_more()
+        };
+        // Just inside each slot's edges lands on that slot; a heading
+        // selects nothing.
+        for slot in outer_slots(&w.more) {
+            for f in [0.1, 0.5, 0.9] {
+                let a = slot.a0 + (slot.a1 - slot.a0) * f;
+                let r = (R_MORE_INNER + R_MORE_OUTER) / 2.0;
+                let got = hit(&w, 300.0 + r * a.cos(), 300.0 + r * a.sin(), true);
+                assert_eq!(got, slot.item.map(Spot::Outer));
+            }
+        }
     }
 
     #[test]

@@ -761,7 +761,9 @@ impl SheetControl {
 pub struct SheetLayout {
     pub panel: Rect,
     pub title: Rect,
-    /// What the source is, under the title.
+    /// What the target format is, muted under the title.
+    pub target: Rect,
+    /// What the source is, under that.
     pub context: Rect,
     /// One label per knob.
     pub labels: Vec<Rect>,
@@ -782,7 +784,7 @@ pub const CONVERT_WIDTH: f32 = 88.0;
 pub fn sheet(w: f32, h: f32, knobs: &[Knob]) -> SheetLayout {
     let p = PANEL_PADDING;
     let n = knobs.len() as f32;
-    let ph = p + 32.0 + 20.0 + 12.0 + n * SETTINGS_ROW + 12.0 + BUTTON_HEIGHT + p;
+    let ph = p + 32.0 + 20.0 + 20.0 + 12.0 + n * SETTINGS_ROW + 12.0 + BUTTON_HEIGHT + p;
     let ph = (ph / GRID).ceil() * GRID;
     let pw = snap((w - 32.0).clamp(0.0, SHEET_WIDTH));
     let panel = Rect::new(
@@ -792,7 +794,8 @@ pub fn sheet(w: f32, h: f32, knobs: &[Knob]) -> SheetLayout {
         ph,
     );
     let title = Rect::new(panel.x + p, panel.y + p, panel.w - 2.0 * p, 32.0);
-    let context = Rect::new(title.x, title.bottom(), title.w, 20.0);
+    let target = Rect::new(title.x, title.bottom(), title.w, 20.0);
+    let context = Rect::new(title.x, target.bottom(), title.w, 20.0);
     let x0 = panel.x + p + SHEET_LABEL + 8.0;
     let row_y = |i: usize| context.bottom() + 12.0 + i as f32 * SETTINGS_ROW;
     let mut labels = vec![];
@@ -838,6 +841,7 @@ pub fn sheet(w: f32, h: f32, knobs: &[Knob]) -> SheetLayout {
     SheetLayout {
         panel,
         title,
+        target,
         context,
         labels,
         controls,
@@ -1403,6 +1407,16 @@ mod tests {
                 assert_grid(&s.panel, "sheet");
                 assert!(s.panel.bottom() <= h && s.panel.right() <= w - 16.0);
                 assert_eq!(s.labels.len(), knobs.len());
+                // Title, what the target is, what the source is, then the
+                // rows, each in its own band and inside the panel.
+                assert_eq!(s.target.y, s.title.bottom());
+                assert_eq!(s.context.y, s.target.bottom());
+                assert!(s.target.h >= 16.0 && s.context.h >= 16.0);
+                assert!(s.target.right() <= s.panel.right() - 16.0);
+                for l in &s.labels {
+                    assert!(l.y >= s.context.bottom(), "a label rides over the context");
+                }
+                assert!(s.panel.y >= 8.0, "the panel is cut off at the top");
                 assert_eq!(s.controls.last().unwrap().0, SheetControl::Convert);
                 for (c, r) in &s.controls {
                     assert_grid(r, "sheet control");

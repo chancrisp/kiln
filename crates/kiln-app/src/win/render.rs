@@ -62,6 +62,8 @@ pub struct SheetView<'a> {
     pub layout: &'a SheetLayout,
     pub title: &'a str,
     /// What the source is.
+    /// What the target format is: "MOV: QuickTime video from Apple".
+    pub target: &'a str,
     pub context: &'a str,
     /// The result's size and an estimate.
     pub result: &'a str,
@@ -1258,7 +1260,7 @@ impl Draw<'_> {
     }
 
     /// The ring More pours open: every other format, grouped by kind, each
-    /// group led by its kind's icon.
+    /// group led by its kind's icon and name.
     fn outer_ring(&self, wv: &WheelView, p: &Palette) -> Result<()> {
         let w = wv.wheel;
         let slots = wheel::outer_slots(&w.more);
@@ -1300,8 +1302,20 @@ impl Draw<'_> {
         for slot in &slots {
             let (x, y) = wheel::outer_point(slot);
             match slot.item {
-                // A group's kind, small and quiet.
-                None => self.icon(slot.icon, x - 9.0, y - 9.0, 0.75, p.text_muted, 1.0),
+                // A group's kind, small and quiet, with its name under it.
+                None => {
+                    if let Some((icon, name)) = wheel::heading_boxes(slot) {
+                        self.icon(slot.icon, icon.0, icon.1, 0.75, p.text_muted, 1.0);
+                        let r = Rect::new(name.0, name.1, name.2, name.3);
+                        self.label(
+                            slot.heading.unwrap_or_default(),
+                            &self.text.caption_center,
+                            &r,
+                            p.text_muted,
+                            1.0,
+                        );
+                    }
+                }
                 Some(j) => {
                     let r = Rect::new(x - 26.0, y - 8.0, 52.0, 16.0);
                     self.code(&w.more[j].label, &r, p.text, 1.0)?;
@@ -1673,6 +1687,7 @@ impl Draw<'_> {
             self.fill(&l.panel, shape::RADIUS_PANEL, p.surface, 1.0);
             self.border(&l.panel, shape::RADIUS_PANEL, p.line, 1.0, shape::BORDER);
             self.label(sv.title, &self.text.display, &l.title, p.text, 1.0);
+            self.label(sv.target, &self.text.caption, &l.target, p.text_muted, 1.0);
             self.label(
                 sv.context,
                 &self.text.caption,
