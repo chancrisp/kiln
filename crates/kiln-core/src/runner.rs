@@ -1,7 +1,9 @@
 //! A small worker pool that runs conversions and tools off the UI thread
 //! and reports each job's progress and result through a callback.
 
+use std::any::Any;
 use std::collections::HashMap;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -44,6 +46,9 @@ impl From<Error> for JobError {
         }
     }
 }
+
+/// What a job that hit a fault in Kiln itself says.
+const PANICKED: &str = "Kiln stopped this job because of a problem in Kiln itself.";
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum JobEvent {
@@ -153,19 +158,60 @@ fn work(
         };
         let id = job.id;
         let result = if job.cancel.is_cancelled() {
-            Err(Error::Cancelled)
+            Err(JobError::from(Error::Cancelled))
         } else {
             let mut progress = |p: Progress| on_event(JobEvent::Progress(id, p));
-            match &job.kind {
+            caught(|| match &job.kind {
                 JobKind::Convert { input, target } => {
                     kiln.convert_outputs(input, target, &job.options, &mut progress, &job.cancel)
                 }
                 JobKind::Tool { tool, inputs } => {
                     kiln.run_tool_with(*tool, inputs, &job.options, &mut progress, &job.cancel)
                 }
-            }
+            })
         };
         cancels.lock().unwrap().remove(&id);
-        on_event(JobEvent::Finished(id, result.map_err(JobError::from)));
+        on_event(JobEvent::Finished(id, result));
+    }
+}
+
+/// Run a job's work. A panic in it is a failed job, not a lost worker:
+/// the row gets its result and the pool keeps its size.
+fn caught(f: impl FnOnce() -> crate::Result<Vec<PathBuf>>) -> Result<Vec<PathBuf>, JobError> {
+    panic::catch_unwind(AssertUnwindSafe(f))
+        .map(|r| r.map_err(JobError::from))
+        .unwrap_or_else(|p| Err(panicked(p)))
+}
+
+/// The failed job a panic becomes, with the panic's text in the details.
+fn panicked(payload: Box<dyn Any + Send>) -> JobError {
+    let details = payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_owned())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_default();
+    JobError {
+        message: PANICKED.to_owned(),
+        details,
+        cancelled: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_panicking_job_is_a_failed_job() {
+        let e = caught(|| panic!("handles() checked the type")).unwrap_err();
+        assert_eq!(e.message, PANICKED);
+        assert_eq!(e.details, "handles() checked the type");
+        assert!(!e.cancelled);
+        let n = 3;
+        let e = caught(|| panic!("{n} went wrong")).unwrap_err();
+        assert_eq!(e.details, "3 went wrong");
+        assert_eq!(caught(|| Ok(vec![])), Ok(vec![]));
+        let e = caught(|| Err(Error::Cancelled)).unwrap_err();
+        assert!(e.cancelled);
     }
 }

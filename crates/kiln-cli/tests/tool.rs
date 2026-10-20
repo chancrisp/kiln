@@ -98,6 +98,20 @@ fn tool_that_does_not_apply_is_a_usage_error() {
 }
 
 #[test]
+fn compress_on_a_type_it_has_no_settings_for_is_a_usage_error() {
+    let (_dir, input) = stage(&sample_for("avi"));
+    kiln()
+        .args(["tool", "compress"])
+        .arg(&input)
+        .assert()
+        .code(2)
+        .stderr(
+            "kiln: Kiln can't compress AVI files.
+",
+        );
+}
+
+#[test]
 fn nothing_to_do_is_a_plain_failure() {
     let (dir, input) = stage(&sample_for("png"));
     kiln()

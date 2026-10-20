@@ -48,3 +48,16 @@ fn merge_is_offered_for_two_pdfs() {
     let o = k.offered(&[p.as_path(), p.as_path()], &no_ffmpeg());
     assert!(o.tools.contains(&Tool::Merge));
 }
+
+#[test]
+fn compress_is_offered_only_where_kiln_can_compress() {
+    let k = Kiln::new();
+    for name in ["sample.avi", "sample.m4v", "sample.wmv"] {
+        let f = fixture(name);
+        let o = k.offered(&[f.as_path()], &Options::default());
+        assert!(!o.tools.contains(&Tool::Compress), "{name}: {:?}", o.tools);
+    }
+    let mp4 = fixture("sample.mp4");
+    let o = k.offered(&[mp4.as_path()], &Options::default());
+    assert!(o.tools.contains(&Tool::Compress));
+}

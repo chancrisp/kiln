@@ -130,7 +130,7 @@ ASCIIDOC, MEDIAWIKI, DOCBOOK, AZW and VSD. The full list lives in
 
 | Tool | Works on | What it does |
 |---|---|---|
-| Compress | PNG and JPG images, video, audio (not WAV), PDF | Re-encodes smaller, and keeps the original if the result isn't smaller |
+| Compress | PNG and JPG images, MP4, MOV, MKV and WebM video, MP3, OGG, Opus, M4A and FLAC audio, PDF | Re-encodes smaller, and keeps the original if the result isn't smaller |
 | Crop | images, video | Removes plain borders from images and black bars from video |
 | Trim | audio, video | Cuts silence from the start and end of audio, and stretches that are both black and silent from video |
 | Split | audio, video, PDF | Cuts audio and video into two halves, and a PDF into one file per page |
@@ -333,7 +333,7 @@ programs are always run with separate arguments, never through a shell.
 - PDF to a document keeps the text and its paragraphs, not the layout. A scanned PDF has no text to take out.
 - MOBI and AZW3 need Calibre, and only files without DRM convert.
 - Camera RAW is decoded by Windows, so a RAW type needs the Raw Image Extension from the Microsoft Store on older Windows builds.
-- Compress works on PNG and JPG images, video, audio other than WAV, and PDF. Other image types have no tighter encoding to re-save with.
+- Compress works on PNG and JPG images, MP4, MOV, MKV and WebM video, MP3, OGG, Opus, M4A and FLAC audio, and PDF. Other types have no tighter encoding to re-save with.
 - Trim on video cuts only stretches that are both black and silent, and the kept part is re-encoded.
 - Office files and documents other than PDF have no tools other than Merge for documents.
 - The update check returns "No releases are published yet" until a release exists on GitHub.

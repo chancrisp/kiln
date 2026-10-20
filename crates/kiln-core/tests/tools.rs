@@ -43,6 +43,10 @@ fn tools_offered_match_the_files() {
     assert_eq!(t(&["a.mp3"]), [Compress, Trim, Split]);
     assert_eq!(t(&["a.wav"]), [Trim, Split]);
     assert_eq!(t(&["a.mp4"]), [Compress, Crop, Trim, Split]);
+    // Compress only where it has re-encode settings.
+    assert_eq!(t(&["a.avi"]), [Crop, Trim, Split]);
+    assert_eq!(t(&["a.ts"]), [Crop, Trim, Split]);
+    assert_eq!(t(&["a.aac"]), [Trim, Split]);
     assert_eq!(t(&["a.jpg"]), [Compress, Crop]);
     assert_eq!(t(&["a.gif"]), [Crop]);
     assert_eq!(t(&["a.mp3", "b.mp3"]), [Compress, Trim, Split, Merge]);

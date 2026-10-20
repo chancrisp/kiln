@@ -74,8 +74,8 @@ impl Tool {
         match (self, f.kind) {
             // Only these two have a lossy or tighter encoding to re-save with.
             (Tool::Compress, Kind::Image) => matches!(f.ext.as_str(), "png" | "jpg"),
-            (Tool::Compress, Kind::Video) => true,
-            (Tool::Compress, Kind::Audio) => f.ext != "wav",
+            // Only the types that have re-encode settings below.
+            (Tool::Compress, Kind::Video | Kind::Audio) => compress_args(&f.ext).is_some(),
             (Tool::Crop, Kind::Image | Kind::Video) => true,
             (Tool::Trim, Kind::Audio | Kind::Video) => true,
             (Tool::Split, Kind::Audio | Kind::Video) => true,
