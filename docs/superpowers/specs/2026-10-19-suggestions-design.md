@@ -69,7 +69,7 @@ pub struct Facts {
     pub media: Option<MediaInfo>,
     pub pdf: Option<PdfFacts>,
     /// Video only: whether black bars were found.
-    pub bars: Option<bool>,
+    pub bars: Option<Bars>,
 }
 
 pub struct Picture {
@@ -324,7 +324,7 @@ of failing, and `suggest` returns nothing instead of guessing.
   - `photo.png`: a noisy, many-coloured picture;
   - `graphic.png`: flat shapes with transparency;
   - `scan.pdf`: one page that is only an image;
-  - `bars.mp4`: a short video with black bars on both sides.
+  - `bars.mp4`: a short video with black bars on the left and right.
 
   Each is read with the expected `look`, `alpha`, `has_text` or `bars`, and
   image estimates land within 2× of a real encode.

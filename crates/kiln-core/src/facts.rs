@@ -201,9 +201,14 @@ fn image_facts(path: &Path, opts: &Options, cancel: &CancelToken, facts: &mut Fa
         let first = streams.first();
         facts.picture = first.and_then(|s| Some((s.width?, s.height?))).map(photo);
         if let Some(p) = facts.picture.as_mut().filter(|_| ext != "heic") {
-            // FFmpeg gives an AVIF's alpha as a second video stream.
+            // FFmpeg gives an AVIF's alpha as a second, gray video stream.
+            // Other extra streams, such as the tiles of a grid, are colour.
             p.alpha = first.is_some_and(|s| alpha_format(&s.pix_fmt))
-                || (ext == "avif" && streams.len() > 1);
+                || (ext == "avif"
+                    && streams
+                        .iter()
+                        .skip(1)
+                        .any(|s| s.pix_fmt.starts_with("gray")));
         }
     } else if raster::reads(ext) || ext == "apng" {
         raster_facts(path, ext, opts, cancel, facts);
