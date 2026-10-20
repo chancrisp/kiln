@@ -144,13 +144,45 @@ pub fn list_menu(can_paste: bool) -> Vec<MenuItem> {
 /// is going on.
 pub const IDLE_HINT: &str = "Right-click a file, or select it and press Enter, to convert it.";
 
+/// The idle hint where the full one doesn't fit the footer.
+pub const IDLE_HINT_SHORT: &str = "Right-click a file to convert it.";
+
+/// The idle hint for a status area `available` DIPs wide, given the full
+/// hint measures `full` there: the full one when it fits, else the short.
+pub fn fit_hint(available: f32, full: f32) -> &'static str {
+    if full <= available {
+        IDLE_HINT
+    } else {
+        IDLE_HINT_SHORT
+    }
+}
+
 /// How long "Added 2 files." stays before the idle hint takes its place.
 pub const ADDED_FOR: Duration = Duration::from_secs(2);
+
+/// Whether an add's line gives way to the idle hint after [`ADDED_FOR`]:
+/// only the plain "Added 2 files.". A line that also says files were
+/// already listed or skipped stays until something else replaces it.
+pub fn hint_follows(added: usize, duplicates: usize, skipped: usize) -> bool {
+    added > 0 && duplicates == 0 && skipped == 0
+}
+
+/// How much longer to wait before the idle hint can show, `elapsed` after
+/// the add. A timer can fire a little early, so it's asked again then.
+pub fn hint_wait(elapsed: Duration) -> Option<Duration> {
+    ADDED_FOR
+        .checked_sub(elapsed)
+        .filter(|rest| !rest.is_zero())
+}
+
+/// What Ctrl+V says when the clipboard holds no files.
+pub const NOTHING_TO_PASTE: &str = "There are no files to paste.";
 
 /// The footer's idle hint, when it should take the place of `status`:
 /// `listed` files are listed, nothing is `running`, and the status says
 /// no more than the plain count (`plain`), or is what adding files said
-/// (`added` is how long ago) and has been up for two seconds.
+/// (`added` is how long ago, set only for a plain "Added 2 files.") and
+/// has been up for two seconds.
 pub fn idle_hint(
     listed: usize,
     running: bool,
@@ -348,12 +380,52 @@ mod tests {
     }
 
     #[test]
+    fn only_a_plain_add_gives_way_to_the_hint() {
+        use crate::model::status_line;
+        assert!(hint_follows(2, 0, 0));
+        assert!(!hint_follows(2, 1, 0));
+        assert!(!hint_follows(2, 0, 1));
+        assert!(!hint_follows(0, 1, 0));
+        // Lines that say more than the count stay: the app only times an
+        // add that gives way, so these come with no `added`.
+        let plain = status_line(3, 0, 0, 0);
+        for (a, d, s) in [(2, 1, 0), (2, 0, 1), (0, 1, 0), (0, 0, 1)] {
+            assert!(!hint_follows(a, d, s));
+            let said = status_line(3, a, d, s);
+            assert_eq!(idle_hint(3, false, &said, &plain, None), None, "{said}");
+        }
+    }
+
+    #[test]
+    fn an_early_timer_waits_out_the_rest() {
+        let ms = Duration::from_millis;
+        assert_eq!(hint_wait(ms(0)), Some(ADDED_FOR));
+        assert_eq!(hint_wait(ms(1990)), Some(ms(10)));
+        assert_eq!(hint_wait(ms(2000)), None);
+        assert_eq!(hint_wait(ms(2500)), None);
+    }
+
+    #[test]
+    fn the_full_hint_shows_only_where_it_fits() {
+        // The caption widths DirectWrite measures for the two hints.
+        let full = 303.0;
+        assert_eq!(fit_hint(400.0, full), IDLE_HINT);
+        assert_eq!(fit_hint(303.0, full), IDLE_HINT);
+        assert_eq!(fit_hint(302.0, full), IDLE_HINT_SHORT);
+        assert_eq!(fit_hint(0.0, full), IDLE_HINT_SHORT);
+    }
+
+    #[test]
     fn the_idle_hint_is_a_calm_sentence() {
         assert_eq!(
             IDLE_HINT,
             "Right-click a file, or select it and press Enter, to convert it."
         );
-        assert!(IDLE_HINT.ends_with('.') && !IDLE_HINT.contains('!'));
+        assert_eq!(IDLE_HINT_SHORT, "Right-click a file to convert it.");
+        assert_eq!(NOTHING_TO_PASTE, "There are no files to paste.");
+        for s in [IDLE_HINT, IDLE_HINT_SHORT, NOTHING_TO_PASTE] {
+            assert!(s.ends_with('.') && !s.contains('!'));
+        }
     }
 
     #[test]

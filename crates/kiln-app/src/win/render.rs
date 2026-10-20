@@ -26,7 +26,7 @@ use crate::model::{self, Entry, JobState, Tone};
 use crate::quality::{QualityDefaults, Value};
 use crate::settings::{KeyMap, ThemeChoice};
 use crate::theme::{effects, shape, Palette, Rgb};
-use crate::ways_in::EmptyLines;
+use crate::ways_in::{self, EmptyLines};
 use crate::wheel::{self, Action, Spot, Wheel, R_INNER, R_MORE_INNER, R_MORE_OUTER, R_OUTER};
 
 use super::text::Text;
@@ -883,14 +883,15 @@ impl Draw<'_> {
             .export_all
             .map(|label| (label, layout::export_all_button(&button)));
         let add = layout::add_files_button(&button, export.is_some());
-        let left = add.x;
-        let status = Rect::new(
-            footer.x + 4.0,
-            footer.y,
-            (left - 12.0 - footer.x).max(0.0),
-            footer.h,
-        );
-        self.label(v.status, &self.text.caption, &status, p.text_muted, 1.0);
+        let status = layout::footer_status(&footer, &add);
+        // The idle hint comes in two lengths: the full one where it fits.
+        let text = if v.status == ways_in::IDLE_HINT {
+            let full = self.text.measure(ways_in::IDLE_HINT, &self.text.caption);
+            ways_in::fit_hint(status.w, full)
+        } else {
+            v.status
+        };
+        self.label(text, &self.text.caption, &status, p.text_muted, 1.0);
         self.button(v.empty.button, &add, v.add_hover, v.add_pressed, p);
         if let Some((label, b)) = export {
             self.button(label, &b, v.export_hover, v.export_pressed, p);
@@ -1153,28 +1154,27 @@ impl Draw<'_> {
             }
         }
 
-        // The centre: the wheel's name over the key that opens it, as
-        // "Convert · Shift" breaks across two lines where it can't fit on
-        // one, then the source type, or where a conversion goes while one
-        // is pointed at: "PNG → JPG".
+        // The centre: the title "Convert · Shift" always drawn on two
+        // lines, the name in the serif over the key that opens it (the
+        // whole title is too wide for the centre on one), then the source
+        // type, or where a conversion goes while one is pointed at:
+        // "PNG → JPG".
         self.circle(R_INNER, p.ground, 1.0)?;
         self.ring_edge(R_INNER - 0.5, p.line)?;
         let (name, key) = wv
             .title
             .split_once(" · ")
             .unwrap_or((wv.title.as_str(), ""));
-        let title = Rect::new(-R_INNER, -32.0, 2.0 * R_INNER, 28.0);
-        self.label(name, &self.text.display_center, &title, p.text, 1.0);
-        let key_line = Rect::new(-R_INNER + 8.0, -4.0, 2.0 * R_INNER - 16.0, 16.0);
-        self.label(key, &self.text.caption_center, &key_line, p.text_muted, 1.0);
+        let c = layout::wheel_centre(R_INNER);
+        self.label(name, &self.text.display_center, &c.name, p.text, 1.0);
+        self.label(key, &self.text.caption_center, &c.key, p.text_muted, 1.0);
         let line = match lit.and_then(|s| w.item(s)) {
             Some(item) if matches!(item.action, Action::Convert(_)) => {
                 format!("{} → {}", w.source_code, item.label)
             }
             _ => w.source_code.clone(),
         };
-        let src = Rect::new(-R_INNER + 8.0, 14.0, 2.0 * R_INNER - 16.0, 16.0);
-        self.code(&line, &src, p.text_muted, 1.0)?;
+        self.code(&line, &c.source, p.text_muted, 1.0)?;
         Ok(())
     }
 

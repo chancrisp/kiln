@@ -58,6 +58,8 @@ const ANIM_TIMER: usize = 1;
 /// Fires once, when "Added 2 files." has been up long enough for the
 /// footer's idle hint to take its place.
 const HINT_TIMER: usize = 2;
+/// Added to the hint timer's wait, so it fires after the two seconds.
+const HINT_SLACK: Duration = Duration::from_millis(50);
 const FRAME_MS: u32 = 16;
 /// Frame time when only progress lines are glowing: slow enough to stay
 /// cheap, fast enough to look smooth.
@@ -581,14 +583,13 @@ impl App {
             });
         }
         self.status = status_line(self.files.len(), r.added, r.duplicates, r.skipped);
-        self.added = Some((self.status.clone(), Instant::now()));
-        unsafe {
-            SetTimer(
-                Some(self.hwnd),
-                HINT_TIMER,
-                ways_in::ADDED_FOR.as_millis() as u32,
-                None,
-            );
+        // Only the plain "Added 2 files." gives way to the idle hint; a line
+        // about duplicates or skipped items stays until something replaces
+        // it.
+        self.added = ways_in::hint_follows(r.added, r.duplicates, r.skipped)
+            .then(|| (self.status.clone(), Instant::now()));
+        if self.added.is_some() {
+            self.arm_hint(ways_in::ADDED_FOR);
         }
         // New rows go on the end of the list.
         let fresh: Vec<PathBuf> = self.files.entries()[self.files.len() - r.added..]
@@ -607,6 +608,24 @@ impl App {
         self.animate();
     }
 
+    /// Wake in `wait` to show the idle hint, with a little slack, as a
+    /// timer can fire a few milliseconds early.
+    fn arm_hint(&self, wait: Duration) {
+        let ms = (wait + HINT_SLACK).as_millis().min(u32::MAX as u128) as u32;
+        unsafe {
+            SetTimer(Some(self.hwnd), HINT_TIMER, ms, None);
+        }
+    }
+
+    /// How much longer "Added 2 files." has to stay, if it's still what the
+    /// footer says and its two seconds aren't up.
+    fn hint_wait(&self) -> Option<Duration> {
+        self.added
+            .as_ref()
+            .filter(|(said, _)| *said == self.status)
+            .and_then(|(_, at)| ways_in::hint_wait(at.elapsed()))
+    }
+
     /// Ask for files with the Windows Open dialog, and add them as a drop
     /// would.
     fn add_files(&mut self) {
@@ -623,7 +642,10 @@ impl App {
     /// Add the files copied in File Explorer, as a drop would.
     fn paste(&mut self) {
         let files = system::clipboard_files(self.hwnd);
-        if !files.is_empty() {
+        if files.is_empty() {
+            self.status = ways_in::NOTHING_TO_PASTE.to_owned();
+            self.invalidate();
+        } else {
             self.add(files);
         }
     }
@@ -3396,12 +3418,18 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             };
             Some(LRESULT(0))
         }
-        // "Added 2 files." has been read: the idle hint can show.
+        // "Added 2 files." has been read: the idle hint can show. A timer
+        // that fires early waits out the rest instead.
         WM_TIMER if wparam.0 == HINT_TIMER => {
-            unsafe {
-                let _ = KillTimer(Some(hwnd), HINT_TIMER);
+            match app.hint_wait() {
+                Some(rest) => app.arm_hint(rest),
+                None => {
+                    unsafe {
+                        let _ = KillTimer(Some(hwnd), HINT_TIMER);
+                    }
+                    app.invalidate();
+                }
             }
-            app.invalidate();
             Some(LRESULT(0))
         }
         WM_TIMER if wparam.0 == ANIM_TIMER => {

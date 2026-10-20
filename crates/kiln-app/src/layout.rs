@@ -194,6 +194,40 @@ pub fn add_files_button(clear: &Rect, export_all: bool) -> Rect {
     )
 }
 
+/// The footer's status line: from the footer's left edge to 12 DIPs short
+/// of the leftmost button, `add`.
+pub fn footer_status(footer: &Rect, add: &Rect) -> Rect {
+    Rect::new(
+        footer.x + 4.0,
+        footer.y,
+        (add.x - 12.0 - footer.x).max(0.0),
+        footer.h,
+    )
+}
+
+/// The wheel's centre, in coordinates about the wheel's middle: its name,
+/// the key that opens it, and the source type or the pair being pointed
+/// at. Each line's box lies wholly inside the centre disc of `radius`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WheelCentre {
+    pub name: Rect,
+    pub key: Rect,
+    pub source: Rect,
+}
+
+pub fn wheel_centre(radius: f32) -> WheelCentre {
+    // Three lines stacked tight: 28 for the serif name, 16 for each
+    // caption line, a little above the middle to balance the serif.
+    let line = |y: f32, h: f32, w: f32| Rect::new(-w / 2.0, y, w, h);
+    let inner = |y: f32| 2.0 * (radius * radius - y * y).max(0.0).sqrt();
+    let width = |top: f32, h: f32| (inner(top.abs().max((top + h).abs())) / 4.0).floor() * 4.0;
+    WheelCentre {
+        name: line(-32.0, 28.0, width(-32.0, 28.0)),
+        key: line(-4.0, 16.0, width(-4.0, 16.0)),
+        source: line(12.0, 16.0, width(12.0, 16.0)),
+    }
+}
+
 /// The empty window's centred group, top to bottom.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EmptyState {
@@ -946,6 +980,57 @@ mod tests {
             // The status keeps room on the left.
             assert!(beside.x >= footer.x + 100.0, "{beside:?} at {w}");
         }
+    }
+
+    #[test]
+    fn the_footer_status_ends_short_of_the_buttons() {
+        // DirectWrite caption widths of the full and short idle hints.
+        const FULL: f32 = 303.0;
+        const SHORT: f32 = 155.0;
+        let status = |w: f32, export: bool| {
+            let l = layout(w, 480.0, 2);
+            let (footer, clear) = (l.footer.unwrap(), l.clear_button.unwrap());
+            let add = add_files_button(&clear, export);
+            let s = footer_status(&footer, &add);
+            assert_eq!(add.x - s.right(), 8.0);
+            s.w
+        };
+        // The default window has room for the full hint either way.
+        assert!(status(720.0, false) >= FULL);
+        assert!(status(720.0, true) >= FULL);
+        // The smallest has room for the short one beside Clear alone.
+        assert!(status(480.0, false) >= SHORT);
+        assert!(status(480.0, false) < FULL);
+        assert!(status(480.0, true) >= 0.0);
+    }
+
+    #[test]
+    fn the_wheel_centre_stacks_inside_the_disc() {
+        let r = crate::wheel::R_INNER;
+        let c = wheel_centre(r);
+        let lines = [c.name, c.key, c.source];
+        for b in lines {
+            assert_eq!(b.x, -b.w / 2.0, "{b:?} is centred");
+            for (x, y) in [
+                (b.x, b.y),
+                (b.right(), b.y),
+                (b.x, b.bottom()),
+                (b.right(), b.bottom()),
+            ] {
+                assert!(
+                    x * x + y * y <= r * r,
+                    "{b:?} corner ({x}, {y}) is outside the disc"
+                );
+            }
+        }
+        for pair in lines.windows(2) {
+            assert!(pair[0].bottom() <= pair[1].y, "{pair:?} overlap");
+        }
+        // The serif name and a long pair fit their lines: "Convert" is 80
+        // DIPs, "MIXED → JPEG" 93 in the tracked monospace caption. Longer
+        // pairs end in an ellipsis.
+        assert!(c.name.w >= 80.0);
+        assert!(c.source.w >= 93.0);
     }
 
     #[test]

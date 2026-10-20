@@ -68,14 +68,18 @@ pub fn clipboard_has_files() -> bool {
     unsafe { IsClipboardFormatAvailable(CF_HDROP.0 as u32).is_ok() }
 }
 
-/// The files on the clipboard, if it holds any.
+/// The files on the clipboard, if it holds any. Another program can have
+/// the clipboard open for a moment, so opening it is tried twice.
 pub fn clipboard_files(hwnd: HWND) -> Vec<PathBuf> {
     if !clipboard_has_files() {
         return vec![];
     }
     unsafe {
         if OpenClipboard(Some(hwnd)).is_err() {
-            return vec![];
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            if OpenClipboard(Some(hwnd)).is_err() {
+                return vec![];
+            }
         }
         // The clipboard owns the data; it's only read here.
         let files = match GetClipboardData(CF_HDROP.0 as u32) {
