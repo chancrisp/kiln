@@ -46,11 +46,14 @@ Success looks like this:
   Kiln is never the default.
 - The extensions are the ones Kiln converts from: each input format and
   its aliases, lowercase, with a dot.
-- The open verb asks Explorer for one launch per selection
-  (`MultiSelectModel` = `Player`).
-  - If Explorer starts one Kiln per file anyway, the existing hand-off
-    gathers them into the first window.
+- With several files selected, Explorer starts one Kiln per file, and
+  the existing hand-off gathers them into the first window.
+  - `MultiSelectModel` is left unset. `Player` could hand a plain command
+    line only the first file, and the others would be lost.
   - Explorer's own prompt for more than 15 files stays as Windows has it.
+- Without a version resource, Open with shows Kiln as `kiln-app.exe`. So
+  `kiln-app.exe` gets one, with the file description and product name
+  `Kiln`.
 
 ## Send to
 
@@ -63,7 +66,8 @@ Success looks like this:
 
 ## In Kiln
 
-- No app change is expected. Open with and Send to both start
+- No change to how Kiln behaves is expected, apart from the version
+  resource. Open with and Send to both start
   `kiln-app.exe` with paths as arguments, which Kiln already handles:
   - The first Kiln opens its window with those files.
   - A later launch hands them to the open window and brings it forward.
