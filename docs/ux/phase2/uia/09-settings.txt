@@ -1,0 +1,124 @@
+Kiln UIA dump: 09-settings
+State: Settings open on Helper apps
+Captured: 2026-10-20T02:27:59, kiln-app release build, 100% scale (no monitor runs at 100%), scratch APPDATA and LOCALAPPDATA
+
+== Raw view (everything UIA exposes) ==
+- name="Kiln" | type=Window | automationId="Kiln" | class="KilnWindow" | rect=x=40 y=40 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+  - name="Settings" | type=Pane | automationId="Settings" | class="Kiln" | rect=x=128 y=151 w=560 h=320 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Settings pages" | type=Tab | automationId="SettingsTabs" | class="Kiln" | rect=x=408 y=167 w=264 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Selection]
+      - name="General" | type=TabItem | automationId="Setting(Tab(General))" | class="Kiln" | rect=x=408 y=167 w=88 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem]
+      - name="Quality" | type=TabItem | automationId="Setting(Tab(Quality))" | class="Kiln" | rect=x=496 y=167 w=88 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem]
+      - name="Helper apps" | type=TabItem | automationId="Setting(Tab(Engines))" | class="Kiln" | rect=x=584 y=167 w=88 h=32 | keyboardFocusable=True | hasFocus=True | enabled=True | offscreen=False | patterns=[SelectionItem]
+    - name="FFmpeg" | type=Group | automationId="SettingsRow("FFmpeg")" | class="Kiln" | rect=x=144 y=207 w=528 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Found on PATH" | type=Text | automationId="SettingsValue("FFmpeg")" | class="Kiln" | rect=x=264 y=211 w=328 h=24 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Choose" | type=Button | automationId="Setting(EngineChoose(Ffmpeg))" | class="Kiln" | rect=x=600 y=207 w=72 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="Pandoc" | type=Group | automationId="SettingsRow("Pandoc")" | class="Kiln" | rect=x=144 y=255 w=528 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Found on PATH" | type=Text | automationId="SettingsValue("Pandoc")" | class="Kiln" | rect=x=264 y=259 w=328 h=24 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Choose" | type=Button | automationId="Setting(EngineChoose(Pandoc))" | class="Kiln" | rect=x=600 y=255 w=72 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="LibreOffice" | type=Group | automationId="SettingsRow("LibreOffice")" | class="Kiln" | rect=x=144 y=303 w=528 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="C:\Program Files\LibreOffice\program\soffice.com" | type=Text | automationId="SettingsValue("LibreOffice")" | class="Kiln" | rect=x=264 y=307 w=328 h=24 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Choose" | type=Button | automationId="Setting(EngineChoose(LibreOffice))" | class="Kiln" | rect=x=600 y=303 w=72 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="Calibre" | type=Group | automationId="SettingsRow("Calibre")" | class="Kiln" | rect=x=144 y=351 w=528 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="C:\Program Files\Calibre2\ebook-convert.exe" | type=Text | automationId="SettingsValue("Calibre")" | class="Kiln" | rect=x=264 y=355 w=328 h=24 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Choose" | type=Button | automationId="Setting(EngineChoose(Calibre))" | class="Kiln" | rect=x=600 y=351 w=72 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="Check for updates" | type=Button | automationId="Setting(CheckUpdates)" | class="Kiln" | rect=x=144 y=423 w=136 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="Kiln 0.1.0" | type=Text | automationId="UpdateNote" | class="Kiln" | rect=x=288 y=423 w=304 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Close" | type=Button | automationId="Setting(Close)" | class="Kiln" | rect=x=600 y=423 w=72 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+
+== Control view (what Narrator walks) ==
+- name="Kiln" | type=Window | automationId="Kiln" | class="KilnWindow" | rect=x=40 y=40 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+  - name="Settings" | type=Pane | automationId="Settings" | class="Kiln" | rect=x=128 y=151 w=560 h=320 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Settings pages" | type=Tab | automationId="SettingsTabs" | class="Kiln" | rect=x=408 y=167 w=264 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Selection]
+      - name="General" | type=TabItem | automationId="Setting(Tab(General))" | class="Kiln" | rect=x=408 y=167 w=88 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem]
+      - name="Quality" | type=TabItem | automationId="Setting(Tab(Quality))" | class="Kiln" | rect=x=496 y=167 w=88 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem]
+      - name="Helper apps" | type=TabItem | automationId="Setting(Tab(Engines))" | class="Kiln" | rect=x=584 y=167 w=88 h=32 | keyboardFocusable=True | hasFocus=True | enabled=True | offscreen=False | patterns=[SelectionItem]
+    - name="FFmpeg" | type=Group | automationId="SettingsRow("FFmpeg")" | class="Kiln" | rect=x=144 y=207 w=528 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Found on PATH" | type=Text | automationId="SettingsValue("FFmpeg")" | class="Kiln" | rect=x=264 y=211 w=328 h=24 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Choose" | type=Button | automationId="Setting(EngineChoose(Ffmpeg))" | class="Kiln" | rect=x=600 y=207 w=72 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="Pandoc" | type=Group | automationId="SettingsRow("Pandoc")" | class="Kiln" | rect=x=144 y=255 w=528 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Found on PATH" | type=Text | automationId="SettingsValue("Pandoc")" | class="Kiln" | rect=x=264 y=259 w=328 h=24 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Choose" | type=Button | automationId="Setting(EngineChoose(Pandoc))" | class="Kiln" | rect=x=600 y=255 w=72 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="LibreOffice" | type=Group | automationId="SettingsRow("LibreOffice")" | class="Kiln" | rect=x=144 y=303 w=528 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="C:\Program Files\LibreOffice\program\soffice.com" | type=Text | automationId="SettingsValue("LibreOffice")" | class="Kiln" | rect=x=264 y=307 w=328 h=24 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Choose" | type=Button | automationId="Setting(EngineChoose(LibreOffice))" | class="Kiln" | rect=x=600 y=303 w=72 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="Calibre" | type=Group | automationId="SettingsRow("Calibre")" | class="Kiln" | rect=x=144 y=351 w=528 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="C:\Program Files\Calibre2\ebook-convert.exe" | type=Text | automationId="SettingsValue("Calibre")" | class="Kiln" | rect=x=264 y=355 w=328 h=24 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Choose" | type=Button | automationId="Setting(EngineChoose(Calibre))" | class="Kiln" | rect=x=600 y=351 w=72 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="Check for updates" | type=Button | automationId="Setting(CheckUpdates)" | class="Kiln" | rect=x=144 y=423 w=136 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="Kiln 0.1.0" | type=Text | automationId="UpdateNote" | class="Kiln" | rect=x=288 y=423 w=304 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Close" | type=Button | automationId="Setting(Close)" | class="Kiln" | rect=x=600 y=423 w=72 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+
+== Content view ==
+- name="Kiln" | type=Window | automationId="Kiln" | class="KilnWindow" | rect=x=40 y=40 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+  - name="Settings" | type=Pane | automationId="Settings" | class="Kiln" | rect=x=128 y=151 w=560 h=320 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Settings pages" | type=Tab | automationId="SettingsTabs" | class="Kiln" | rect=x=408 y=167 w=264 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Selection]
+      - name="General" | type=TabItem | automationId="Setting(Tab(General))" | class="Kiln" | rect=x=408 y=167 w=88 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem]
+      - name="Quality" | type=TabItem | automationId="Setting(Tab(Quality))" | class="Kiln" | rect=x=496 y=167 w=88 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem]
+      - name="Helper apps" | type=TabItem | automationId="Setting(Tab(Engines))" | class="Kiln" | rect=x=584 y=167 w=88 h=32 | keyboardFocusable=True | hasFocus=True | enabled=True | offscreen=False | patterns=[SelectionItem]
+    - name="FFmpeg" | type=Group | automationId="SettingsRow("FFmpeg")" | class="Kiln" | rect=x=144 y=207 w=528 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Found on PATH" | type=Text | automationId="SettingsValue("FFmpeg")" | class="Kiln" | rect=x=264 y=211 w=328 h=24 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Choose" | type=Button | automationId="Setting(EngineChoose(Ffmpeg))" | class="Kiln" | rect=x=600 y=207 w=72 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="Pandoc" | type=Group | automationId="SettingsRow("Pandoc")" | class="Kiln" | rect=x=144 y=255 w=528 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Found on PATH" | type=Text | automationId="SettingsValue("Pandoc")" | class="Kiln" | rect=x=264 y=259 w=328 h=24 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Choose" | type=Button | automationId="Setting(EngineChoose(Pandoc))" | class="Kiln" | rect=x=600 y=255 w=72 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="LibreOffice" | type=Group | automationId="SettingsRow("LibreOffice")" | class="Kiln" | rect=x=144 y=303 w=528 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="C:\Program Files\LibreOffice\program\soffice.com" | type=Text | automationId="SettingsValue("LibreOffice")" | class="Kiln" | rect=x=264 y=307 w=328 h=24 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Choose" | type=Button | automationId="Setting(EngineChoose(LibreOffice))" | class="Kiln" | rect=x=600 y=303 w=72 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="Calibre" | type=Group | automationId="SettingsRow("Calibre")" | class="Kiln" | rect=x=144 y=351 w=528 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="C:\Program Files\Calibre2\ebook-convert.exe" | type=Text | automationId="SettingsValue("Calibre")" | class="Kiln" | rect=x=264 y=355 w=328 h=24 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Choose" | type=Button | automationId="Setting(EngineChoose(Calibre))" | class="Kiln" | rect=x=600 y=351 w=72 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="Check for updates" | type=Button | automationId="Setting(CheckUpdates)" | class="Kiln" | rect=x=144 y=423 w=136 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="Kiln 0.1.0" | type=Text | automationId="UpdateNote" | class="Kiln" | rect=x=288 y=423 w=304 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Close" | type=Button | automationId="Setting(Close)" | class="Kiln" | rect=x=600 y=423 w=72 h=32 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+
+== Focused element ==
+name="Helper apps" | type=TabItem | automationId="Setting(Tab(Engines))" | class="Kiln" | rect=x=584 y=167 w=88 h=32 | keyboardFocusable=True | hasFocus=True | enabled=True | offscreen=False | patterns=[SelectionItem]
+
+== ElementFromPoint probes (points in client DIPs, scaled to px by the window DPI) ==
+gear button (688,28) -> name="Kiln" | type=Window | automationId="Kiln" | class="KilnWindow" | rect=x=40 y=40 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+first row / drop panel (200,100) -> name="Settings" | type=Pane | automationId="Settings" | class="Kiln" | rect=x=128 y=151 w=560 h=320 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+list centre (360,220) -> name="Settings" | type=Pane | automationId="Settings" | class="Kiln" | rect=x=128 y=151 w=560 h=320 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+Clear button (668,444) -> name="Kiln" | type=Window | automationId="Kiln" | class="KilnWindow" | rect=x=40 y=40 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+row link area (620,110) -> name="Helper apps" | type=TabItem | automationId="Setting(Tab(Engines))" | class="Kiln" | rect=x=584 y=167 w=88 h=32 | keyboardFocusable=True | hasFocus=True | enabled=True | offscreen=False | patterns=[SelectionItem]
+
+Client rect: 720 x 480 px
+
+== MSAA view (oleacc AccessibleChildren from Windows PowerShell 5.1; that process is DPI-unaware, so rects are in 96-DPI virtualised coordinates) ==
+OBJID_WINDOW (whole window incl. non-client):
+- name="Kiln" role=window state=0x160004 rect=40,40,736,519 default=""
+  - name="System" role=menu bar state=0x100000 rect=48,48,22,22 default=""
+    - name="System" role=menu item state=0x40100000 rect=48,48,22,22 default="Open"
+      - name="System" role=popup menu state=0x8000 rect=0,0,0,0 default=""
+        - name="Restore" role=menu item state=0x1 rect=0,0,0,0 default=""
+        - name="Move" role=menu item state=0x0 rect=0,0,0,0 default="Execute"
+        - name="Size" role=menu item state=0x0 rect=0,0,0,0 default="Execute"
+        - name="Minimize" role=menu item state=0x0 rect=0,0,0,0 default="Execute"
+        - name="Maximize" role=menu item state=0x0 rect=0,0,0,0 default="Execute"
+        - name="" role=separator state=0x1 rect=0,0,0,0 default=""
+        - name="Close	Alt+F4" role=menu item state=0x100 rect=0,0,0,0 default="Execute"
+  - name="" role=title bar state=0x100000 rect=64,43,704,28 default=""
+    - name="IME" role=push button state=0x8000 rect=0,0,0,0 default=""
+    - name="Minimize" role=push button state=0x0 rect=629,41,47,30 default="Press"
+    - name="Maximize" role=push button state=0x0 rect=676,41,46,30 default="Press"
+    - name="Context help" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Close" role=push button state=0x0 rect=722,41,47,30 default="Press"
+  - name="Application" role=menu bar state=0x8000 rect=0,0,0,0 default=""
+  - name="Kiln" role=client state=0x100004 rect=48,71,720,480 default=""
+  - name="Vertical" role=scroll bar state=0x8000 rect=0,0,0,0 default=""
+    - name="Line up" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Page up" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Position" role=indicator state=0x8000 rect=0,0,0,0 default=""
+    - name="Page down" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Line down" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+  - name="Horizontal" role=scroll bar state=0x8000 rect=0,0,0,0 default=""
+    - name="Column left" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Page left" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Position" role=indicator state=0x8000 rect=0,0,0,0 default=""
+    - name="Page right" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Column right" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+  - name="" role=grip state=0x8001 rect=0,0,0,0 default=""
+
+OBJID_CLIENT (client area):
+- name="Kiln" role=client state=0x100004 rect=48,71,720,480 default=""
+
+

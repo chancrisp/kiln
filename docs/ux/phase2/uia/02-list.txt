@@ -1,57 +1,88 @@
 Kiln UIA dump: 02-list
-State: Three sample files listed: harbour.png, interview.mov, glaze test.png
-Captured: 2026-10-20T02:09:41, kiln-app release build, 100% scale, scratch APPDATA and LOCALAPPDATA
+State: Four files listed, suggestions in, hint showing
+Captured: 2026-10-20T02:27:02, kiln-app release build, 100% scale (no monitor runs at 100%), scratch APPDATA and LOCALAPPDATA
 
 == Raw view (everything UIA exposes) ==
-- name="Kiln" | type=Window | automationId="Kiln" | rect=x=52 y=52 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
-  - name="Help" | type=Button | automationId="HelpButton" | rect=x=692 y=95 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Help (F1)"
-  - name="Settings" | type=Button | automationId="SettingsButton" | rect=x=732 y=95 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Settings (Ctrl+,)"
-  - name="Files" | type=List | automationId="List" | rect=x=76 y=155 w=688 h=348 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Selection]
-    - name="harbour.png, 1600 × 1200 photo, Suggested: JPG, about 890 KB, 3.9 MB, inputs" | type=ListItem | automationId="Row.484cb1c3eb9b96ca" | rect=x=76 y=155 w=688 h=56 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem] | help="C:\Users\chanm\AppData\Local\Temp\kiln-uia-dump\inputs" | selected=False
-    - name="interview.mov, 1280 × 720 video, 0:04, Suggested: MP4, about 1.1 MB, 3.4 MB, inputs" | type=ListItem | automationId="Row.9f6aaa0d4f966687" | rect=x=76 y=211 w=688 h=56 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem] | help="C:\Users\chanm\AppData\Local\Temp\kiln-uia-dump\inputs" | selected=False
-    - name="glaze test.png, 64 × 48 photo, 396 bytes, inputs" | type=ListItem | automationId="Row.f941fdbc9878c4de" | rect=x=76 y=267 w=688 h=56 | keyboardFocusable=True | hasFocus=True | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem] | help="C:\Users\chanm\AppData\Local\Temp\kiln-uia-dump\inputs" | selected=True
-  - name="Right-click a file, or select it and press Enter, to convert it." | type=Text | automationId="Status" | rect=x=80 y=507 w=508 h=40 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
-  - name="Add files" | type=Button | automationId="AddFiles" | rect=x=596 y=511 w=88 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Add files (Ctrl+O)"
-  - name="Clear" | type=Button | automationId="Clear" | rect=x=692 y=511 w=72 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+- name="Kiln" | type=Window | automationId="Kiln" | class="KilnWindow" | rect=x=40 y=40 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+  - name="Add files (Ctrl+O)" | type=Pane | automationId="" | class="tooltips_class32" | rect=x=640 y=530 w=106 h=20 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+  - name="Help" | type=Button | automationId="HelpButton" | class="Kiln" | rect=x=680 y=83 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+  - name="Settings" | type=Button | automationId="SettingsButton" | class="Kiln" | rect=x=720 y=83 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+  - name="Files" | type=List | automationId="List" | class="Kiln" | rect=x=64 y=143 w=688 h=348 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Selection]
+    - name="harbour.png, 1600 × 1200 photo, Suggested: JPG, about 890 KB, 3.9 MB, samples" | type=ListItem | automationId="Row.868b077b4ca6ef03" | class="Kiln" | rect=x=64 y=143 w=688 h=56 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem]
+    - name="interview.mov, 1280 × 720 video, 0:04, Suggested: MP4, about 1.1 MB, 3.4 MB, samples" | type=ListItem | automationId="Row.3e771c72321266ea" | class="Kiln" | rect=x=64 y=199 w=688 h=56 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem]
+    - name="glaze test.png, 64 × 48 photo, 396 bytes, samples" | type=ListItem | automationId="Row.1a4b5aed25ab8909" | class="Kiln" | rect=x=64 y=255 w=688 h=56 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem]
+    - name="broken clip.mp4, Converts to 28 formats, 40 KB, samples" | type=ListItem | automationId="Row.dad43306bb80bb61" | class="Kiln" | rect=x=64 y=311 w=688 h=56 | keyboardFocusable=True | hasFocus=True | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem]
+  - name="Right-click a file, or select it and press Enter, to convert it." | type=Text | automationId="Status" | class="Kiln" | rect=x=68 y=495 w=508 h=40 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+  - name="Add files" | type=Button | automationId="AddFiles" | class="Kiln" | rect=x=584 y=499 w=88 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+  - name="Clear" | type=Button | automationId="Clear" | class="Kiln" | rect=x=680 y=499 w=72 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
 
 == Control view (what Narrator walks) ==
-- name="Kiln" | type=Window | automationId="Kiln" | rect=x=52 y=52 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
-  - name="Help" | type=Button | automationId="HelpButton" | rect=x=692 y=95 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Help (F1)"
-  - name="Settings" | type=Button | automationId="SettingsButton" | rect=x=732 y=95 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Settings (Ctrl+,)"
-  - name="Files" | type=List | automationId="List" | rect=x=76 y=155 w=688 h=348 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Selection]
-    - name="harbour.png, 1600 × 1200 photo, Suggested: JPG, about 890 KB, 3.9 MB, inputs" | type=ListItem | automationId="Row.484cb1c3eb9b96ca" | rect=x=76 y=155 w=688 h=56 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem] | help="C:\Users\chanm\AppData\Local\Temp\kiln-uia-dump\inputs" | selected=False
-    - name="interview.mov, 1280 × 720 video, 0:04, Suggested: MP4, about 1.1 MB, 3.4 MB, inputs" | type=ListItem | automationId="Row.9f6aaa0d4f966687" | rect=x=76 y=211 w=688 h=56 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem] | help="C:\Users\chanm\AppData\Local\Temp\kiln-uia-dump\inputs" | selected=False
-    - name="glaze test.png, 64 × 48 photo, 396 bytes, inputs" | type=ListItem | automationId="Row.f941fdbc9878c4de" | rect=x=76 y=267 w=688 h=56 | keyboardFocusable=True | hasFocus=True | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem] | help="C:\Users\chanm\AppData\Local\Temp\kiln-uia-dump\inputs" | selected=True
-  - name="Right-click a file, or select it and press Enter, to convert it." | type=Text | automationId="Status" | rect=x=80 y=507 w=508 h=40 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
-  - name="Add files" | type=Button | automationId="AddFiles" | rect=x=596 y=511 w=88 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Add files (Ctrl+O)"
-  - name="Clear" | type=Button | automationId="Clear" | rect=x=692 y=511 w=72 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+- name="Kiln" | type=Window | automationId="Kiln" | class="KilnWindow" | rect=x=40 y=40 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+  - name="Add files (Ctrl+O)" | type=Pane | automationId="" | class="tooltips_class32" | rect=x=640 y=530 w=106 h=20 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+  - name="Help" | type=Button | automationId="HelpButton" | class="Kiln" | rect=x=680 y=83 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+  - name="Settings" | type=Button | automationId="SettingsButton" | class="Kiln" | rect=x=720 y=83 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+  - name="Files" | type=List | automationId="List" | class="Kiln" | rect=x=64 y=143 w=688 h=348 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Selection]
+    - name="harbour.png, 1600 × 1200 photo, Suggested: JPG, about 890 KB, 3.9 MB, samples" | type=ListItem | automationId="Row.868b077b4ca6ef03" | class="Kiln" | rect=x=64 y=143 w=688 h=56 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem]
+    - name="interview.mov, 1280 × 720 video, 0:04, Suggested: MP4, about 1.1 MB, 3.4 MB, samples" | type=ListItem | automationId="Row.3e771c72321266ea" | class="Kiln" | rect=x=64 y=199 w=688 h=56 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem]
+    - name="glaze test.png, 64 × 48 photo, 396 bytes, samples" | type=ListItem | automationId="Row.1a4b5aed25ab8909" | class="Kiln" | rect=x=64 y=255 w=688 h=56 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem]
+    - name="broken clip.mp4, Converts to 28 formats, 40 KB, samples" | type=ListItem | automationId="Row.dad43306bb80bb61" | class="Kiln" | rect=x=64 y=311 w=688 h=56 | keyboardFocusable=True | hasFocus=True | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem]
+  - name="Right-click a file, or select it and press Enter, to convert it." | type=Text | automationId="Status" | class="Kiln" | rect=x=68 y=495 w=508 h=40 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+  - name="Add files" | type=Button | automationId="AddFiles" | class="Kiln" | rect=x=584 y=499 w=88 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+  - name="Clear" | type=Button | automationId="Clear" | class="Kiln" | rect=x=680 y=499 w=72 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
 
 == Content view ==
-- name="Kiln" | type=Window | automationId="Kiln" | rect=x=52 y=52 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
-  - name="Help" | type=Button | automationId="HelpButton" | rect=x=692 y=95 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Help (F1)"
-  - name="Settings" | type=Button | automationId="SettingsButton" | rect=x=732 y=95 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Settings (Ctrl+,)"
-  - name="Files" | type=List | automationId="List" | rect=x=76 y=155 w=688 h=348 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Selection]
-    - name="harbour.png, 1600 × 1200 photo, Suggested: JPG, about 890 KB, 3.9 MB, inputs" | type=ListItem | automationId="Row.484cb1c3eb9b96ca" | rect=x=76 y=155 w=688 h=56 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem] | help="C:\Users\chanm\AppData\Local\Temp\kiln-uia-dump\inputs" | selected=False
-    - name="interview.mov, 1280 × 720 video, 0:04, Suggested: MP4, about 1.1 MB, 3.4 MB, inputs" | type=ListItem | automationId="Row.9f6aaa0d4f966687" | rect=x=76 y=211 w=688 h=56 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem] | help="C:\Users\chanm\AppData\Local\Temp\kiln-uia-dump\inputs" | selected=False
-    - name="glaze test.png, 64 × 48 photo, 396 bytes, inputs" | type=ListItem | automationId="Row.f941fdbc9878c4de" | rect=x=76 y=267 w=688 h=56 | keyboardFocusable=True | hasFocus=True | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem] | help="C:\Users\chanm\AppData\Local\Temp\kiln-uia-dump\inputs" | selected=True
-  - name="Right-click a file, or select it and press Enter, to convert it." | type=Text | automationId="Status" | rect=x=80 y=507 w=508 h=40 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
-  - name="Add files" | type=Button | automationId="AddFiles" | rect=x=596 y=511 w=88 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Add files (Ctrl+O)"
-  - name="Clear" | type=Button | automationId="Clear" | rect=x=692 y=511 w=72 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+- name="Kiln" | type=Window | automationId="Kiln" | class="KilnWindow" | rect=x=40 y=40 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+  - name="Add files (Ctrl+O)" | type=Pane | automationId="" | class="tooltips_class32" | rect=x=640 y=530 w=106 h=20 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+  - name="Help" | type=Button | automationId="HelpButton" | class="Kiln" | rect=x=680 y=83 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+  - name="Settings" | type=Button | automationId="SettingsButton" | class="Kiln" | rect=x=720 y=83 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+  - name="Files" | type=List | automationId="List" | class="Kiln" | rect=x=64 y=143 w=688 h=348 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Selection]
+    - name="harbour.png, 1600 × 1200 photo, Suggested: JPG, about 890 KB, 3.9 MB, samples" | type=ListItem | automationId="Row.868b077b4ca6ef03" | class="Kiln" | rect=x=64 y=143 w=688 h=56 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem]
+    - name="interview.mov, 1280 × 720 video, 0:04, Suggested: MP4, about 1.1 MB, 3.4 MB, samples" | type=ListItem | automationId="Row.3e771c72321266ea" | class="Kiln" | rect=x=64 y=199 w=688 h=56 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem]
+    - name="glaze test.png, 64 × 48 photo, 396 bytes, samples" | type=ListItem | automationId="Row.1a4b5aed25ab8909" | class="Kiln" | rect=x=64 y=255 w=688 h=56 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem]
+    - name="broken clip.mp4, Converts to 28 formats, 40 KB, samples" | type=ListItem | automationId="Row.dad43306bb80bb61" | class="Kiln" | rect=x=64 y=311 w=688 h=56 | keyboardFocusable=True | hasFocus=True | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem]
+  - name="Right-click a file, or select it and press Enter, to convert it." | type=Text | automationId="Status" | class="Kiln" | rect=x=68 y=495 w=508 h=40 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+  - name="Add files" | type=Button | automationId="AddFiles" | class="Kiln" | rect=x=584 y=499 w=88 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+  - name="Clear" | type=Button | automationId="Clear" | class="Kiln" | rect=x=680 y=499 w=72 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
 
 == Focused element ==
-name="glaze test.png, 64 × 48 photo, 396 bytes, inputs" | type=ListItem | automationId="Row.f941fdbc9878c4de" | rect=x=76 y=267 w=688 h=56 | keyboardFocusable=True | hasFocus=True | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem] | help="C:\Users\chanm\AppData\Local\Temp\kiln-uia-dump\inputs" | selected=True
+name="broken clip.mp4, Converts to 28 formats, 40 KB, samples" | type=ListItem | automationId="Row.dad43306bb80bb61" | class="Kiln" | rect=x=64 y=311 w=688 h=56 | keyboardFocusable=True | hasFocus=True | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem]
 
-== ElementFromPoint at each element's centre ==
-"Kiln" -> "glaze test.png, 64 × 48 photo, 396 bytes, inputs" (ListItem)
-"Help" -> "Help" (Button)
-"Settings" -> "Settings" (Button)
-"Files" -> "Files" (List)
-"harbour.png, 1600 × 1200 photo, Suggested: JPG, about 890 KB, 3.9 MB, inputs" -> "harbour.png, 1600 × 1200 photo, Suggested: JPG, about 890 KB, 3.9 MB, inputs" (ListItem)
-"interview.mov, 1280 × 720 video, 0:04, Suggested: MP4, about 1.1 MB, 3.4 MB, inputs" -> "interview.mov, 1280 × 720 video, 0:04, Suggested: MP4, about 1.1 MB, 3.4 MB, inputs" (ListItem)
-"glaze test.png, 64 × 48 photo, 396 bytes, inputs" -> "glaze test.png, 64 × 48 photo, 396 bytes, inputs" (ListItem)
-"Right-click a file, or select it and press Enter, to convert it." -> "Right-click a file, or select it and press Enter, to convert it." (Text)
-"Add files" -> "Add files" (Button)
-"Clear" -> "Clear" (Button)
+== ElementFromPoint probes (points in client DIPs, scaled to px by the window DPI) ==
+gear button (688,28) -> name="Settings" | type=Button | automationId="SettingsButton" | class="Kiln" | rect=x=720 y=83 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+first row / drop panel (200,100) -> name="harbour.png, 1600 × 1200 photo, Suggested: JPG, about 890 KB, 3.9 MB, samples" | type=ListItem | automationId="Row.868b077b4ca6ef03" | class="Kiln" | rect=x=64 y=143 w=688 h=56 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem]
+list centre (360,220) -> name="glaze test.png, 64 × 48 photo, 396 bytes, samples" | type=ListItem | automationId="Row.1a4b5aed25ab8909" | class="Kiln" | rect=x=64 y=255 w=688 h=56 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem]
+Clear button (668,444) -> name="Clear" | type=Button | automationId="Clear" | class="Kiln" | rect=x=680 y=499 w=72 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+row link area (620,110) -> name="harbour.png, 1600 × 1200 photo, Suggested: JPG, about 890 KB, 3.9 MB, samples" | type=ListItem | automationId="Row.868b077b4ca6ef03" | class="Kiln" | rect=x=64 y=143 w=688 h=56 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[SelectionItem,ScrollItem]
 
 Client rect: 720 x 480 px
+
+== MSAA view (oleacc AccessibleChildren from Windows PowerShell 5.1; that process is DPI-unaware, so rects are in 96-DPI virtualised coordinates) ==
+OBJID_WINDOW (whole window incl. non-client):
+- name="" role=window state=0x100000 rect=640,530,111,25 default=""
+  - name="System" role=menu bar state=0x8000 rect=0,0,0,0 default=""
+  - name="" role=title bar state=0x8000 rect=0,0,0,0 default=""
+    - name="IME" role=push button state=0x8000 rect=0,0,0,0 default=""
+    - name="Minimize" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Maximize" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Context help" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Close" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+  - name="Application" role=menu bar state=0x8000 rect=0,0,0,0 default=""
+  - name="" role=client state=0x100000 rect=640,530,111,25 default=""
+  - name="Vertical" role=scroll bar state=0x8000 rect=0,0,0,0 default=""
+    - name="Line up" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Page up" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Position" role=indicator state=0x8000 rect=0,0,0,0 default=""
+    - name="Page down" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Line down" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+  - name="Horizontal" role=scroll bar state=0x8000 rect=0,0,0,0 default=""
+    - name="Column left" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Page left" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Position" role=indicator state=0x8000 rect=0,0,0,0 default=""
+    - name="Page right" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Column right" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+  - name="" role=grip state=0x8001 rect=0,0,0,0 default=""
+
+OBJID_CLIENT (client area):
+- name="" role=client state=0x100000 rect=640,530,111,25 default=""
+
 

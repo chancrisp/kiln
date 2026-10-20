@@ -33,3 +33,7 @@ This is the evidence collected before any redesign. It covers Kiln at `main` 221
 
 1. Run the sessions in [usability-test.md](usability-test.md), then send the observation sheets and recordings.
 2. Phase 2 combines the sessions with this baseline into ranked problems, and sets the success thresholds before any design work.
+
+## Phase 2
+
+The fixes built from this baseline, with the evidence, are in [../phase2/README.md](../phase2/README.md).

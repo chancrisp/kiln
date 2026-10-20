@@ -1,0 +1,94 @@
+Kiln UIA dump: 03-wheel
+State: Convert wheel open on harbour.png with a target lit
+Captured: 2026-10-20T02:27:05, kiln-app release build, 100% scale (no monitor runs at 100%), scratch APPDATA and LOCALAPPDATA
+
+== Raw view (everything UIA exposes) ==
+- name="Kiln" | type=Window | automationId="Kiln" | class="KilnWindow" | rect=x=40 y=40 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+  - name="Convert harbour.png" | type=Menu | automationId="Wheel" | class="Kiln" | rect=x=272 y=181 w=272 h=272 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="JPG: a photo that opens anywhere" | type=MenuItem | automationId="WheelItem(Inner(0))" | class="Kiln" | rect=x=368 y=181 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="PDF: a document that looks the same anywhere" | type=MenuItem | automationId="WheelItem(Inner(1))" | class="Kiln" | rect=x=429 y=203 w=80 h=80 | keyboardFocusable=True | hasFocus=True | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="WEBP: a small image for the web" | type=MenuItem | automationId="WheelItem(Inner(2))" | class="Kiln" | rect=x=462 y=260 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="GIF: a simple image that can loop" | type=MenuItem | automationId="WheelItem(Inner(3))" | class="Kiln" | rect=x=451 y=325 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="AVIF: a very small, modern image" | type=MenuItem | automationId="WheelItem(Inner(4))" | class="Kiln" | rect=x=400 y=367 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="TIFF: a lossless image for print and scans" | type=MenuItem | automationId="WheelItem(Inner(5))" | class="Kiln" | rect=x=335 y=367 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="BMP: an uncompressed Windows image" | type=MenuItem | automationId="WheelItem(Inner(6))" | class="Kiln" | rect=x=284 y=325 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="ICO: an icon image for apps and sites" | type=MenuItem | automationId="WheelItem(Inner(7))" | class="Kiln" | rect=x=273 y=260 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="More" | type=MenuItem | automationId="WheelItem(Inner(8))" | class="Kiln" | rect=x=306 y=203 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+
+== Control view (what Narrator walks) ==
+- name="Kiln" | type=Window | automationId="Kiln" | class="KilnWindow" | rect=x=40 y=40 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+  - name="Convert harbour.png" | type=Menu | automationId="Wheel" | class="Kiln" | rect=x=272 y=181 w=272 h=272 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="JPG: a photo that opens anywhere" | type=MenuItem | automationId="WheelItem(Inner(0))" | class="Kiln" | rect=x=368 y=181 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="PDF: a document that looks the same anywhere" | type=MenuItem | automationId="WheelItem(Inner(1))" | class="Kiln" | rect=x=429 y=203 w=80 h=80 | keyboardFocusable=True | hasFocus=True | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="WEBP: a small image for the web" | type=MenuItem | automationId="WheelItem(Inner(2))" | class="Kiln" | rect=x=462 y=260 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="GIF: a simple image that can loop" | type=MenuItem | automationId="WheelItem(Inner(3))" | class="Kiln" | rect=x=451 y=325 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="AVIF: a very small, modern image" | type=MenuItem | automationId="WheelItem(Inner(4))" | class="Kiln" | rect=x=400 y=367 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="TIFF: a lossless image for print and scans" | type=MenuItem | automationId="WheelItem(Inner(5))" | class="Kiln" | rect=x=335 y=367 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="BMP: an uncompressed Windows image" | type=MenuItem | automationId="WheelItem(Inner(6))" | class="Kiln" | rect=x=284 y=325 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="ICO: an icon image for apps and sites" | type=MenuItem | automationId="WheelItem(Inner(7))" | class="Kiln" | rect=x=273 y=260 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="More" | type=MenuItem | automationId="WheelItem(Inner(8))" | class="Kiln" | rect=x=306 y=203 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+
+== Content view ==
+- name="Kiln" | type=Window | automationId="Kiln" | class="KilnWindow" | rect=x=40 y=40 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+  - name="Convert harbour.png" | type=Menu | automationId="Wheel" | class="Kiln" | rect=x=272 y=181 w=272 h=272 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="JPG: a photo that opens anywhere" | type=MenuItem | automationId="WheelItem(Inner(0))" | class="Kiln" | rect=x=368 y=181 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="PDF: a document that looks the same anywhere" | type=MenuItem | automationId="WheelItem(Inner(1))" | class="Kiln" | rect=x=429 y=203 w=80 h=80 | keyboardFocusable=True | hasFocus=True | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="WEBP: a small image for the web" | type=MenuItem | automationId="WheelItem(Inner(2))" | class="Kiln" | rect=x=462 y=260 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="GIF: a simple image that can loop" | type=MenuItem | automationId="WheelItem(Inner(3))" | class="Kiln" | rect=x=451 y=325 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="AVIF: a very small, modern image" | type=MenuItem | automationId="WheelItem(Inner(4))" | class="Kiln" | rect=x=400 y=367 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="TIFF: a lossless image for print and scans" | type=MenuItem | automationId="WheelItem(Inner(5))" | class="Kiln" | rect=x=335 y=367 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="BMP: an uncompressed Windows image" | type=MenuItem | automationId="WheelItem(Inner(6))" | class="Kiln" | rect=x=284 y=325 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="ICO: an icon image for apps and sites" | type=MenuItem | automationId="WheelItem(Inner(7))" | class="Kiln" | rect=x=273 y=260 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+    - name="More" | type=MenuItem | automationId="WheelItem(Inner(8))" | class="Kiln" | rect=x=306 y=203 w=80 h=80 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke]
+
+== Focused element ==
+name="PDF: a document that looks the same anywhere" | type=MenuItem | automationId="WheelItem(Inner(1))" | class="Kiln" | rect=x=429 y=203 w=80 h=80 | keyboardFocusable=True | hasFocus=True | enabled=True | offscreen=False | patterns=[Invoke]
+
+== ElementFromPoint probes (points in client DIPs, scaled to px by the window DPI) ==
+gear button (688,28) -> name="Kiln" | type=Window | automationId="Kiln" | class="KilnWindow" | rect=x=40 y=40 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+first row / drop panel (200,100) -> name="Kiln" | type=Window | automationId="Kiln" | class="KilnWindow" | rect=x=40 y=40 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+list centre (360,220) -> name="Convert harbour.png" | type=Menu | automationId="Wheel" | class="Kiln" | rect=x=272 y=181 w=272 h=272 | keyboardFocusable=True | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+Clear button (668,444) -> name="Kiln" | type=Window | automationId="Kiln" | class="KilnWindow" | rect=x=40 y=40 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+row link area (620,110) -> name="Kiln" | type=Window | automationId="Kiln" | class="KilnWindow" | rect=x=40 y=40 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+
+Client rect: 720 x 480 px
+
+== MSAA view (oleacc AccessibleChildren from Windows PowerShell 5.1; that process is DPI-unaware, so rects are in 96-DPI virtualised coordinates) ==
+OBJID_WINDOW (whole window incl. non-client):
+- name="Kiln" role=window state=0x160004 rect=40,40,736,519 default=""
+  - name="System" role=menu bar state=0x100000 rect=48,48,22,22 default=""
+    - name="System" role=menu item state=0x40100000 rect=48,48,22,22 default="Open"
+      - name="System" role=popup menu state=0x8000 rect=0,0,0,0 default=""
+        - name="Restore" role=menu item state=0x1 rect=0,0,0,0 default=""
+        - name="Move" role=menu item state=0x0 rect=0,0,0,0 default="Execute"
+        - name="Size" role=menu item state=0x0 rect=0,0,0,0 default="Execute"
+        - name="Minimize" role=menu item state=0x0 rect=0,0,0,0 default="Execute"
+        - name="Maximize" role=menu item state=0x0 rect=0,0,0,0 default="Execute"
+        - name="" role=separator state=0x1 rect=0,0,0,0 default=""
+        - name="Close	Alt+F4" role=menu item state=0x100 rect=0,0,0,0 default="Execute"
+  - name="" role=title bar state=0x100000 rect=64,43,704,28 default=""
+    - name="IME" role=push button state=0x8000 rect=0,0,0,0 default=""
+    - name="Minimize" role=push button state=0x0 rect=629,41,47,30 default="Press"
+    - name="Maximize" role=push button state=0x0 rect=676,41,46,30 default="Press"
+    - name="Context help" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Close" role=push button state=0x0 rect=722,41,47,30 default="Press"
+  - name="Application" role=menu bar state=0x8000 rect=0,0,0,0 default=""
+  - name="Kiln" role=client state=0x100004 rect=48,71,720,480 default=""
+  - name="Vertical" role=scroll bar state=0x8000 rect=0,0,0,0 default=""
+    - name="Line up" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Page up" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Position" role=indicator state=0x8000 rect=0,0,0,0 default=""
+    - name="Page down" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Line down" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+  - name="Horizontal" role=scroll bar state=0x8000 rect=0,0,0,0 default=""
+    - name="Column left" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Page left" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Position" role=indicator state=0x8000 rect=0,0,0,0 default=""
+    - name="Page right" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Column right" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+  - name="" role=grip state=0x8001 rect=0,0,0,0 default=""
+
+OBJID_CLIENT (client area):
+- name="Kiln" role=client state=0x100004 rect=48,71,720,480 default=""
+
+

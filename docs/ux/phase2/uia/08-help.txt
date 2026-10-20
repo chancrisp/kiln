@@ -1,0 +1,190 @@
+Kiln UIA dump: 08-help
+State: Help overlay open
+Captured: 2026-10-20T02:27:55, kiln-app release build, 100% scale (no monitor runs at 100%), scratch APPDATA and LOCALAPPDATA
+
+== Raw view (everything UIA exposes) ==
+- name="Kiln" | type=Window | automationId="Kiln" | class="KilnWindow" | rect=x=40 y=40 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+  - name="Help" | type=Pane | automationId="Help" | class="Kiln" | rect=x=128 y=103 w=560 h=416 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Ways in" | type=Group | automationId="HelpSection(0)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Drop: Drop files anywhere on the window to add them." | type=Text | automationId="HelpLine(0, 0)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+O: Add files: choose them in a window." | type=Text | automationId="HelpLine(0, 1)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+V: Paste files copied in File Explorer." | type=Text | automationId="HelpLine(0, 2)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Right-click: Right-click a file in the list to convert it, use a tool on it or act on it." | type=Text | automationId="HelpLine(0, 3)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Hold Shift and drop: Choose a format to convert to." | type=Text | automationId="HelpLine(0, 4)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Hold Ctrl and drop: Choose a tool." | type=Text | automationId="HelpLine(0, 5)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Hold Alt and drop: Choose a file action." | type=Text | automationId="HelpLine(0, 6)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Results" | type=Group | automationId="HelpSection(1)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Results wait in Kiln until you export them. Nothing is saved until you do." | type=Text | automationId="HelpLine(1, 0)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+S: Export the selected results." | type=Text | automationId="HelpLine(1, 1)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+Shift+S: Export all: every result Kiln holds." | type=Text | automationId="HelpLine(1, 2)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Double-click: Open a result to look at it." | type=Text | automationId="HelpLine(1, 3)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Keyboard shortcuts" | type=Group | automationId="HelpSection(2)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Enter: Convert the selected files." | type=Text | automationId="HelpLine(2, 0)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+Enter: Tools for the selected files." | type=Text | automationId="HelpLine(2, 1)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Alt+Enter: File actions for the selected files." | type=Text | automationId="HelpLine(2, 2)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Menu key or Shift+F10: The right-click menu." | type=Text | automationId="HelpLine(2, 3)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Up, Down, Home, End: Move through the files." | type=Text | automationId="HelpLine(2, 4)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Shift+Up, Shift+Down: Select more files." | type=Text | automationId="HelpLine(2, 5)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Shift+Home, Shift+End: Select to the first or last file." | type=Text | automationId="HelpLine(2, 6)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+A: Select every file." | type=Text | automationId="HelpLine(2, 7)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Escape: Clear the selection." | type=Text | automationId="HelpLine(2, 8)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Space: Export, show details or open the folder, as the file's link says." | type=Text | automationId="HelpLine(2, 9)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Delete or Backspace: Remove the selected files from the list." | type=Text | automationId="HelpLine(2, 10)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+,: Settings." | type=Text | automationId="HelpLine(2, 11)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="F1: This help." | type=Text | automationId="HelpLine(2, 12)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="In a wheel" | type=Group | automationId="HelpSection(3)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Left, Right, Up, Down: Move between choices." | type=Text | automationId="HelpLine(3, 0)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Tab: Options for the lit format, where it has them." | type=Text | automationId="HelpLine(3, 1)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Enter or Space: Choose." | type=Text | automationId="HelpLine(3, 2)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Escape: Close the wheel, or step back from More." | type=Text | automationId="HelpLine(3, 3)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="In panels" | type=Group | automationId="HelpSection(4)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Tab, Shift+Tab: Move between controls." | type=Text | automationId="HelpLine(4, 0)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Left, Right: Change the value under focus." | type=Text | automationId="HelpLine(4, 1)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Space: Press the control under focus." | type=Text | automationId="HelpLine(4, 2)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Enter: Convert from the options sheet, close the details, or press the control under focus in Settings." | type=Text | automationId="HelpLine(4, 3)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Page Up, Page Down: Scroll long text." | type=Text | automationId="HelpLine(4, 4)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+C: Copy the details." | type=Text | automationId="HelpLine(4, 5)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Escape: Close the panel." | type=Text | automationId="HelpLine(4, 6)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Close" | type=Button | automationId="HelpClose" | class="Kiln" | rect=x=600 y=471 w=72 h=32 | keyboardFocusable=True | hasFocus=True | enabled=True | offscreen=False | patterns=[Invoke]
+
+== Control view (what Narrator walks) ==
+- name="Kiln" | type=Window | automationId="Kiln" | class="KilnWindow" | rect=x=40 y=40 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+  - name="Help" | type=Pane | automationId="Help" | class="Kiln" | rect=x=128 y=103 w=560 h=416 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Ways in" | type=Group | automationId="HelpSection(0)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Drop: Drop files anywhere on the window to add them." | type=Text | automationId="HelpLine(0, 0)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+O: Add files: choose them in a window." | type=Text | automationId="HelpLine(0, 1)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+V: Paste files copied in File Explorer." | type=Text | automationId="HelpLine(0, 2)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Right-click: Right-click a file in the list to convert it, use a tool on it or act on it." | type=Text | automationId="HelpLine(0, 3)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Hold Shift and drop: Choose a format to convert to." | type=Text | automationId="HelpLine(0, 4)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Hold Ctrl and drop: Choose a tool." | type=Text | automationId="HelpLine(0, 5)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Hold Alt and drop: Choose a file action." | type=Text | automationId="HelpLine(0, 6)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Results" | type=Group | automationId="HelpSection(1)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Results wait in Kiln until you export them. Nothing is saved until you do." | type=Text | automationId="HelpLine(1, 0)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+S: Export the selected results." | type=Text | automationId="HelpLine(1, 1)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+Shift+S: Export all: every result Kiln holds." | type=Text | automationId="HelpLine(1, 2)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Double-click: Open a result to look at it." | type=Text | automationId="HelpLine(1, 3)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Keyboard shortcuts" | type=Group | automationId="HelpSection(2)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Enter: Convert the selected files." | type=Text | automationId="HelpLine(2, 0)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+Enter: Tools for the selected files." | type=Text | automationId="HelpLine(2, 1)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Alt+Enter: File actions for the selected files." | type=Text | automationId="HelpLine(2, 2)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Menu key or Shift+F10: The right-click menu." | type=Text | automationId="HelpLine(2, 3)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Up, Down, Home, End: Move through the files." | type=Text | automationId="HelpLine(2, 4)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Shift+Up, Shift+Down: Select more files." | type=Text | automationId="HelpLine(2, 5)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Shift+Home, Shift+End: Select to the first or last file." | type=Text | automationId="HelpLine(2, 6)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+A: Select every file." | type=Text | automationId="HelpLine(2, 7)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Escape: Clear the selection." | type=Text | automationId="HelpLine(2, 8)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Space: Export, show details or open the folder, as the file's link says." | type=Text | automationId="HelpLine(2, 9)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Delete or Backspace: Remove the selected files from the list." | type=Text | automationId="HelpLine(2, 10)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+,: Settings." | type=Text | automationId="HelpLine(2, 11)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="F1: This help." | type=Text | automationId="HelpLine(2, 12)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="In a wheel" | type=Group | automationId="HelpSection(3)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Left, Right, Up, Down: Move between choices." | type=Text | automationId="HelpLine(3, 0)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Tab: Options for the lit format, where it has them." | type=Text | automationId="HelpLine(3, 1)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Enter or Space: Choose." | type=Text | automationId="HelpLine(3, 2)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Escape: Close the wheel, or step back from More." | type=Text | automationId="HelpLine(3, 3)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="In panels" | type=Group | automationId="HelpSection(4)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Tab, Shift+Tab: Move between controls." | type=Text | automationId="HelpLine(4, 0)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Left, Right: Change the value under focus." | type=Text | automationId="HelpLine(4, 1)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Space: Press the control under focus." | type=Text | automationId="HelpLine(4, 2)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Enter: Convert from the options sheet, close the details, or press the control under focus in Settings." | type=Text | automationId="HelpLine(4, 3)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Page Up, Page Down: Scroll long text." | type=Text | automationId="HelpLine(4, 4)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+C: Copy the details." | type=Text | automationId="HelpLine(4, 5)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Escape: Close the panel." | type=Text | automationId="HelpLine(4, 6)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Close" | type=Button | automationId="HelpClose" | class="Kiln" | rect=x=600 y=471 w=72 h=32 | keyboardFocusable=True | hasFocus=True | enabled=True | offscreen=False | patterns=[Invoke]
+
+== Content view ==
+- name="Kiln" | type=Window | automationId="Kiln" | class="KilnWindow" | rect=x=40 y=40 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+  - name="Help" | type=Pane | automationId="Help" | class="Kiln" | rect=x=128 y=103 w=560 h=416 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Ways in" | type=Group | automationId="HelpSection(0)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Drop: Drop files anywhere on the window to add them." | type=Text | automationId="HelpLine(0, 0)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+O: Add files: choose them in a window." | type=Text | automationId="HelpLine(0, 1)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+V: Paste files copied in File Explorer." | type=Text | automationId="HelpLine(0, 2)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Right-click: Right-click a file in the list to convert it, use a tool on it or act on it." | type=Text | automationId="HelpLine(0, 3)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Hold Shift and drop: Choose a format to convert to." | type=Text | automationId="HelpLine(0, 4)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Hold Ctrl and drop: Choose a tool." | type=Text | automationId="HelpLine(0, 5)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Hold Alt and drop: Choose a file action." | type=Text | automationId="HelpLine(0, 6)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Results" | type=Group | automationId="HelpSection(1)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Results wait in Kiln until you export them. Nothing is saved until you do." | type=Text | automationId="HelpLine(1, 0)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+S: Export the selected results." | type=Text | automationId="HelpLine(1, 1)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+Shift+S: Export all: every result Kiln holds." | type=Text | automationId="HelpLine(1, 2)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Double-click: Open a result to look at it." | type=Text | automationId="HelpLine(1, 3)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Keyboard shortcuts" | type=Group | automationId="HelpSection(2)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Enter: Convert the selected files." | type=Text | automationId="HelpLine(2, 0)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+Enter: Tools for the selected files." | type=Text | automationId="HelpLine(2, 1)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Alt+Enter: File actions for the selected files." | type=Text | automationId="HelpLine(2, 2)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Menu key or Shift+F10: The right-click menu." | type=Text | automationId="HelpLine(2, 3)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Up, Down, Home, End: Move through the files." | type=Text | automationId="HelpLine(2, 4)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Shift+Up, Shift+Down: Select more files." | type=Text | automationId="HelpLine(2, 5)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Shift+Home, Shift+End: Select to the first or last file." | type=Text | automationId="HelpLine(2, 6)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+A: Select every file." | type=Text | automationId="HelpLine(2, 7)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Escape: Clear the selection." | type=Text | automationId="HelpLine(2, 8)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Space: Export, show details or open the folder, as the file's link says." | type=Text | automationId="HelpLine(2, 9)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Delete or Backspace: Remove the selected files from the list." | type=Text | automationId="HelpLine(2, 10)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+,: Settings." | type=Text | automationId="HelpLine(2, 11)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="F1: This help." | type=Text | automationId="HelpLine(2, 12)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="In a wheel" | type=Group | automationId="HelpSection(3)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Left, Right, Up, Down: Move between choices." | type=Text | automationId="HelpLine(3, 0)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Tab: Options for the lit format, where it has them." | type=Text | automationId="HelpLine(3, 1)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Enter or Space: Choose." | type=Text | automationId="HelpLine(3, 2)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Escape: Close the wheel, or step back from More." | type=Text | automationId="HelpLine(3, 3)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="In panels" | type=Group | automationId="HelpSection(4)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Tab, Shift+Tab: Move between controls." | type=Text | automationId="HelpLine(4, 0)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Left, Right: Change the value under focus." | type=Text | automationId="HelpLine(4, 1)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Space: Press the control under focus." | type=Text | automationId="HelpLine(4, 2)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Enter: Convert from the options sheet, close the details, or press the control under focus in Settings." | type=Text | automationId="HelpLine(4, 3)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Page Up, Page Down: Scroll long text." | type=Text | automationId="HelpLine(4, 4)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Ctrl+C: Copy the details." | type=Text | automationId="HelpLine(4, 5)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+      - name="Escape: Close the panel." | type=Text | automationId="HelpLine(4, 6)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Close" | type=Button | automationId="HelpClose" | class="Kiln" | rect=x=600 y=471 w=72 h=32 | keyboardFocusable=True | hasFocus=True | enabled=True | offscreen=False | patterns=[Invoke]
+
+== Focused element ==
+name="Close" | type=Button | automationId="HelpClose" | class="Kiln" | rect=x=600 y=471 w=72 h=32 | keyboardFocusable=True | hasFocus=True | enabled=True | offscreen=False | patterns=[Invoke]
+
+== ElementFromPoint probes (points in client DIPs, scaled to px by the window DPI) ==
+gear button (688,28) -> name="Kiln" | type=Window | automationId="Kiln" | class="KilnWindow" | rect=x=40 y=40 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+first row / drop panel (200,100) -> name="Escape: Close the panel." | type=Text | automationId="HelpLine(4, 6)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+list centre (360,220) -> name="Escape: Close the panel." | type=Text | automationId="HelpLine(4, 6)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+Clear button (668,444) -> name="Kiln" | type=Window | automationId="Kiln" | class="KilnWindow" | rect=x=40 y=40 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+row link area (620,110) -> name="Escape: Close the panel." | type=Text | automationId="HelpLine(4, 6)" | class="Kiln" | rect=x=144 y=159 w=528 h=296 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+
+Client rect: 720 x 480 px
+
+== MSAA view (oleacc AccessibleChildren from Windows PowerShell 5.1; that process is DPI-unaware, so rects are in 96-DPI virtualised coordinates) ==
+OBJID_WINDOW (whole window incl. non-client):
+- name="Kiln" role=window state=0x160004 rect=40,40,736,519 default=""
+  - name="System" role=menu bar state=0x100000 rect=48,48,22,22 default=""
+    - name="System" role=menu item state=0x40100000 rect=48,48,22,22 default="Open"
+      - name="System" role=popup menu state=0x8000 rect=0,0,0,0 default=""
+        - name="Restore" role=menu item state=0x1 rect=0,0,0,0 default=""
+        - name="Move" role=menu item state=0x0 rect=0,0,0,0 default="Execute"
+        - name="Size" role=menu item state=0x0 rect=0,0,0,0 default="Execute"
+        - name="Minimize" role=menu item state=0x0 rect=0,0,0,0 default="Execute"
+        - name="Maximize" role=menu item state=0x0 rect=0,0,0,0 default="Execute"
+        - name="" role=separator state=0x1 rect=0,0,0,0 default=""
+        - name="Close	Alt+F4" role=menu item state=0x100 rect=0,0,0,0 default="Execute"
+  - name="" role=title bar state=0x100000 rect=64,43,704,28 default=""
+    - name="IME" role=push button state=0x8000 rect=0,0,0,0 default=""
+    - name="Minimize" role=push button state=0x0 rect=629,41,47,30 default="Press"
+    - name="Maximize" role=push button state=0x0 rect=676,41,46,30 default="Press"
+    - name="Context help" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Close" role=push button state=0x0 rect=722,41,47,30 default="Press"
+  - name="Application" role=menu bar state=0x8000 rect=0,0,0,0 default=""
+  - name="Kiln" role=client state=0x100004 rect=48,71,720,480 default=""
+  - name="Vertical" role=scroll bar state=0x8000 rect=0,0,0,0 default=""
+    - name="Line up" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Page up" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Position" role=indicator state=0x8000 rect=0,0,0,0 default=""
+    - name="Page down" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Line down" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+  - name="Horizontal" role=scroll bar state=0x8000 rect=0,0,0,0 default=""
+    - name="Column left" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Page left" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Position" role=indicator state=0x8000 rect=0,0,0,0 default=""
+    - name="Page right" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+    - name="Column right" role=push button state=0x8000 rect=0,0,0,0 default="Press"
+  - name="" role=grip state=0x8001 rect=0,0,0,0 default=""
+
+OBJID_CLIENT (client area):
+- name="Kiln" role=client state=0x100004 rect=48,71,720,480 default=""
+
+
