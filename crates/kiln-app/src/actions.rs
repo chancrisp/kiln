@@ -2,7 +2,7 @@
 //! Terminal. The parts that touch the clipboard and dialogs live in `win`;
 //! this is the logic, testable anywhere.
 
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -83,8 +83,20 @@ pub fn folder_name(folder: &Path) -> String {
 ///
 /// The destination name is claimed first with `create_new`, then the file
 /// is renamed onto the claim. Across drives, where a rename can't work,
-/// the file is copied and the original removed.
+/// the file is copied to a temp file, which takes the claimed name once
+/// it's complete, and only then is the original removed.
 pub fn move_to(src: &Path, dest_dir: &Path) -> Result<PathBuf, String> {
+    move_with(src, dest_dir, false)
+}
+
+/// The OS error a rename gives across drives.
+#[cfg(windows)]
+const CROSS_DEVICE: i32 = 17;
+#[cfg(not(windows))]
+const CROSS_DEVICE: i32 = 18;
+
+/// `move_to`, where `force_copy` copies as if across drives.
+fn move_with(src: &Path, dest_dir: &Path, force_copy: bool) -> Result<PathBuf, String> {
     let name = src
         .file_name()
         .ok_or_else(|| format!("{} isn't a file.", src.display()))?;
@@ -102,14 +114,21 @@ pub fn move_to(src: &Path, dest_dir: &Path) -> Result<PathBuf, String> {
     }
 
     let dest = claim(dest_dir, Path::new(name)).map_err(|e| e.to_string())?;
-    if std::fs::rename(src, &dest).is_ok() {
-        return Ok(dest);
-    }
-    // Probably another drive. Copy over our empty claim, then remove the
-    // original.
-    if let Err(e) = std::fs::copy(src, &dest) {
+    let failed = |e: io::Error| {
         let _ = std::fs::remove_file(&dest);
-        return Err(format!("{} couldn't be moved: {e}", name.to_string_lossy()));
+        format!("{} couldn't be moved: {e}", name.to_string_lossy())
+    };
+    if !force_copy {
+        match std::fs::rename(src, &dest) {
+            Ok(()) => return Ok(dest),
+            // Another drive: copy instead.
+            Err(e) if e.raw_os_error() == Some(CROSS_DEVICE) => {}
+            // In use, or not allowed: a copy would leave two of it.
+            Err(e) => return Err(failed(e)),
+        }
+    }
+    if let Err(e) = copy_onto(src, &dest) {
+        return Err(failed(e));
     }
     if let Err(e) = std::fs::remove_file(src) {
         return Err(format!(
@@ -118,6 +137,38 @@ pub fn move_to(src: &Path, dest_dir: &Path) -> Result<PathBuf, String> {
         ));
     }
     Ok(dest)
+}
+
+/// Copy `src` to a temp file beside `dest`, flush it, then rename it onto
+/// `dest`. A copy cut short never has `dest`'s name, and no temp file is
+/// left when it fails.
+fn copy_onto(src: &Path, dest: &Path) -> io::Result<()> {
+    let dir = dest.parent().unwrap_or_else(|| Path::new("."));
+    let name = dest.file_name().unwrap_or_default().to_string_lossy();
+    let (mut out, tmp) = (0..100)
+        .find_map(|n| {
+            let tmp = match n {
+                0 => dir.join(format!("{name}.kiln-move.tmp")),
+                _ => dir.join(format!("{name}.kiln-move ({n}).tmp")),
+            };
+            match OpenOptions::new().write(true).create_new(true).open(&tmp) {
+                Ok(f) => Some(Ok((f, tmp))),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => None,
+                Err(e) => Some(Err(e)),
+            }
+        })
+        .unwrap_or_else(|| Err(io::Error::other("there's no free name in that folder")))?;
+    let copied = (|| {
+        io::copy(&mut File::open(src)?, &mut out)?;
+        out.sync_all()?;
+        // Close before renaming: Windows can't move an open file.
+        drop(out);
+        std::fs::rename(&tmp, dest)
+    })();
+    if copied.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    copied
 }
 
 fn same_dir(a: &Path, b: &Path) -> bool {
@@ -252,6 +303,61 @@ mod tests {
         let e = move_to(&src, &dir.path().join("nowhere")).unwrap_err();
         assert!(e.ends_with("isn't a folder."));
         assert!(src.exists());
+    }
+
+    /// The names in `dir`, sorted.
+    fn names(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn moving_across_drives_copies_then_removes_the_original() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let src = a.path().join("clip.mp4");
+        std::fs::write(&src, b"frames").unwrap();
+        std::fs::write(b.path().join("clip.mp4"), b"theirs").unwrap();
+        let dest = move_with(&src, b.path(), true).unwrap();
+        assert_eq!(dest, b.path().join("clip (1).mp4"));
+        assert_eq!(std::fs::read(&dest).unwrap(), b"frames");
+        assert!(!src.exists());
+        // No temp file is left, and theirs is untouched.
+        assert_eq!(names(b.path()), ["clip (1).mp4", "clip.mp4"]);
+        assert_eq!(std::fs::read(b.path().join("clip.mp4")).unwrap(), b"theirs");
+    }
+
+    #[test]
+    fn a_failed_copy_leaves_no_file_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("clip.mp4");
+        std::fs::write(&dest, b"").unwrap();
+        assert!(copy_onto(&dir.path().join("gone.mp4"), &dest).is_err());
+        assert_eq!(names(dir.path()), ["clip.mp4"]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_file_in_use_isnt_copied_instead() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let src = a.path().join("clip.mp4");
+        std::fs::write(&src, b"frames").unwrap();
+        // Another app has it open: others may read it, not move it.
+        let held = OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&src)
+            .unwrap();
+        let e = move_to(&src, b.path()).unwrap_err();
+        assert!(e.starts_with("clip.mp4 couldn't be moved"), "{e}");
+        drop(held);
+        // Nothing was copied, and the original is where it was.
+        assert!(names(b.path()).is_empty());
+        assert_eq!(std::fs::read(&src).unwrap(), b"frames");
     }
 
     #[test]
