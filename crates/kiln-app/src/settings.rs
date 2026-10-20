@@ -441,6 +441,97 @@ pub fn default_path() -> Option<PathBuf> {
     Some(PathBuf::from(appdata).join("Kiln").join("settings.toml"))
 }
 
+/// Where settings are kept, and whether the file there could be read.
+///
+/// A file that couldn't be read is never written over by a pick being
+/// counted. An explicit change in Settings still saves, but copies the
+/// file aside first, so a hand edit with a mistake in it is never lost.
+#[derive(Debug)]
+pub struct Store {
+    path: Option<PathBuf>,
+    unreadable: bool,
+}
+
+impl Store {
+    pub fn new(path: Option<PathBuf>) -> Store {
+        Store {
+            path,
+            unreadable: false,
+        }
+    }
+
+    /// Read the settings, remembering whether the file was unreadable.
+    pub fn load(&mut self) -> (Settings, Option<SettingsError>) {
+        let Some(path) = &self.path else {
+            return (Settings::default(), None);
+        };
+        let (s, err) = Settings::load(path);
+        self.unreadable = err.is_some();
+        (s, err)
+    }
+
+    /// Save after an explicit change in Settings. The error is the line
+    /// for the status bar.
+    pub fn save(&mut self, s: &Settings) -> Result<(), String> {
+        let Some(path) = &self.path else {
+            return Err("Settings can't be saved because APPDATA isn't set.".to_owned());
+        };
+        if self.unreadable {
+            match keep_unreadable(path) {
+                Ok(_) => {}
+                // Gone since it was read: there's nothing to keep.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(format!("Settings couldn't be saved: {e}")),
+            }
+            self.unreadable = false;
+        }
+        s.save(path)
+            .map_err(|e| format!("Settings couldn't be saved: {e}"))
+    }
+
+    /// Save after a pick was counted. While the file on disk couldn't be
+    /// read, picks are counted in memory only.
+    pub fn save_picks(&mut self, s: &Settings) -> Result<(), String> {
+        if self.unreadable {
+            return Ok(());
+        }
+        self.save(s)
+    }
+}
+
+/// Copy an unreadable settings file to `settings.toml.bad` beside it, or
+/// `settings.toml.bad (1)`, `settings.toml.bad (2)` and so on when that's
+/// taken. It never overwrites or deletes anything.
+pub fn keep_unreadable(path: &Path) -> std::io::Result<PathBuf> {
+    use std::io::Write;
+    let bytes = std::fs::read(path)?;
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    for n in 0..1000 {
+        let bad = if n == 0 {
+            path.with_file_name(format!("{name}.bad"))
+        } else {
+            path.with_file_name(format!("{name}.bad ({n})"))
+        };
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&bad)
+        {
+            Ok(mut f) => {
+                f.write_all(&bytes)?;
+                f.sync_all()?;
+                return Ok(bad);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "every settings.toml.bad name is taken",
+    ))
+}
+
 /// Optional paths where an empty string also means unset.
 mod opt_path {
     use std::path::PathBuf;
@@ -590,6 +681,59 @@ mod tests {
         let (s, e) = Settings::load(&path);
         assert_eq!(s, Settings::default());
         assert!(e.unwrap().0.contains("couldn't be read"));
+    }
+
+    #[test]
+    fn counting_a_pick_never_writes_over_an_unreadable_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        let bad = b"theme = 'drak'\noutput_folder = 'D:\\Mine'\n";
+        std::fs::write(&path, bad).unwrap();
+        let mut store = Store::new(Some(path.clone()));
+        let (mut s, e) = store.load();
+        assert!(e.is_some());
+        s.habits.record("heic", "jpg");
+        assert_eq!(store.save_picks(&s), Ok(()));
+        assert_eq!(std::fs::read(&path).unwrap(), bad);
+        assert!(!dir.path().join("settings.toml.bad").exists());
+        assert!(!path.with_extension("toml.tmp").exists());
+    }
+
+    #[test]
+    fn an_explicit_save_copies_an_unreadable_file_aside_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        let bad = b"theme = 'drak'\n";
+        std::fs::write(&path, bad).unwrap();
+        // Copies from an earlier time are kept too.
+        let first = dir.path().join("settings.toml.bad");
+        std::fs::write(&first, b"older").unwrap();
+        let mut store = Store::new(Some(path.clone()));
+        let (mut s, _) = store.load();
+        s.theme = ThemeChoice::Dark;
+        store.save(&s).unwrap();
+        assert_eq!(std::fs::read(&first).unwrap(), b"older");
+        let kept = dir.path().join("settings.toml.bad (1)");
+        assert_eq!(std::fs::read(&kept).unwrap(), bad);
+        assert_eq!(Settings::load(&path), (s.clone(), None));
+        // Readable now: picks save, and nothing more is copied.
+        s.habits.record("heic", "jpg");
+        store.save_picks(&s).unwrap();
+        assert_eq!(Settings::load(&path), (s, None));
+        assert!(!dir.path().join("settings.toml.bad (2)").exists());
+    }
+
+    #[test]
+    fn a_readable_file_saves_picks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        let mut store = Store::new(Some(path.clone()));
+        let (mut s, e) = store.load();
+        assert!(e.is_none());
+        s.habits.record("heic", "jpg");
+        store.save_picks(&s).unwrap();
+        assert_eq!(Settings::load(&path), (s, None));
+        assert!(Store::new(None).save(&Settings::default()).is_err());
     }
 
     #[test]

@@ -323,7 +323,8 @@ struct App {
     next_batch: u64,
     palette: &'static Palette,
     settings: Settings,
-    settings_path: Option<PathBuf>,
+    /// Where settings.toml is, and whether it could be read.
+    settings_store: settings::Store,
     system_light: bool,
     settings_ui: Option<SettingsUi>,
     settings_hover: bool,
@@ -1079,7 +1080,10 @@ impl App {
         for (from, to) in &picks {
             self.settings.habits.record(from, to);
         }
-        self.save_settings();
+        // Not over a settings.toml that couldn't be read: see Store.
+        if let Err(e) = self.settings_store.save_picks(&self.settings) {
+            self.status = e;
+        }
         self.habits_changed();
     }
 
@@ -1264,10 +1268,7 @@ impl App {
 
     /// Read settings.toml. Called once the window is on screen.
     fn load_settings(&mut self) {
-        let Some(path) = self.settings_path.clone() else {
-            return;
-        };
-        let (s, err) = Settings::load(&path);
+        let (s, err) = self.settings_store.load();
         self.settings = s;
         if let Some(e) = err {
             self.status = format!("{e}. Using the defaults.");
@@ -1276,13 +1277,10 @@ impl App {
         self.apply_theme();
     }
 
+    /// Save after an explicit change in Settings.
     fn save_settings(&mut self) {
-        let Some(path) = &self.settings_path else {
-            self.status = "Settings can't be saved because APPDATA isn't set.".to_owned();
-            return;
-        };
-        if let Err(e) = self.settings.save(path) {
-            self.status = format!("Settings couldn't be saved: {e}");
+        if let Err(e) = self.settings_store.save(&self.settings) {
+            self.status = e;
         }
     }
 
@@ -2153,7 +2151,7 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         next_batch: 1,
         palette,
         settings: Settings::default(),
-        settings_path: settings::default_path(),
+        settings_store: settings::Store::new(settings::default_path()),
         system_light,
         settings_ui: None,
         settings_hover: false,
