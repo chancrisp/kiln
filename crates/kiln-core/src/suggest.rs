@@ -98,6 +98,14 @@ impl Habits {
         }
     }
 
+    /// Every source type's favourite, as `favourite` gives it.
+    pub fn favourites(&self) -> BTreeMap<&str, &str> {
+        self.0
+            .keys()
+            .filter_map(|from| Some((from.as_str(), self.favourite(from)?)))
+            .collect()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -667,6 +675,34 @@ mod tests {
         assert!(!habits.is_empty());
         habits.clear();
         assert!(habits.is_empty());
+    }
+
+    #[test]
+    fn favourites_lists_each_source_that_has_one() {
+        let mut habits = Habits::default();
+        for _ in 0..3 {
+            habits.record("heic", "jpg");
+        }
+        habits.record("png", "jpg");
+        for _ in 0..3 {
+            habits.record("mov", "mp4");
+            habits.record("mov", "mkv");
+        }
+        let fav: Vec<(&str, &str)> = habits.favourites().into_iter().collect();
+        assert_eq!(fav, [("heic", "jpg")]);
+        // One more pick that doesn't change a winner leaves them equal.
+        let before: Vec<(String, String)> = owned(&habits);
+        habits.record("png", "webp");
+        assert_eq!(owned(&habits), before);
+        habits.record("mov", "mp4");
+        assert_ne!(owned(&habits), before);
+    }
+
+    fn owned(h: &Habits) -> Vec<(String, String)> {
+        h.favourites()
+            .into_iter()
+            .map(|(a, b)| (a.to_owned(), b.to_owned()))
+            .collect()
     }
 
     #[test]

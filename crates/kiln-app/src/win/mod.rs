@@ -8,7 +8,7 @@ mod system;
 mod text;
 mod updates;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -31,8 +31,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use kiln_core::{
-    suggest, Facts, Format, JobEvent, JobId, JobKind, Kiln, Knob, MediaInfo, Options, Progress,
-    Quality, Runner, Suggestion, Tool,
+    suggest, Facts, Format, Habits, JobEvent, JobId, JobKind, Kiln, Knob, MediaInfo, Offered,
+    Options, Progress, Quality, Runner, Suggestion, Tool,
 };
 
 use crate::actions::{self, FileAction};
@@ -534,11 +534,10 @@ impl App {
         }
     }
 
-    /// What Kiln puts forward for one file: its conversion, or else its
-    /// tool.
-    fn suggestion_for(&self, path: &Path, facts: &Facts) -> Option<Suggestion> {
-        let offered = self.kiln.offered(&[path], &self.settings.options());
-        let s = suggest(std::slice::from_ref(facts), &offered, &self.settings.habits);
+    /// What Kiln puts forward for one file, given what it offers for it:
+    /// its conversion, or else its tool.
+    fn suggestion_for(&self, facts: &Facts, offered: &Offered) -> Option<Suggestion> {
+        let s = suggest(std::slice::from_ref(facts), offered, &self.settings.habits);
         s.convert.or(s.tool)
     }
 
@@ -547,7 +546,10 @@ impl App {
         if !self.settings.suggestions {
             return;
         }
-        let suggestion = self.suggestion_for(&found.path, &found.facts);
+        let offered = self
+            .kiln
+            .offered(&[found.path.as_path()], &self.settings.options());
+        let suggestion = self.suggestion_for(&found.facts, &offered);
         if self.files.set_facts(&found.path, found.facts, suggestion) {
             self.animate();
         }
@@ -588,14 +590,23 @@ impl App {
         }
     }
 
-    /// Habits changed: every row's suggestion follows from its facts,
-    /// with no new fade.
+    /// Habits or engines changed: every row's suggestion follows from its
+    /// facts, with no new fade. Engines are looked for once, and what Kiln
+    /// offers is worked out once per type.
     fn habits_changed(&mut self) {
+        let available = self.kiln.availability(&self.settings.options());
+        let mut offers: HashMap<String, Offered> = HashMap::new();
         let fresh: Vec<Option<Option<Suggestion>>> = self
             .files
             .entries()
             .iter()
-            .map(|e| e.facts.as_ref().map(|f| self.suggestion_for(&e.path, f)))
+            .map(|e| {
+                let f = e.facts.as_ref()?;
+                let offered = offers
+                    .entry(f.ext.clone())
+                    .or_insert_with(|| self.kiln.offered_with(&[e.path.as_path()], &available));
+                Some(self.suggestion_for(f, offered))
+            })
             .collect();
         for (e, s) in self.files.entries_mut().iter_mut().zip(fresh) {
             if let Some(s) = s {
@@ -1077,14 +1088,20 @@ impl App {
         if picks.is_empty() {
             return;
         }
+        let before = favourites(&self.settings.habits);
         for (from, to) in &picks {
             self.settings.habits.record(from, to);
         }
+        let changed = favourites(&self.settings.habits) != before;
         // Not over a settings.toml that couldn't be read: see Store.
         if let Err(e) = self.settings_store.save_picks(&self.settings) {
             self.status = e;
         }
-        self.habits_changed();
+        // Suggestions follow favourites only: no new favourite, nothing to
+        // work out again.
+        if changed {
+            self.habits_changed();
+        }
     }
 
     fn on_job(&mut self, ev: JobEvent) {
@@ -1996,6 +2013,15 @@ fn step_delta(r: &layout::Rect, x: f32) -> isize {
     } else {
         1
     }
+}
+
+/// Each source type's favourite target, to tell whether a pick changed
+/// any.
+fn favourites(h: &Habits) -> BTreeMap<String, String> {
+    h.favourites()
+        .into_iter()
+        .map(|(from, to)| (from.to_owned(), to.to_owned()))
+        .collect()
 }
 
 /// The picks a conversion of `paths` counts: one (source type, target)

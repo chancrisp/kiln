@@ -21,6 +21,17 @@ use crate::raster::ImageConverter;
 use crate::registry::{Format, Kind, Registry};
 use crate::suggest::Offered;
 
+/// Which backends' engines are installed, from `Kiln::availability`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Availability(HashMap<&'static str, bool>);
+
+impl Availability {
+    /// Whether `backend`'s engine was found. Unknown backends weren't.
+    pub fn has(&self, backend: &str) -> bool {
+        self.0.get(backend).copied().unwrap_or(false)
+    }
+}
+
 /// The registry plus the backends its routes name.
 pub struct Kiln {
     registry: Registry,
@@ -78,20 +89,30 @@ impl Kiln {
     /// reach, in the first file's order, through routes whose engines are
     /// all available. Tools need FFmpeg when any input is audio or video.
     pub fn offered(&self, paths: &[&Path], opts: &Options) -> Offered {
+        self.offered_with(paths, &self.availability(opts))
+    }
+
+    /// Which engines are installed now. Finding them searches PATH and
+    /// the usual install folders, so work it out once and pass it to
+    /// `offered_with` for many files.
+    pub fn availability(&self, opts: &Options) -> Availability {
+        Availability(
+            self.converters
+                .keys()
+                .map(|&b| (b, self.available(opts, b)))
+                .collect(),
+        )
+    }
+
+    /// `offered`, with engine availability already worked out.
+    pub fn offered_with(&self, paths: &[&Path], available: &Availability) -> Offered {
         let Some(first) = paths.first() else {
             return Offered::default();
         };
-        let available: HashMap<&str, bool> = self
-            .converters
-            .keys()
-            .map(|&b| (b, self.available(opts, b)))
-            .collect();
         let routable = |from: &Format, to: &Format| {
-            self.registry.route(from, to).is_some_and(|steps| {
-                steps
-                    .iter()
-                    .all(|s| available.get(s.backend.as_str()).copied().unwrap_or(false))
-            })
+            self.registry
+                .route(from, to)
+                .is_some_and(|steps| steps.iter().all(|s| available.has(&s.backend)))
         };
         let froms: Option<Vec<&Format>> =
             paths.iter().map(|p| self.registry.format_of(p)).collect();
@@ -113,7 +134,7 @@ impl Kiln {
         let media = froms
             .iter()
             .any(|f| matches!(f.kind, Kind::Audio | Kind::Video));
-        let tools = if media && !available["ffmpeg"] {
+        let tools = if media && !available.has("ffmpeg") {
             vec![]
         } else {
             self.tools_for(paths)

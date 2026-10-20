@@ -32,7 +32,7 @@ pub use converter::{CancelToken, Context, Converter, Engines, Options, Progress,
 pub use error::{Error, Result};
 pub use facts::{inspect, Facts, Look, PdfFacts, Picture};
 pub use ffmpeg::FfmpegConverter;
-pub use job::Kiln;
+pub use job::{Availability, Kiln};
 pub use libreoffice::{find_installed as find_libreoffice, LibreOfficeConverter};
 pub use pandoc::PandocConverter;
 pub use pdf::PdfConverter;

@@ -61,3 +61,22 @@ fn compress_is_offered_only_where_kiln_can_compress() {
     let o = k.offered(&[mp4.as_path()], &Options::default());
     assert!(o.tools.contains(&Tool::Compress));
 }
+
+#[test]
+fn availability_worked_out_once_gives_the_same_offer() {
+    let k = Kiln::new();
+    for opts in [Options::default(), no_ffmpeg()] {
+        let a = k.availability(&opts);
+        assert!(a.has("image") && a.has("pdf"));
+        assert!(!a.has("no such engine"));
+        for name in ["sample.mov", "rgb_gradient.png", "sample.pdf", "sample.mp3"] {
+            let f = fixture(name);
+            assert_eq!(
+                k.offered_with(&[f.as_path()], &a),
+                k.offered(&[f.as_path()], &opts),
+                "{name}"
+            );
+        }
+    }
+    assert!(!k.availability(&no_ffmpeg()).has("ffmpeg"));
+}
