@@ -1,7 +1,7 @@
 //! The list of dropped files. Platform-independent so it can be tested
 //! anywhere.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -671,6 +671,17 @@ impl FileList {
         self.focus_visible = false;
     }
 
+    /// Rows were just added: the last one is selected and takes the
+    /// focus, whose ring shows when a key added them (Ctrl+O, Ctrl+V) and
+    /// hides when the pointer did (a drop, the Add files button).
+    pub fn added(&mut self, keys: bool) {
+        let Some(last) = self.entries.len().checked_sub(1) else {
+            return;
+        };
+        self.click(last);
+        self.focus_visible = keys;
+    }
+
     /// A plain click: only row `i` is selected.
     pub fn click(&mut self, i: usize) {
         if i >= self.entries.len() {
@@ -837,10 +848,19 @@ impl FileList {
         self.held_files(|_| true).len()
     }
 
+    /// How many held result files Export all would take now: every one
+    /// but those `saving` names, which an export is already moving.
+    pub fn held_count_except(&self, saving: &HashSet<PathBuf>) -> usize {
+        self.held_files(|_| true)
+            .iter()
+            .filter(|f| !saving.contains(*f))
+            .count()
+    }
+
     /// Every held result file of the rows `rows` picks, once each, in list
     /// order.
     pub fn held_files(&self, rows: impl Fn(usize) -> bool) -> Vec<PathBuf> {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         let mut files: Vec<PathBuf> = Vec::new();
         for (i, e) in self.entries.iter().enumerate() {
             let Some(held) = e.held().filter(|_| rows(i)) else {
@@ -1276,6 +1296,25 @@ mod tests {
         list.keyboard_used();
         list.clear_selection();
         assert_eq!(list.visible_focus(), Some(1));
+    }
+
+    #[test]
+    fn rows_added_by_a_key_show_the_focus_ring() {
+        // Ctrl+O or Ctrl+V: the last new row takes the focus, ring and all.
+        let mut list = list_of(3);
+        list.pointer_used();
+        list.click(0);
+        list.added(true);
+        assert_eq!(list.selection(), [2]);
+        assert_eq!(list.visible_focus(), Some(2));
+        // A drop or the Add files button: the focus moves, the ring hides.
+        list.added(false);
+        assert_eq!(list.focus(), Some(2));
+        assert_eq!(list.visible_focus(), None);
+        // Nothing listed, nothing to focus.
+        let mut empty = FileList::default();
+        empty.added(true);
+        assert_eq!(empty.focus(), None);
     }
 
     #[test]
@@ -1872,6 +1911,13 @@ mod tests {
         );
         assert_eq!(list.held_count(), 4);
         assert_eq!(FileList::default().held_count(), 0);
+        // Export all's count leaves out what an export is moving now.
+        assert_eq!(list.held_count_except(&HashSet::new()), 4);
+        let saving: HashSet<PathBuf> = ["p 1.png", "p 2.png", "p 3.png"]
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+        assert_eq!(list.held_count_except(&saving), 1);
         assert!(FileList::default().held().is_empty());
     }
 

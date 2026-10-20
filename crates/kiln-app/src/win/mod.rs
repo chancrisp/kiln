@@ -324,6 +324,26 @@ struct Exported {
     results: Vec<(PathBuf, Option<PathBuf>)>,
 }
 
+/// Move each of `files` with `move_one`, which says where it went or
+/// `None` where it couldn't be saved. If it panics, the files it hadn't
+/// reported on count as not saved, so every row leaves "Saving…" and keeps
+/// its result; a file it had already moved still counts as moved.
+fn export_each(
+    files: Vec<PathBuf>,
+    mut move_one: impl FnMut(&Path) -> Option<PathBuf>,
+) -> Vec<(PathBuf, Option<PathBuf>)> {
+    let mut results = Vec::with_capacity(files.len());
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        for f in &files {
+            let to = move_one(f);
+            results.push((f.clone(), to));
+        }
+    }));
+    let reported = results.len();
+    results.extend(files[reported..].iter().map(|f| (f.clone(), None)));
+    results
+}
+
 /// An export under way on its own thread.
 struct Export {
     /// The held files it is moving.
@@ -352,9 +372,22 @@ enum Rows {
 enum Then {
     Close,
     Clear,
+    /// A Clear that waited for an export: only the rows listed when its
+    /// prompt was answered go, and rows added since stay.
+    ClearOnly(Vec<PathBuf>),
     Remove(Vec<PathBuf>),
     /// Start a new job on rows, which replaces what they hold.
     Start(Action, Vec<PathBuf>, Option<Quality>),
+}
+
+/// Pin a leave to the rows listed when its prompt chose Export all. A
+/// Clear then covers only those rows, by file: rows added while the export
+/// runs are neither exported nor cleared.
+fn pin(rows: Rows, then: Then, listed: Vec<PathBuf>) -> (Rows, Then) {
+    match then {
+        Then::Clear => (Rows::Files(listed.clone()), Then::ClearOnly(listed)),
+        then => (rows, then),
+    }
 }
 
 /// A leave whose prompt chose Export all, waiting for the export.
@@ -722,10 +755,17 @@ impl App {
         layout::layout(w, h, self.files.len())
     }
 
-    /// The footer's Export all button, while results are held.
+    /// The footer's Export all button, while results are held that no
+    /// export is moving yet.
     fn export_button(&self) -> Option<layout::Rect> {
         let clear = self.layout().clear_button?;
-        (self.files.held_count() > 0).then(|| layout::export_all_button(&clear))
+        (self.export_all_count() > 0).then(|| layout::export_all_button(&clear))
+    }
+
+    /// How many held results Export all would take now: those an export
+    /// is already moving aren't counted, and Export all skips them.
+    fn export_all_count(&self) -> usize {
+        self.files.held_count_except(&self.saving_files())
     }
 
     fn invalidate(&self) {
@@ -804,7 +844,9 @@ impl App {
         }
     }
 
-    fn add(&mut self, paths: Vec<PathBuf>) {
+    /// Add `paths` to the list. `keys` says a key asked for them (Ctrl+O,
+    /// Ctrl+V), which shows the focus ring on the new focus row.
+    fn add(&mut self, paths: Vec<PathBuf>, keys: bool) {
         let r = self.files.add(&self.kiln, paths);
         let now = Instant::now();
         while self.rows.len() < self.files.len() {
@@ -842,7 +884,7 @@ impl App {
                 .path
                 .parent()
                 .map(Path::to_path_buf);
-            self.files.click(self.files.len() - 1);
+            self.files.added(keys);
             self.scroll_to_selection();
         }
         self.animate();
@@ -887,26 +929,27 @@ impl App {
     }
 
     /// Ask for files with the Windows Open dialog, and add them as a drop
-    /// would.
-    fn add_files(&mut self) {
+    /// would. `keys`: a key asked, not the pointer.
+    fn add_files(&mut self, keys: bool) {
         let picked = system::pick_files(
             self.hwnd,
             ways_in::ADD_FILES_TITLE,
             self.last_add.as_deref(),
         );
         if !picked.is_empty() {
-            self.add(picked);
+            self.add(picked, keys);
         }
     }
 
-    /// Add the files copied in File Explorer, as a drop would.
-    fn paste(&mut self) {
+    /// Add the files copied in File Explorer, as a drop would. `keys`: a
+    /// key asked, not the pointer.
+    fn paste(&mut self, keys: bool) {
         let files = system::clipboard_files(self.hwnd);
         if files.is_empty() {
             self.alert(ways_in::NOTHING_TO_PASTE.to_owned());
             self.invalidate();
         } else {
-            self.add(files);
+            self.add(files, keys);
         }
     }
 
@@ -920,7 +963,7 @@ impl App {
         let clear = l.clear_button?;
         Some(layout::add_files_button(
             &clear,
-            self.files.held_count() > 0,
+            self.export_all_count() > 0,
         ))
     }
 
@@ -1101,7 +1144,16 @@ impl App {
         };
         match system::ask(self.hwnd, &prompt) {
             PromptButton::Cancel => {}
-            PromptButton::ExportAll => self.export_then(rows, then),
+            PromptButton::ExportAll => {
+                let listed = self
+                    .files
+                    .entries()
+                    .iter()
+                    .map(|e| e.path.clone())
+                    .collect();
+                let (rows, then) = pin(rows, then, listed);
+                self.export_then(rows, then);
+            }
             PromptButton::Discard | PromptButton::Stop(_) => {
                 // Results that finished while the prompt was open go too.
                 let held = self.held_by(&rows);
@@ -1123,8 +1175,13 @@ impl App {
         let Some(dir) = self.pick_export_folder(&held) else {
             return;
         };
-        // Results that finished while the picker was open go too.
+        // Results that finished while the picker was open go too, and
+        // with nothing left to save, the leave goes ahead now.
         let held = self.held_by(&rows);
+        if held.is_empty() {
+            self.proceed(then);
+            return;
+        }
         if let Some(export) = self.export(held, Dest::Into(dir.clone()), true) {
             self.leaving = Some(Leaving {
                 export,
@@ -1146,6 +1203,16 @@ impl App {
                 }
             }
             Then::Clear => self.clear_rows(),
+            Then::ClearOnly(paths) => {
+                let all = self.files.entries().iter().all(|e| paths.contains(&e.path));
+                if all {
+                    self.clear_rows();
+                } else {
+                    for path in &paths {
+                        self.remove_row(path);
+                    }
+                }
+            }
             Then::Remove(paths) => {
                 for path in &paths {
                     self.remove_row(path);
@@ -1402,6 +1469,10 @@ impl App {
     /// reports back with WM_KILN_EXPORTED. `all` is an Export all. Returns
     /// the export's id, or `None` when it was settled on the spot.
     fn export(&mut self, files: Vec<PathBuf>, dest: Dest, all: bool) -> Option<u64> {
+        // Nothing to move: no thread, and no message to wait for.
+        if files.is_empty() {
+            return None;
+        }
         let folder = match &dest {
             Dest::Into(dir) => dir.clone(),
             Dest::As(path) => path.parent().map(Path::to_path_buf).unwrap_or_default(),
@@ -1424,16 +1495,10 @@ impl App {
         // off the UI thread.
         let target = PostTarget(self.hwnd.0 as usize);
         std::thread::spawn(move || {
-            let results = files
-                .into_iter()
-                .map(|f| {
-                    let to = match &dest {
-                        Dest::Into(dir) => kiln_core::export_into(&f, dir),
-                        Dest::As(path) => kiln_core::export_as(&f, path),
-                    };
-                    (f, to.ok())
-                })
-                .collect();
+            let results = export_each(files, |f| match &dest {
+                Dest::Into(dir) => kiln_core::export_into(f, dir).ok(),
+                Dest::As(path) => kiln_core::export_as(f, path).ok(),
+            });
             target.post(
                 WM_KILN_EXPORTED,
                 Exported {
@@ -1896,8 +1961,8 @@ impl App {
         keyboard: bool,
     ) {
         match (item, rows) {
-            (MenuItem::AddFiles, _) => self.add_files(),
-            (MenuItem::Paste, _) => self.paste(),
+            (MenuItem::AddFiles, _) => self.add_files(keyboard),
+            (MenuItem::Paste, _) => self.paste(keyboard),
             (_, []) => {}
             (MenuItem::Wheel(kind), _) => {
                 let paths = self.paths_of(rows);
@@ -3285,7 +3350,7 @@ impl App {
             return;
         }
         if add && self.add_button().is_some_and(|b| b.contains(x, y)) {
-            self.add_files();
+            self.add_files(false);
         }
         if export && self.export_button().is_some_and(|b| b.contains(x, y)) {
             self.export_everything();
@@ -3525,8 +3590,8 @@ impl App {
                 self.open_wheel_for_selection(kind);
             }
             VK_OEM_COMMA if ctrl => self.open_settings(),
-            VK_O if ctrl => self.add_files(),
-            VK_V if ctrl => self.paste(),
+            VK_O if ctrl => self.add_files(true),
+            VK_V if ctrl => self.paste(true),
             // Ctrl+S exports the selected rows, Ctrl+Shift+S everything.
             VK_S if ctrl && shift => self.export_everything(),
             VK_S if ctrl => self.export_rows(&self.files.selection()),
@@ -3586,7 +3651,7 @@ impl App {
                 w.paths = ev.paths.clone();
                 w.hover
             });
-        self.add(ev.paths.clone());
+        self.add(ev.paths.clone(), false);
         match chosen {
             Some(spot) => self.choose(spot),
             None => self.close_wheel(),
@@ -3633,7 +3698,7 @@ impl App {
         let status = self.footer_text();
         let empty_status = self.empty_status();
         let empty = ways_in::empty_lines(&self.settings);
-        let held = self.files.held_count();
+        let held = self.export_all_count();
         let export_all = (held > 0).then(|| model::export_all_label(held));
         let settings_layout = self.settings_ui.as_ref().map(|_| self.settings_layout());
         let update_note = self.update.note();
@@ -3794,7 +3859,8 @@ impl App {
         match (&req.id, &req.verb) {
             (Id::HelpButton, Verb::Invoke) => self.open_help(),
             (Id::SettingsButton, Verb::Invoke) => self.open_settings(),
-            (Id::AddFiles, Verb::Invoke) => self.add_files(),
+            // Like the other UI Automation actions on the list, not a click.
+            (Id::AddFiles, Verb::Invoke) => self.add_files(true),
             (Id::ExportAll, Verb::Invoke) => self.export_everything(),
             (Id::Clear, Verb::Invoke) => self.clear(),
             (Id::Row(p), verb) => {
@@ -3994,7 +4060,7 @@ impl App {
         let wheel_hint = self.wheel_hint();
         let sheet_layout = self.sheet_layout();
         let (sheet_rows, sheet_lines) = self.sheet_texts();
-        let held = self.files.held_count();
+        let held = self.export_all_count();
         let export_all = (held > 0).then(|| model::export_all_label(held));
         let saving = self.saving_rows();
         let status = self.footer_text();
@@ -4484,7 +4550,7 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
     }
 
     if !files.is_empty() {
-        unsafe { (*app).add(files) };
+        unsafe { (*app).add(files, false) };
     }
 
     let mut msg = MSG::default();
@@ -4749,7 +4815,7 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
         WM_COPYDATA => {
             let files = unsafe { handoff::received(lparam) }?;
             if !files.is_empty() {
-                app.add(files);
+                app.add(files, false);
             }
             Some(LRESULT(1))
         }
@@ -5153,6 +5219,58 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn an_export_that_panics_reports_every_file() {
+        let files: Vec<PathBuf> = ["a.jpg", "b.jpg", "c.jpg"]
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+        // a.jpg went out before the panic and still counts as saved; the
+        // rest count as not saved, so no row is left saying "Saving…".
+        let results = export_each(files.clone(), |f| {
+            if f == Path::new("b.jpg") {
+                panic!("export worker test panic");
+            }
+            Some(Path::new("out").join(f))
+        });
+        assert_eq!(
+            results,
+            [
+                (files[0].clone(), Some(PathBuf::from("out/a.jpg"))),
+                (files[1].clone(), None),
+                (files[2].clone(), None),
+            ]
+        );
+        // Without a panic, each file reports as it went.
+        let results = export_each(files.clone(), |f| {
+            (f != Path::new("c.jpg")).then(|| f.into())
+        });
+        assert_eq!(
+            results,
+            [
+                (files[0].clone(), Some(files[0].clone())),
+                (files[1].clone(), Some(files[1].clone())),
+                (files[2].clone(), None),
+            ]
+        );
+        assert!(export_each(vec![], |_| None).is_empty());
+    }
+
+    #[test]
+    fn a_clear_that_exports_first_clears_only_the_rows_it_asked_about() {
+        let listed = vec![PathBuf::from("a.png"), PathBuf::from("b.png")];
+        let (rows, then) = pin(Rows::All, Then::Clear, listed.clone());
+        assert!(matches!(&rows, Rows::Files(f) if *f == listed));
+        assert!(matches!(&then, Then::ClearOnly(f) if *f == listed));
+        // Close and Remove keep their own rows.
+        let (rows, then) = pin(Rows::All, Then::Close, listed.clone());
+        assert!(matches!((rows, then), (Rows::All, Then::Close)));
+        let one = vec![PathBuf::from("a.png")];
+        let (rows, then) = pin(Rows::Files(one.clone()), Then::Remove(one.clone()), listed);
+        assert!(matches!(&rows, Rows::Files(f) if *f == one));
+        assert!(matches!(&then, Then::Remove(f) if *f == one));
+    }
 
     #[test]
     fn only_copying_a_path_or_a_terminal_leaves_results_be() {
