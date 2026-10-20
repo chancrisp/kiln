@@ -280,6 +280,29 @@ impl Registry {
             .map(String::as_str)
     }
 
+    /// Every extension of a format Kiln can convert from, that is one with
+    /// at least one target: its own, and its aliases. Lowercase, no dot,
+    /// sorted, without duplicates. The installer lists these for Open with.
+    pub fn input_extensions(&self) -> Vec<String> {
+        let mut exts: Vec<String> = self
+            .formats
+            .values()
+            .filter(|f| !self.targets(f).is_empty())
+            .flat_map(|f| {
+                let own = std::iter::once(f.ext.clone());
+                let aliases = self
+                    .aliases
+                    .iter()
+                    .filter(move |(_, ext)| **ext == f.ext)
+                    .map(|(alias, _)| alias.clone());
+                own.chain(aliases)
+            })
+            .collect();
+        exts.sort_unstable();
+        exts.dedup();
+        exts
+    }
+
     /// The format of a file, judged by its extension.
     pub fn format_of(&self, path: &Path) -> Option<&Format> {
         self.format(path.extension()?.to_str()?)
@@ -361,6 +384,23 @@ mod tests {
         assert!(r
             .backends()
             .eq(["calibre", "ffmpeg", "image", "libreoffice", "pandoc", "pdf"]));
+    }
+
+    #[test]
+    fn input_extensions_are_what_kiln_converts_from() {
+        let r = Registry::builtin();
+        let exts = r.input_extensions();
+        for e in ["png", "jpg", "jpeg", "tif", "tiff", "mp4", "docx"] {
+            assert!(exts.iter().any(|x| x == e), "{e}");
+        }
+        assert!(
+            exts.windows(2).all(|w| w[0] < w[1]),
+            "sorted, no duplicates"
+        );
+        for e in &exts {
+            let f = r.format(e).unwrap();
+            assert!(!r.targets(f).is_empty(), "{e} has no target");
+        }
     }
 
     #[test]
