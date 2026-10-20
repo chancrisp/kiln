@@ -166,7 +166,7 @@ up, so a 720p clip stays 720p when the cap is 1080p.
   what it is (`1280 × 720 · 25 fps · 1:30`), and estimates the result as you
   change things.
 - **As defaults.** **Settings > Quality** holds one set for video, images,
-  audio and PDF pages. A plain click in the wheel uses them.
+  sound quality and page sharpness (DPI). A plain click in the wheel uses them.
 - **From the command line.** `--preset`, `--size`, `--fps`, `--audio-kbps`,
   `--dpi` and `--quality` (JPG, 1 to 100).
 
