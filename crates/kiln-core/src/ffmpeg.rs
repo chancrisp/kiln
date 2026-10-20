@@ -464,14 +464,53 @@ pub(crate) fn probe_media(
     Ok(info)
 }
 
-/// The pixel format of the first video stream, such as "yuva420p".
-pub(crate) fn probe_pix_fmt(
+/// What FFprobe reports for one video stream of a still image.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct StillStream {
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    /// Such as "yuva420p"; empty when FFprobe gives none.
+    pub pix_fmt: String,
+}
+
+/// Size and pixel format of every video stream, in one FFprobe run.
+pub(crate) fn probe_still(
     opts: &Options,
     input: &Path,
     ctx: &mut Context<'_>,
-) -> Result<Option<String>> {
-    let lines = probe_lines(opts, ctx, input, Some("v:0"), "stream=pix_fmt")?;
-    Ok(lines.into_iter().find(|l| !l.is_empty()))
+) -> Result<Vec<StillStream>> {
+    let mut cmd = Command::new(process::sibling(opts.engines.ffmpeg.as_deref(), "ffprobe"));
+    cmd.args(["-v", "error", "-protocol_whitelist", "file"])
+        .args(["-select_streams", "v"])
+        .args(["-show_entries", "stream=width,height,pix_fmt"])
+        .args(["-of", "compact=p=0"])
+        .arg(file_url(input));
+    let mut streams = vec![];
+    process::run("FFprobe", cmd, ctx.cancel, |l| {
+        if let Some(s) = still_stream(l) {
+            streams.push(s);
+        }
+    })?;
+    Ok(streams)
+}
+
+/// One line of `probe_still`'s output, such as
+/// "width=64|height=48|pix_fmt=yuv420p".
+fn still_stream(line: &str) -> Option<StillStream> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    let mut s = StillStream::default();
+    for pair in line.split('|') {
+        match pair.split_once('=') {
+            Some(("width", v)) => s.width = v.parse().ok(),
+            Some(("height", v)) => s.height = v.parse().ok(),
+            Some(("pix_fmt", v)) => s.pix_fmt = v.to_owned(),
+            _ => {}
+        }
+    }
+    Some(s)
 }
 
 /// Whether the file has an audio stream.
@@ -497,6 +536,27 @@ pub(crate) fn probe_size(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn still_streams_are_read_by_key() {
+        assert_eq!(
+            still_stream("width=64|height=48|pix_fmt=yuva420p"),
+            Some(StillStream {
+                width: Some(64),
+                height: Some(48),
+                pix_fmt: "yuva420p".to_owned(),
+            })
+        );
+        assert_eq!(
+            still_stream("pix_fmt=gray|width=N/A"),
+            Some(StillStream {
+                width: None,
+                height: None,
+                pix_fmt: "gray".to_owned(),
+            })
+        );
+        assert_eq!(still_stream("  "), None);
+    }
 
     #[test]
     fn mpeg2_gets_an_allowed_frame_rate() {

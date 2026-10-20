@@ -11,7 +11,10 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use image::{Rgb, RgbImage};
-use kiln_core::{inspect, Bars, CancelToken, Facts, Kiln, Kind, Look, Options, PdfFacts};
+use kiln_core::{
+    inspect, suggest, Bars, CancelToken, Facts, Habits, Kiln, Kind, Look, Options, PdfFacts,
+    Suggested,
+};
 use support::fixture;
 
 fn f(name: &str) -> Facts {
@@ -372,4 +375,66 @@ fn real_photos_and_screenshots_are_told_apart() {
         root.display()
     );
     assert!(wrong.is_empty(), "{checked} checked:\n{}", wrong.join("\n"));
+}
+
+/// A 64 x 48 AVIF made by FFmpeg in `dir`: half-transparent red, with its
+/// alpha as a second stream as FFmpeg writes it, or opaque red. `None`
+/// when FFmpeg is missing or can't encode AVIF here.
+fn made_avif(dir: &Path, transparent: bool) -> Option<PathBuf> {
+    let path = dir.join(if transparent {
+        "alpha.avif"
+    } else {
+        "opaque.avif"
+    });
+    let mut cmd = std::process::Command::new("ffmpeg");
+    cmd.args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi"]);
+    if transparent {
+        cmd.args(["-i", "color=c=red@0.5:s=64x48,format=yuva420p"])
+            .args(["-filter_complex", "[0:v]split[c][a];[a]alphaextract[al]"])
+            .args(["-map", "[c]", "-map", "[al]"]);
+    } else {
+        cmd.args(["-i", "color=c=red:s=64x48"]);
+    }
+    cmd.args([
+        "-frames:v",
+        "1",
+        "-c:v",
+        "libaom-av1",
+        "-still-picture",
+        "1",
+    ])
+    .arg(&path);
+    let made = cmd.output().is_ok_and(|o| o.status.success()) && path.exists();
+    if !made {
+        eprintln!("skipped: FFmpeg is missing or can't encode AVIF with libaom-av1");
+    }
+    made.then_some(path)
+}
+
+#[test]
+fn transparency_in_avif_is_seen() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(path) = made_avif(dir.path(), true) else {
+        return;
+    };
+    let facts = inspect_at(&path);
+    assert!(facts.picture.as_ref().unwrap().alpha);
+    let kiln = Kiln::new();
+    let offered = kiln.offered(&[path.as_path()], &Options::default());
+    let s = suggest(&[facts], &offered, &Habits::default());
+    assert_ne!(
+        s.convert.map(|c| c.action),
+        Some(Suggested::Convert("jpg".to_owned()))
+    );
+}
+
+#[test]
+fn an_opaque_avif_has_no_alpha() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(path) = made_avif(dir.path(), false) else {
+        return;
+    };
+    let pic = inspect_at(&path).picture.unwrap();
+    assert!(!pic.alpha);
+    assert_eq!((pic.width, pic.height), (64, 48));
 }

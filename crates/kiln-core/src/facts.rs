@@ -20,6 +20,7 @@ use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{AnimationDecoder, DynamicImage, ExtendedColorType, ImageEncoder, RgbaImage};
 
 use crate::converter::{CancelToken, Context, Options};
+use crate::ffmpeg::StillStream;
 use crate::job::Kiln;
 use crate::quality::{self, MediaInfo, Preset, Quality};
 use crate::raster;
@@ -196,11 +197,13 @@ fn image_facts(path: &Path, opts: &Options, cancel: &CancelToken, facts: &mut Fa
     } else if raster::RAW.contains(&ext) {
         facts.picture = raster::wic::size(path).ok().map(photo);
     } else if matches!(ext, "heic" | "avif" | "jxl") {
-        facts.picture = probe(path, opts, cancel)
-            .and_then(|m| Some((m.width?, m.height?)))
-            .map(photo);
+        let streams = still_streams(path, opts, cancel);
+        let first = streams.first();
+        facts.picture = first.and_then(|s| Some((s.width?, s.height?))).map(photo);
         if let Some(p) = facts.picture.as_mut().filter(|_| ext != "heic") {
-            p.alpha = pix_fmt(path, opts, cancel).is_some_and(|f| alpha_format(&f));
+            // FFmpeg gives an AVIF's alpha as a second video stream.
+            p.alpha = first.is_some_and(|s| alpha_format(&s.pix_fmt))
+                || (ext == "avif" && streams.len() > 1);
         }
     } else if raster::reads(ext) || ext == "apng" {
         raster_facts(path, ext, opts, cancel, facts);
@@ -260,10 +263,12 @@ fn probe(path: &Path, opts: &Options, cancel: &CancelToken) -> Option<MediaInfo>
     (info.duration.is_some() || info.width.is_some()).then_some(info)
 }
 
-/// FFprobe's pixel format for the first video stream, within `LIMIT`.
-fn pix_fmt(path: &Path, opts: &Options, cancel: &CancelToken) -> Option<String> {
+/// Size and pixel format of every video stream of a still image, from one
+/// FFprobe run within `LIMIT`. Empty when FFprobe is missing, can't read
+/// the file or is cut off.
+fn still_streams(path: &Path, opts: &Options, cancel: &CancelToken) -> Vec<StillStream> {
     if cancel.is_cancelled() {
-        return None;
+        return vec![];
     }
     let deadline = Deadline::new(cancel);
     let mut ctx = Context {
@@ -271,9 +276,7 @@ fn pix_fmt(path: &Path, opts: &Options, cancel: &CancelToken) -> Option<String> 
         cancel: &deadline.token,
     };
     let _low = crate::process::low_priority();
-    crate::ffmpeg::probe_pix_fmt(opts, path, &mut ctx)
-        .ok()
-        .flatten()
+    crate::ffmpeg::probe_still(opts, path, &mut ctx).unwrap_or_default()
 }
 
 /// Whether an FFmpeg pixel format carries alpha.
