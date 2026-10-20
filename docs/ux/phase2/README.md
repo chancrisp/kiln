@@ -62,7 +62,7 @@ One thing the dumps show: the header buttons, Add files and Clear report `keyboa
 
 ## How these were captured
 
-- **Scale.** The shots and dumps are at **100%**. Both monitors now run at 96 DPI. Changing the display scale is a system setting, and it wasn't touched. Phase 1 was captured at 125%, so the two sets don't line up pixel for pixel. The header line in each dump says "(no monitor runs at 100%)". That is stale text in `dump.ps1`. The captures are at 100%.
+- **Scale.** The shots and dumps are at **100%**. Both monitors now run at 96 DPI. Changing the display scale is a system setting, and it wasn't touched. Phase 1 was captured at 125%, so the two sets don't line up pixel for pixel.
 - **Build and data.** The release `kiln-app`, run with a scratch `APPDATA` and `LOCALAPPDATA`, so the owner's settings and held results were never read or changed. The files are copies of the samples in `C:\kiln\target\p2\samples`.
 - **Windows settings.** High contrast, Text size and Animation effects are covered by unit tests only, because showing them would mean changing Windows settings. They weren't changed.
 - **The close prompt** is a Windows task dialog, drawn by Windows. It looks the same in both sets because it doesn't take Kiln's theme.

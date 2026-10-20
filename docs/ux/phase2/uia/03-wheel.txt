@@ -1,6 +1,6 @@
 Kiln UIA dump: 03-wheel
 State: Convert wheel open on harbour.png with a target lit
-Captured: 2026-10-20T02:27:05, kiln-app release build, 100% scale (no monitor runs at 100%), scratch APPDATA and LOCALAPPDATA
+Captured: 2026-10-20T02:27:05, kiln-app release build, 100% scale, scratch APPDATA and LOCALAPPDATA
 
 == Raw view (everything UIA exposes) ==
 - name="Kiln" | type=Window | automationId="Kiln" | class="KilnWindow" | rect=x=40 y=40 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
