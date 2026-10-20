@@ -56,6 +56,55 @@ pub const PROGRESS_HEIGHT: f32 = 2.0;
 pub const MIN_WINDOW: (f32, f32) = (480.0, 360.0);
 pub const DEFAULT_WINDOW: (f32, f32) = (720.0, 480.0);
 
+/// The largest Windows Text size (Settings > Accessibility > Text size),
+/// as `UISettings.TextScaleFactor` reports it.
+pub const MAX_TEXT_SCALE: f32 = 2.25;
+
+/// Windows' Text size, kept to the range Windows allows.
+fn text_scale(scale: f32) -> f32 {
+    if scale.is_finite() {
+        scale.clamp(1.0, MAX_TEXT_SCALE)
+    } else {
+        1.0
+    }
+}
+
+/// How many DIPs one layout unit takes at Windows' Text size `scale`, in a
+/// client area `client` DIPs across.
+///
+/// Every size in Kiln is on a 4 DIP grid tuned to the text it holds, so
+/// Text size zooms the whole layout: fonts grow by `scale`, and rows,
+/// controls, padding and the wheel grow with them. Layout functions keep
+/// working in units, and every relation the layout tests pin holds at any
+/// Text size. The window's minimum grows with the zoom (`min_window`);
+/// where the screen is too small for that, the zoom gives way so the
+/// layout still has its smallest window in units, and text is as large as
+/// fits.
+pub fn text_zoom(scale: f32, client: (f32, f32)) -> f32 {
+    let (w, h) = client;
+    let (mw, mh) = MIN_WINDOW;
+    let fit = (w / mw).min(h / mh);
+    text_scale(scale).min(fit).max(1.0)
+}
+
+/// The smallest client area, in DIPs, at Text size `scale`.
+pub fn min_window(scale: f32) -> (f32, f32) {
+    let s = text_scale(scale);
+    (MIN_WINDOW.0 * s, MIN_WINDOW.1 * s)
+}
+
+/// The window's first client size, in DIPs, at Text size `scale`.
+pub fn default_window(scale: f32) -> (f32, f32) {
+    let s = text_scale(scale);
+    (DEFAULT_WINDOW.0 * s, DEFAULT_WINDOW.1 * s)
+}
+
+/// Physical pixels per layout unit, at a monitor's `dpi` and a zoom.
+/// A 12 unit caption is `12.0 * px_per_unit(dpi, zoom)` pixels tall.
+pub fn px_per_unit(dpi: f32, zoom: f32) -> f32 {
+    dpi / 96.0 * zoom
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Layout {
     pub header: Rect,
@@ -145,20 +194,58 @@ pub fn layout(w: f32, h: f32, rows: usize) -> Layout {
 
 /// Width of the "Show details" link at the right of a failed row.
 pub const LINK_WIDTH: f32 = 88.0;
+/// Height of the link's hit area: WCAG 2.5.8's 24 DIPs, on its own.
+pub const LINK_HIT: f32 = 24.0;
 
 /// The cancel control on a running row, in the row's coordinates.
 pub fn row_cancel(row: &Rect) -> Rect {
     Rect::new(row.right() - 16.0 - 24.0, row.y + 16.0, 24.0, 24.0)
 }
 
-/// The "Show details" link on a failed row.
+/// Where a click hits the "Show details" or "Export" link: 24 DIPs tall
+/// around the link's text, within the row's own band so it never reaches
+/// the next row.
 pub fn row_link(row: &Rect) -> Rect {
     Rect::new(
         row.right() - 16.0 - LINK_WIDTH,
-        row.y + 28.0,
+        row.y + 26.0,
         LINK_WIDTH,
-        20.0,
+        LINK_HIT,
     )
+}
+
+/// Where the link's text is drawn: on the second line, right-aligned in
+/// its hit area.
+pub fn row_link_text(row: &Rect) -> Rect {
+    let hit = row_link(row);
+    Rect::new(hit.x, row.y + 28.0, hit.w, 20.0)
+}
+
+/// What a click on a row hits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowPart {
+    /// The row itself: it selects.
+    Row,
+    /// A running row's cancel cross.
+    Cancel,
+    /// The row's link, or an exported row's "Saved to" line.
+    Link,
+}
+
+/// The part of `row` under `(x, y)`, a point inside it. `running` says it
+/// has a cancel cross; `link` says it has a link, `saved` a "Saved to"
+/// line that opens its folder. The link's and the cross's areas are
+/// targets of their own, taken out of the row's.
+pub fn row_part(row: &Rect, x: f32, y: f32, running: bool, link: bool, saved: bool) -> RowPart {
+    if running && row_cancel(row).contains(x, y) {
+        RowPart::Cancel
+    } else if (link && row_link(row).contains(x, y))
+        || (!link && saved && row_line(row).contains(x, y))
+    {
+        RowPart::Link
+    } else {
+        RowPart::Row
+    }
 }
 
 /// A row's second line, where a saved row's "Saved to" can be clicked.
@@ -1004,6 +1091,226 @@ mod tests {
         assert_eq!(l.rows[0].y, l.panel.y);
         assert_eq!(l.rows[2].y, l.panel.y + 2.0 * ROW_HEIGHT);
         assert!(l.panel.bottom() <= l.footer.unwrap().y);
+    }
+
+    #[test]
+    fn show_details_has_a_target_of_its_own() {
+        let l = layout(720.0, 480.0, 3);
+        let (r, next) = (l.rows[0], l.rows[1]);
+        let link = row_link(&r);
+        // WCAG 2.5.8: 24 DIPs each way, on its own.
+        assert!(link.h >= 24.0 && link.w >= 24.0, "{link:?}");
+        // Inside its row's band: it never reaches the next row's target.
+        assert!(link.y >= r.y && link.bottom() <= r.bottom());
+        assert!(link.bottom() <= next.y);
+        assert!(apart(&link, &next));
+        // Its text sits inside it, on the second line.
+        let text = row_link_text(&r);
+        assert!(text.y >= link.y && text.bottom() <= link.bottom());
+        assert_eq!(text.y, row_line(&r).y);
+        // Every point of it is the link, not the row; around it is the row.
+        for (x, y) in [
+            (link.x, link.y),
+            (link.right() - 0.5, link.bottom() - 0.5),
+            (link.x + link.w / 2.0, link.y + link.h / 2.0),
+        ] {
+            assert_eq!(row_part(&r, x, y, false, true, false), RowPart::Link);
+        }
+        let mid = link.x + link.w / 2.0;
+        assert_eq!(
+            row_part(&r, mid, link.y - 0.5, false, true, false),
+            RowPart::Row
+        );
+        assert_eq!(
+            row_part(&r, link.x - 0.5, link.y + 4.0, false, true, false),
+            RowPart::Row
+        );
+        // A row without a link is all row there; a running row's cross
+        // is its own too.
+        assert_eq!(
+            row_part(&r, mid, link.y + 4.0, false, false, false),
+            RowPart::Row
+        );
+        let c = row_cancel(&r);
+        assert_eq!(
+            row_part(&r, c.x + 1.0, c.y + 1.0, true, false, false),
+            RowPart::Cancel
+        );
+        // An exported row's "Saved to" line opens its folder.
+        let line = row_line(&r);
+        assert_eq!(
+            row_part(&r, line.x + 1.0, line.y + 1.0, false, false, true),
+            RowPart::Link
+        );
+        assert_eq!(row_at(&l, mid, link.bottom() - 0.5, 0.0), Some(0));
+    }
+
+    #[test]
+    fn text_size_zooms_the_layout() {
+        // Fonts multiply by the factor, in pixels at any display scale.
+        let caption = crate::theme::type_scale::CAPTION;
+        for (dpi, scale, px) in [
+            (96.0, 1.0, 12.0),
+            (96.0, 1.5, 18.0),
+            (96.0, 2.25, 27.0),
+            (120.0, 2.25, 33.75),
+        ] {
+            let zoom = text_zoom(scale, min_window(scale));
+            assert!(
+                (caption * px_per_unit(dpi, zoom) - px).abs() < 1e-3,
+                "{dpi} {scale}"
+            );
+        }
+        let row_px = ROW_HEIGHT * px_per_unit(96.0, text_zoom(2.25, (2000.0, 1500.0)));
+        assert_eq!(row_px, 126.0);
+        // The window's smallest size grows with it, so the layout always
+        // has its smallest window in units.
+        for scale in [1.0, 1.25, 1.5, 2.0, MAX_TEXT_SCALE] {
+            let (w, h) = min_window(scale);
+            assert_eq!(text_zoom(scale, (w, h)), scale);
+            assert_eq!((w / scale, h / scale), MIN_WINDOW);
+            assert_eq!(text_zoom(scale, (w * 2.0, h * 3.0)), scale);
+            assert_eq!(default_window(scale).0, DEFAULT_WINDOW.0 * scale);
+        }
+        // A screen too small for the grown minimum: the zoom gives way,
+        // and the layout still gets its smallest window.
+        for client in [(1366.0, 700.0), (1280.0, 680.0), (800.0, 560.0)] {
+            let zoom = text_zoom(MAX_TEXT_SCALE, client);
+            assert!((1.0..MAX_TEXT_SCALE).contains(&zoom));
+            assert!(client.0 / zoom >= MIN_WINDOW.0 - 1e-3);
+            assert!(client.1 / zoom >= MIN_WINDOW.1 - 1e-3);
+        }
+        // Out-of-range factors, or none, are kept in range.
+        assert_eq!(text_zoom(0.5, (2000.0, 2000.0)), 1.0);
+        assert_eq!(text_zoom(9.0, (5000.0, 5000.0)), MAX_TEXT_SCALE);
+        assert_eq!(text_zoom(f32::NAN, (2000.0, 2000.0)), 1.0);
+    }
+
+    /// Every target in every view of the smallest window at Text size
+    /// `scale`, laid out in units, must stand apart from its neighbours.
+    fn assert_nothing_overlaps(scale: f32) {
+        let client = min_window(scale);
+        let zoom = text_zoom(scale, client);
+        let (w, h) = (client.0 / zoom, client.1 / zoom);
+        assert!(w >= MIN_WINDOW.0 - 1e-3 && h >= MIN_WINDOW.1 - 1e-3);
+        let all_apart = |rects: &[(String, Rect)]| {
+            for (i, (a, ra)) in rects.iter().enumerate() {
+                assert!(ra.x >= 0.0 && ra.right() <= w, "{a} {ra:?} at {scale}");
+                assert!(ra.y >= 0.0 && ra.bottom() <= h, "{a} {ra:?} at {scale}");
+                for (b, rb) in &rects[i + 1..] {
+                    assert!(apart(ra, rb), "{a} overlaps {b} at {scale}");
+                }
+            }
+        };
+
+        // The empty window.
+        let l = layout(w, h, 0);
+        let e = empty_state(&l.panel);
+        all_apart(&[
+            ("icon".into(), l.icon),
+            ("wordmark".into(), l.wordmark),
+            ("help".into(), l.help_button),
+            ("settings".into(), l.settings_button),
+            ("vessel".into(), e.vessel),
+            ("headline".into(), e.headline),
+            ("instruction".into(), e.instruction),
+            ("button".into(), e.button),
+            ("status".into(), e.status),
+            ("keys".into(), e.keys),
+            ("privacy".into(), e.privacy),
+            ("tagline".into(), e.tagline),
+        ]);
+
+        // The list, with every row control and the footer.
+        let l = layout(w, h, 4);
+        let clear = l.clear_button.unwrap();
+        let footer = l.footer.unwrap();
+        let add = add_files_button(&clear, true);
+        let mut rects: Vec<(String, Rect)> = vec![
+            ("help".into(), l.help_button),
+            ("settings".into(), l.settings_button),
+            ("wordmark".into(), l.wordmark),
+            ("clear".into(), clear),
+            ("export all".into(), export_all_button(&clear)),
+            ("add".into(), add),
+            ("status".into(), footer_status(&footer, &add)),
+        ];
+        let visible: Vec<&Rect> = l
+            .rows
+            .iter()
+            .filter(|r| r.bottom() <= l.panel.bottom())
+            .collect();
+        assert!(visible.len() >= 2, "two rows show at {scale}");
+        for (i, r) in visible.into_iter().enumerate() {
+            rects.push((format!("row {i} link"), row_link(r)));
+            assert!(row_link(r).bottom() <= r.bottom() && row_cancel(r).bottom() <= r.bottom());
+        }
+        all_apart(&rects);
+
+        // The dialogs.
+        let d = dialog(w, h);
+        all_apart(&[
+            ("title".into(), d.title),
+            ("body".into(), d.body),
+            ("copy".into(), d.copy),
+            ("close".into(), d.close),
+        ]);
+        let hp = help(w, h);
+        all_apart(&[
+            ("title".into(), hp.title),
+            ("body".into(), hp.body),
+            ("close".into(), hp.close),
+        ]);
+
+        // Settings, every page and shape.
+        for tab in SettingsTab::ALL {
+            for shape in [
+                SettingsShape {
+                    tab,
+                    ..SettingsShape::default()
+                },
+                SettingsShape {
+                    tab,
+                    output_custom: true,
+                    engine_custom: [true, false, true, false],
+                    engine_missing: [false, true, false, true],
+                },
+            ] {
+                let st = settings(w, h, shape);
+                let mut rects: Vec<(String, Rect)> = st
+                    .controls
+                    .iter()
+                    .map(|(c, r)| (format!("{c:?}"), *r))
+                    .collect();
+                rects.push(("update note".into(), st.update_note));
+                all_apart(&rects);
+                for row in &st.rows {
+                    for (c, r) in &st.controls {
+                        assert!(apart(&row.label_rect, r), "{} overlaps {c:?}", row.label);
+                    }
+                }
+            }
+        }
+
+        // The options sheet at its fullest.
+        let sh = sheet(
+            w,
+            h,
+            &[Knob::Preset, Knob::Size, Knob::Fps, Knob::AudioBitrate],
+        );
+        let mut rects: Vec<(String, Rect)> = sh
+            .controls
+            .iter()
+            .map(|(c, r)| (format!("{c:?}"), *r))
+            .collect();
+        rects.push(("result".into(), sh.result));
+        all_apart(&rects);
+    }
+
+    #[test]
+    fn nothing_overlaps_in_the_smallest_window_at_any_text_size() {
+        assert_nothing_overlaps(1.0);
+        assert_nothing_overlaps(MAX_TEXT_SCALE);
     }
 
     #[test]

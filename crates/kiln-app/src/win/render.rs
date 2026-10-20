@@ -26,7 +26,7 @@ use crate::layout::{
 use crate::model::{self, Entry, JobState, Tone};
 use crate::quality::{QualityDefaults, Value};
 use crate::settings::{KeyMap, ThemeChoice};
-use crate::theme::{effects, shape, Palette, Rgb};
+use crate::theme::{self, effects, shape, Palette, Rgb};
 use crate::ways_in::{self, EmptyLines};
 use crate::wheel::{self, Action, Spot, Wheel, R_INNER, R_MORE_INNER, R_MORE_OUTER, R_OUTER};
 
@@ -111,6 +111,9 @@ pub struct View<'a> {
     pub export_pressed: bool,
     /// The selected rows; each draws the selected wash.
     pub selected: &'a BTreeSet<usize>,
+    /// The row the keyboard is on; it keeps a ring even with nothing
+    /// selected.
+    pub focus: Option<usize>,
     pub hover_row: Option<usize>,
     pub hover_cancel: bool,
     pub hover_link: bool,
@@ -207,7 +210,8 @@ struct Target {
     rt: ID2D1HwndRenderTarget,
     brush: ID2D1SolidColorBrush,
     grain: ID2D1BitmapBrush,
-    palette_name: &'static str,
+    /// The palette the grain was made for.
+    palette: Palette,
 }
 
 fn color(c: Rgb, a: f32) -> D2D1_COLOR_F {
@@ -215,9 +219,26 @@ fn color(c: Rgb, a: f32) -> D2D1_COLOR_F {
     D2D1_COLOR_F { r, g, b, a }
 }
 
-fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
-    let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
-    Rgb(l(a.0, b.0), l(a.1, b.1), l(a.2, b.2))
+/// `a` mixed toward `b`. A contrast theme has no in-between colours, so
+/// there it snaps to the nearer end.
+fn blend(p: &Palette, a: Rgb, b: Rgb, t: f32) -> Rgb {
+    if !p.high_contrast {
+        theme::mix(a, b, t)
+    } else if t >= 0.5 {
+        b
+    } else {
+        a
+    }
+}
+
+/// How opaque a translucent cue is drawn: as designed, or solid under a
+/// contrast theme.
+fn solid(p: &Palette, a: f32) -> f32 {
+    if p.high_contrast {
+        1.0
+    } else {
+        a
+    }
 }
 
 fn rectf(r: &Rect) -> D2D_RECT_F {
@@ -399,6 +420,9 @@ impl Renderer {
     }
 
     pub fn set_dpi(&mut self, dpi: f32) {
+        if (dpi - self.dpi).abs() < 1e-3 {
+            return;
+        }
         self.dpi = dpi;
         // The grain bitmap is per-pixel, so rebuild everything at the new
         // scale.
@@ -416,7 +440,7 @@ impl Renderer {
 
     fn ensure_target(&mut self, palette: &Palette) -> Result<()> {
         if let Some(t) = &self.target {
-            if t.palette_name == palette.name {
+            if t.palette == *palette {
                 return Ok(());
             }
         }
@@ -446,7 +470,7 @@ impl Renderer {
 
         // The grain: one pre-rendered tile, one texel per physical pixel.
         let side = effects::GRAIN_TILE;
-        let pixels = crate::theme::grain_tile(palette);
+        let pixels = theme::grain_tile(palette);
         let bitmap = unsafe {
             rt.CreateBitmap(
                 D2D_SIZE_U {
@@ -480,7 +504,7 @@ impl Renderer {
             rt,
             brush,
             grain,
-            palette_name: palette.name,
+            palette: *palette,
         });
         Ok(())
     }
@@ -497,7 +521,10 @@ impl Renderer {
             rt.BeginDraw();
             rt.SetTransform(&Matrix3x2::identity());
             rt.Clear(Some(&color(p.ground, 1.0)));
-            rt.FillRectangle(&rectf(&Rect::new(0.0, 0.0, w, h)), &t.grain);
+            // A contrast theme's ground is flat.
+            if !p.high_contrast {
+                rt.FillRectangle(&rectf(&Rect::new(0.0, 0.0, w, h)), &t.grain);
+            }
         }
 
         let d = Draw {
@@ -621,6 +648,36 @@ impl Draw<'_> {
         };
     }
 
+    /// A translucent wash over `r`. Under a contrast theme washes go, and
+    /// an outline in the same colour stands in for them.
+    fn wash(&self, r: &Rect, radius: f32, c: Rgb, a: f32, p: &Palette) {
+        if !p.high_contrast {
+            self.fill(r, radius, c, a);
+        } else if a > 0.0 {
+            self.border(r, radius, c, 1.0, 2.0);
+        }
+    }
+
+    /// The hover background of a small control: the line colour, or an
+    /// outline in the text colour under a contrast theme.
+    fn hover_back(&self, r: &Rect, radius: f32, p: &Palette) {
+        if p.high_contrast {
+            self.border(r, radius, p.text, 1.0, shape::BORDER);
+        } else {
+            self.fill(r, radius, p.line, 1.0);
+        }
+    }
+
+    /// A thin scroll thumb.
+    fn thumb(&self, r: &Rect, p: &Palette) {
+        self.fill(r, 1.0, p.text_muted, solid(p, effects::THUMB));
+    }
+
+    /// A scrim over the whole window, at `a` of its full strength.
+    fn scrim(&self, w: f32, h: f32, a: f32, p: &Palette) {
+        self.fill(&Rect::new(0.0, 0.0, w, h), 0.0, p.ground, solid(p, 0.7) * a);
+    }
+
     fn hline(&self, x0: f32, x1: f32, y: f32, c: Rgb, a: f32) {
         let y = y + 0.5;
         unsafe {
@@ -688,7 +745,7 @@ impl Draw<'_> {
             (l.settings_button, "dial", v.settings_hover),
         ] {
             if hover {
-                self.fill(&b, shape::RADIUS_CONTROL, p.line, 1.0);
+                self.hover_back(&b, shape::RADIUS_CONTROL, p);
             }
             let c = if hover { p.text } else { p.text_muted };
             self.icon(icon, b.x + 4.0, b.y + 4.0, 1.0, c, 1.0);
@@ -701,7 +758,7 @@ impl Draw<'_> {
         let p = v.palette;
         let panel = l.panel;
         self.fill(&panel, shape::RADIUS_PANEL, p.surface, 1.0);
-        if v.drag > 0.0 {
+        if v.drag > 0.0 && !p.high_contrast {
             self.fill(
                 &panel,
                 shape::RADIUS_PANEL,
@@ -709,7 +766,7 @@ impl Draw<'_> {
                 effects::DROP_WASH * v.drag,
             );
         }
-        let edge = mix(p.line, p.accent, v.drag);
+        let edge = blend(p, p.line, p.accent_strong, v.drag);
         self.border(
             &panel,
             shape::RADIUS_PANEL,
@@ -723,7 +780,7 @@ impl Draw<'_> {
         // and, last, the tagline.
         let e = layout::empty_state(&panel);
         let lines = v.empty;
-        let vessel = mix(p.text_muted, p.accent, v.drag);
+        let vessel = blend(p, p.text_muted, p.accent, v.drag);
         self.icon("vessel", e.vessel.x, e.vessel.y, 2.0, vessel, 1.0);
         self.label(
             lines.headline,
@@ -798,7 +855,7 @@ impl Draw<'_> {
         drop(std::mem::ManuallyDrop::into_inner(params.geometricMask));
         result?;
 
-        if v.drag > 0.0 {
+        if v.drag > 0.0 && !p.high_contrast {
             self.fill(
                 &panel,
                 shape::RADIUS_PANEL,
@@ -806,7 +863,7 @@ impl Draw<'_> {
                 effects::DROP_WASH * v.drag,
             );
         }
-        let edge = mix(p.line, p.accent, v.drag);
+        let edge = blend(p, p.line, p.accent_strong, v.drag);
         self.border(
             &panel,
             shape::RADIUS_PANEL,
@@ -823,7 +880,7 @@ impl Draw<'_> {
             let thumb_h = (track * panel.h / content).max(24.0);
             let thumb_y = panel.y + 8.0 + (track - thumb_h) * (v.scroll / max);
             let thumb = Rect::new(panel.right() - 6.0, thumb_y, 2.0, thumb_h);
-            self.fill(&thumb, 1.0, p.text_muted, 0.5);
+            self.thumb(&thumb, p);
         }
         Ok(())
     }
@@ -833,11 +890,29 @@ impl Draw<'_> {
         let anim = (v.row_anim)(i);
         let a = anim.appear;
         let hovered = v.hover_row == Some(i);
-        if v.selected.contains(&i) {
-            self.fill(r, 0.0, p.accent, effects::HOVER_FILL * a);
+        let selected = v.selected.contains(&i);
+        if selected {
+            self.wash(r, 0.0, p.accent, effects::HOVER_FILL * a, p);
+            // A fine celadon edge on the wash's left, so selection never
+            // rests on the tint alone.
+            if !p.high_contrast {
+                let edge = Rect::new(r.x + shape::BORDER, r.y, 1.0, r.h);
+                self.fill(&edge, 0.0, p.accent_strong, a);
+            }
         } else if hovered {
-            self.fill(r, 0.0, p.line, 0.5 * a);
+            if p.high_contrast {
+                self.border(r, 0.0, p.line, a, shape::BORDER);
+            } else {
+                self.fill(r, 0.0, p.line, effects::ROW_HOVER * a);
+            }
         }
+        // Muted text on a washed row is a step brighter (darker in light),
+        // so it still reads.
+        let muted = if selected || hovered {
+            p.muted_on_wash
+        } else {
+            p.text_muted
+        };
         if i > 0 {
             self.hline(r.x, r.right(), r.y - 0.5, p.line, a);
         }
@@ -847,7 +922,11 @@ impl Draw<'_> {
         let code = chip_code(e);
         let chip_w = chip_width(self.text, e)?;
         let chip = Rect::new(r.x + 16.0, chip_y, chip_w, CHIP_HEIGHT);
-        self.fill(&chip, shape::RADIUS_CONTROL, p.line, a);
+        if p.high_contrast {
+            self.border(&chip, shape::RADIUS_CONTROL, p.line, a, shape::BORDER);
+        } else {
+            self.fill(&chip, shape::RADIUS_CONTROL, p.line, a);
+        }
         self.code(code, &chip, p.text, a)?;
 
         let saving = v.saving.contains(&e.path);
@@ -867,7 +946,7 @@ impl Draw<'_> {
             v.notes.get(&e.path).cloned().unwrap_or_else(|| e.line())
         };
         let (c, la) = match tone {
-            Tone::Muted => (p.text_muted, a),
+            Tone::Muted => (muted, a),
             // The result cools into place over the settle fade.
             Tone::Result => (p.text, a * anim.settle),
             Tone::Crack => (p.crack, a * anim.settle),
@@ -883,7 +962,7 @@ impl Draw<'_> {
                     &before,
                     &self.text.caption,
                     &line_rect,
-                    p.text_muted,
+                    muted,
                     a * (1.0 - anim.facts),
                 );
                 la *= anim.facts;
@@ -894,7 +973,13 @@ impl Draw<'_> {
         // the pointer is on it, like a link.
         if hovered && v.hover_link && e.saved().is_some() {
             let tw = self.text.measure(&line, &self.text.caption).min(w);
-            self.hline(x, x + tw, line_rect.y + 15.0, c, la * 0.8);
+            self.hline(
+                x,
+                x + tw,
+                line_rect.y + 15.0,
+                c,
+                la * solid(p, effects::UNDERLINE),
+            );
         }
 
         match &e.job {
@@ -904,9 +989,9 @@ impl Draw<'_> {
                     let b = layout::row_cancel(r);
                     let hot = hovered && v.hover_cancel;
                     if hot {
-                        self.fill(&b, shape::RADIUS_CONTROL, p.line, 1.0);
+                        self.hover_back(&b, shape::RADIUS_CONTROL, p);
                     }
-                    let c = if hot { p.text } else { p.text_muted };
+                    let c = if hot { p.text } else { muted };
                     self.icon("cross", b.x, b.y, 1.0, c, a);
                 }
             }
@@ -920,10 +1005,18 @@ impl Draw<'_> {
             _ => {}
         }
         // "Show details" on a failed row, "Export" on a held one.
+        // The text sits on the second line; its target is taller
+        // (`layout::row_link`).
         if let Some(text) = link {
-            let link = layout::row_link(r);
+            let link = layout::row_link_text(r);
             let hot = hovered && v.hover_link;
-            let c = if hot { p.text } else { p.text_muted };
+            let c = if hot {
+                p.text
+            } else if selected || hovered {
+                p.muted_on_wash
+            } else {
+                p.link
+            };
             let tw = self.text.measure(text, &self.text.caption);
             let lx = link.right() - tw;
             self.label(
@@ -933,7 +1026,24 @@ impl Draw<'_> {
                 c,
                 a,
             );
-            self.hline(lx, lx + tw, link.y + 15.0, c, a * 0.8);
+            self.hline(
+                lx,
+                lx + tw,
+                link.y + 15.0,
+                c,
+                a * solid(p, effects::UNDERLINE),
+            );
+        }
+        // The keyboard's row keeps its ring, selected or not.
+        if v.focus == Some(i) {
+            let ring = r.inset(2.0);
+            self.border(
+                &ring,
+                shape::RADIUS_CONTROL,
+                focus_colour(p),
+                a,
+                shape::ICON_STROKE,
+            );
         }
         Ok(())
     }
@@ -954,19 +1064,23 @@ impl Draw<'_> {
         let track = Rect::new(r.x, y, r.w, PROGRESS_HEIGHT);
         self.fill(&track, 0.0, p.line, a);
         let Some(f) = fraction else {
-            // Unknown length: the whole line holds a low heat that breathes.
-            self.fill(&track, 0.0, p.accent, (0.3 + 0.25 * heat) * a);
+            // Unknown length: the whole line holds a heat that breathes,
+            // solid so it reads against the row.
+            let c = blend(p, p.accent_strong, p.text, effects::BREATH_SWING * heat);
+            self.fill(&track, 0.0, c, a);
             return Ok(());
         };
         let end = r.x + r.w * f.clamp(0.0, 1.0);
         self.fill(
             &Rect::new(r.x, y, end - r.x, PROGRESS_HEIGHT),
             0.0,
-            p.accent,
+            p.accent_strong,
             a,
         );
-        if f < 1.0 && end > r.x {
-            let hot = mix(p.accent, p.text, 0.2 + 0.25 * heat);
+        // A contrast theme has no glow.
+        if f < 1.0 && end > r.x && !p.high_contrast {
+            let swing = effects::GLOW_MIN + effects::BREATH_SWING * heat;
+            let hot = theme::mix(p.accent_strong, p.text, swing);
             let glow_w = 40.0f32.min(end - r.x);
             let stops = [
                 D2D1_GRADIENT_STOP {
@@ -1041,20 +1155,33 @@ impl Draw<'_> {
 
     /// A button's fill and border. Selected: the celadon wash and edge.
     fn button_face(&self, b: &Rect, hover: bool, pressed: bool, selected: bool, p: &Palette) {
-        let fill = if hover { p.line } else { p.surface };
+        let fill = if hover && !p.high_contrast {
+            p.line
+        } else {
+            p.surface
+        };
         self.fill(b, shape::RADIUS_CONTROL, fill, 1.0);
-        if selected {
+        if selected && !p.high_contrast {
             self.fill(b, shape::RADIUS_CONTROL, p.accent, effects::HOVER_FILL);
         }
         if pressed {
             self.press_shadow(b, p);
         }
-        let edge = if selected { p.accent } else { p.line };
-        self.border(b, shape::RADIUS_CONTROL, edge, 1.0, shape::BORDER);
+        let (edge, width) = match (selected, hover, p.high_contrast) {
+            (true, _, true) => (p.accent, 2.0),
+            (true, _, false) => (p.accent_strong, shape::BORDER),
+            (false, true, true) => (p.text, shape::BORDER),
+            _ => (p.line, shape::BORDER),
+        };
+        self.border(b, shape::RADIUS_CONTROL, edge, 1.0, width);
     }
 
     /// The soft inner shadow of a pressed control, along its top edge.
+    /// A contrast theme has no shadows.
     fn press_shadow(&self, b: &Rect, p: &Palette) {
+        if p.high_contrast {
+            return;
+        }
         for (k, alpha) in [(1.0, 0.35), (2.0, 0.2), (3.0, 0.1)] {
             let inner = Rect::new(b.x + 1.0, b.y + k, b.w - 2.0, 1.0);
             self.fill(&inner, 0.0, p.ground, alpha);
@@ -1064,7 +1191,7 @@ impl Draw<'_> {
     /// The emphasised button: celadon, for the one action a panel is for.
     fn primary(&self, text: &str, b: &Rect, hover: bool, pressed: bool, p: &Palette) {
         let fill = if hover {
-            mix(p.accent, p.text, 0.12)
+            blend(p, p.accent, p.text, effects::PRIMARY_HOVER)
         } else {
             p.accent
         };
@@ -1114,10 +1241,23 @@ impl Draw<'_> {
         selected: bool,
         p: &Palette,
     ) {
-        let fill = if hover { p.line } else { p.surface };
+        let fill = if hover && !p.high_contrast {
+            p.line
+        } else {
+            p.surface
+        };
         self.fill(r, shape::RADIUS_CONTROL, fill, 1.0);
-        if selected {
+        if selected && !p.high_contrast {
             self.fill(r, shape::RADIUS_CONTROL, p.accent, effects::HOVER_FILL);
+        }
+        if hover && p.high_contrast {
+            self.border(
+                &r.inset(1.0),
+                shape::RADIUS_CONTROL,
+                p.text,
+                1.0,
+                shape::BORDER,
+            );
         }
         if pressed {
             self.press_shadow(r, p);
@@ -1145,17 +1285,25 @@ impl Draw<'_> {
             }
         }
         if let Some((_, r)) = segs.iter().find(|(chosen, _)| *chosen) {
-            self.border(r, shape::RADIUS_CONTROL, p.accent, 1.0, shape::BORDER);
+            self.chosen_edge(r, p);
         }
     }
 
-    /// The keyboard focus ring: a celadon line just outside the control.
+    /// The edge round a chosen segment or tab: strong celadon, or the
+    /// contrast theme's highlight, wider.
+    fn chosen_edge(&self, r: &Rect, p: &Palette) {
+        let width = if p.high_contrast { 2.0 } else { shape::BORDER };
+        self.border(r, shape::RADIUS_CONTROL, p.accent_strong, 1.0, width);
+    }
+
+    /// The keyboard focus ring: a strong celadon line just outside the
+    /// control.
     fn focus_ring(&self, b: &Rect, p: &Palette) {
         let r = Rect::new(b.x - 3.0, b.y - 3.0, b.w + 6.0, b.h + 6.0);
         self.border(
             &r,
             shape::RADIUS_CONTROL + 3.0,
-            p.accent,
+            focus_colour(p),
             1.0,
             shape::ICON_STROKE,
         );
@@ -1189,7 +1337,7 @@ impl Draw<'_> {
     fn lit(wv: &WheelView) -> (Option<Spot>, f32) {
         let pulse = wv
             .pulse
-            .map(|(_, t)| (t.clamp(0.0, 1.0) * PI).sin() * 0.3)
+            .map(|(_, t)| (t.clamp(0.0, 1.0) * PI).sin() * effects::PULSE_PEAK)
             .unwrap_or(0.0);
         (
             wv.pulse.map(|(s, _)| s).or(wv.hover),
@@ -1208,15 +1356,21 @@ impl Draw<'_> {
         } = b;
         let sector = self.sector(a0, a1, r0, r1, full)?;
         unsafe {
-            self.rt
-                .FillGeometry(&sector, self.paint(p.accent, wash), None);
+            if !p.high_contrast {
+                self.rt
+                    .FillGeometry(&sector, self.paint(p.accent, wash), None);
+            } else if wash > 0.0 {
+                // No wash under a contrast theme: the segment is outlined.
+                self.rt
+                    .DrawGeometry(&sector, self.paint(p.accent, 1.0), 2.0, None);
+            }
         }
         if edge > 0.0 {
             let arc = self.arc(a0, a1, r1 - 0.75, full)?;
             unsafe {
                 self.rt.DrawGeometry(
                     &arc,
-                    self.paint(p.accent, edge),
+                    self.paint(p.accent_strong, solid(p, edge)),
                     shape::ICON_STROKE,
                     self.round,
                 );
@@ -1302,11 +1456,12 @@ impl Draw<'_> {
         match wv.options {
             // A link: underlined, brighter under the pointer.
             Some(hot) => {
-                let col = if hot { p.text } else { p.text_muted };
+                let col = if hot { p.text } else { p.link };
                 let text = wheel::OPTIONS_TARGET;
                 self.label(text, &self.text.caption_center, &c.key, col, 1.0);
                 let tw = self.text.measure(text, &self.text.caption).min(c.key.w);
-                self.hline(-tw / 2.0, tw / 2.0, c.key.y + 14.0, col, 0.8);
+                let under = solid(p, effects::UNDERLINE);
+                self.hline(-tw / 2.0, tw / 2.0, c.key.y + 14.0, col, under);
             }
             None => self.label(key, &self.text.caption_center, &c.key, p.text_muted, 1.0),
         }
@@ -1399,7 +1554,7 @@ impl Draw<'_> {
                     radiusX: DOT_R,
                     radiusY: DOT_R,
                 },
-                self.paint(p.accent, a),
+                self.paint(p.accent_strong, a),
             );
         }
     }
@@ -1482,7 +1637,7 @@ impl Draw<'_> {
     fn dialog(&self, w: f32, h: f32, dv: &DetailsView, p: &Palette) -> Result<()> {
         let d = layout::dialog(w, h);
         // A scrim, not a shadow: it quiets the window behind the dialog.
-        self.fill(&Rect::new(0.0, 0.0, w, h), 0.0, p.ground, 0.7);
+        self.scrim(w, h, 1.0, p);
         self.fill(&d.panel, shape::RADIUS_PANEL, p.surface, 1.0);
         self.border(&d.panel, shape::RADIUS_PANEL, p.line, 1.0, shape::BORDER);
         self.label(dv.title, &self.text.display, &d.title, p.text, 1.0);
@@ -1516,7 +1671,7 @@ impl Draw<'_> {
             let thumb_h = (body.h * body.h / content).max(24.0).min(body.h);
             let thumb_y = body.y + (body.h - thumb_h) * (scroll / max);
             let thumb = Rect::new(d.panel.right() - 8.0, thumb_y, 2.0, thumb_h);
-            self.fill(&thumb, 1.0, p.text_muted, 0.5);
+            self.thumb(&thumb, p);
         }
 
         for (b, text) in [
@@ -1536,7 +1691,7 @@ impl Draw<'_> {
     /// are kept, and every shortcut. The text scrolls inside the body.
     fn help(&self, w: f32, h: f32, hv: &HelpView, p: &Palette) -> Result<()> {
         let d = layout::help(w, h);
-        self.fill(&Rect::new(0.0, 0.0, w, h), 0.0, p.ground, 0.7);
+        self.scrim(w, h, 1.0, p);
         self.fill(&d.panel, shape::RADIUS_PANEL, p.surface, 1.0);
         self.border(&d.panel, shape::RADIUS_PANEL, p.line, 1.0, shape::BORDER);
         self.label(help::TITLE, &self.text.display, &d.title, p.text, 1.0);
@@ -1568,7 +1723,7 @@ impl Draw<'_> {
             let thumb_h = (body.h * body.h / content).max(24.0).min(body.h);
             let thumb_y = body.y + (body.h - thumb_h) * (scroll / max);
             let thumb = Rect::new(d.panel.right() - 8.0, thumb_y, 2.0, thumb_h);
-            self.fill(&thumb, 1.0, p.text_muted, 0.5);
+            self.thumb(&thumb, p);
         }
         self.button("Close", &d.close, hv.close_hover, hv.close_pressed, p);
         self.focus_ring(&d.close, p);
@@ -1579,7 +1734,7 @@ impl Draw<'_> {
     /// so there is only Close.
     fn settings(&self, w: f32, h: f32, sv: &SettingsView, p: &Palette) -> Result<()> {
         let l = sv.layout;
-        self.fill(&Rect::new(0.0, 0.0, w, h), 0.0, p.ground, 0.7);
+        self.scrim(w, h, 1.0, p);
         self.fill(&l.panel, shape::RADIUS_PANEL, p.surface, 1.0);
         self.border(&l.panel, shape::RADIUS_PANEL, p.line, 1.0, shape::BORDER);
         self.label("Settings", &self.text.display, &l.title, p.text, 1.0);
@@ -1622,26 +1777,29 @@ impl Draw<'_> {
         };
         for &(k, t, r) in &tabs {
             if sv.hover == Some(k) && t != l.tab {
-                self.fill(&r, shape::RADIUS_CONTROL, p.line, 1.0);
+                self.hover_back(&r, shape::RADIUS_CONTROL, p);
             }
         }
         let marker = Rect::new(first.x + sv.tab_marker * first.w, first.y, first.w, first.h);
-        self.fill(
-            &marker,
-            shape::RADIUS_CONTROL,
-            p.accent,
-            effects::HOVER_FILL,
-        );
+        if !p.high_contrast {
+            self.fill(
+                &marker,
+                shape::RADIUS_CONTROL,
+                p.accent,
+                effects::HOVER_FILL,
+            );
+        }
         for &(k, t, r) in &tabs {
             if sv.pressed == Some(k) {
                 self.press_shadow(&r, p);
             }
+            // The chosen tab's label sits on the marker's wash.
             let c = if t == l.tab { p.text } else { p.text_muted };
             self.label(t.label(), &self.text.body_center, &r, c, 1.0);
         }
         let segs: Vec<(bool, Rect)> = tabs.iter().map(|&(_, _, r)| (false, r)).collect();
         self.segment_group(&segs, p);
-        self.border(&marker, shape::RADIUS_CONTROL, p.accent, 1.0, shape::BORDER);
+        self.chosen_edge(&marker, p);
         for &(k, _, r) in &tabs {
             if sv.focus == Some(k) {
                 self.focus_ring(&r, p);
@@ -1693,11 +1851,7 @@ impl Draw<'_> {
                 Control::EngineGet(_) => {
                     // A link, not a button: underlined text, brighter
                     // under the pointer.
-                    let c = if hover || pressed {
-                        p.text
-                    } else {
-                        p.text_muted
-                    };
+                    let c = if hover || pressed { p.text } else { p.link };
                     let tw = self.text.measure(GET_IT, &self.text.body).min(r.w);
                     let lx = r.right() - tw;
                     self.label(
@@ -1707,7 +1861,8 @@ impl Draw<'_> {
                         c,
                         1.0,
                     );
-                    self.hline(lx, lx + tw, r.y + r.h / 2.0 + 7.0, c, 0.8);
+                    let under = solid(p, effects::UNDERLINE);
+                    self.hline(lx, lx + tw, r.y + r.h / 2.0 + 7.0, c, under);
                     None
                 }
                 Control::Theme(t) => {
@@ -1726,10 +1881,16 @@ impl Draw<'_> {
                     None
                 }
                 Control::ForgetPicks => {
-                    // Disabled: the label goes muted, with no hover or press.
+                    // Disabled: the label goes muted, with no hover or press;
+                    // under a contrast theme, the theme's grey text.
                     self.button_face(r, false, false, false, p);
                     let text = "Forget picks";
-                    self.label(text, &self.text.body_center, r, p.text_muted, 1.0);
+                    let c = if p.high_contrast {
+                        p.line
+                    } else {
+                        p.text_muted
+                    };
+                    self.label(text, &self.text.body_center, r, c, 1.0);
                     None
                 }
                 Control::Preset(s, preset) => {
@@ -1783,7 +1944,7 @@ impl Draw<'_> {
         if a <= 0.0 {
             return Ok(());
         }
-        self.fill(&Rect::new(0.0, 0.0, w, h), 0.0, p.ground, 0.7 * a);
+        self.scrim(w, h, a, p);
         let rise = 8.0 * (1.0 - sv.open);
         let result = self.with_opacity(a, || {
             self.set_base(scale_at(1.0, 0.0, rise));
@@ -1831,6 +1992,16 @@ impl Draw<'_> {
         });
         self.set_base(Matrix3x2::identity());
         result
+    }
+}
+
+/// The focus ring's colour: strong celadon, or the contrast theme's text
+/// colour.
+fn focus_colour(p: &Palette) -> Rgb {
+    if p.high_contrast {
+        p.text
+    } else {
+        p.accent_strong
     }
 }
 

@@ -22,7 +22,9 @@ them changes, so a palette change is always a deliberate one.
    - Pressed controls get a soft inner shadow.
    - Flat surfaces have no drop shadows.
 4. **Motion with weight.** Animations last 120 to 180 ms and ease out.
-   Nothing bounces.
+   Nothing bounces. With Windows' Animation effects off, every pour, slide
+   and fade is instant and progress lines stop breathing; progress still
+   shows.
 
 ## Colour
 
@@ -36,9 +38,11 @@ Code asks for a role (`palette.accent`), never a raw token.
 | kiln-bone | `#EDE6DA` | primary text |
 | kiln-stone | `#9A8F80` | secondary text and labels |
 | kiln-celadon | `#7FB5A0` | the single accent |
-| kiln-brick | `#B5503F` | errors only, used sparingly |
+| kiln-brick-light | `#D99D93` | errors only, used sparingly |
+| kiln-stone-light | `#B3AB9F` | muted text on a selected or hovered row |
 
-Light mode inverts the neutrals and keeps celadon and brick.
+Light mode inverts the neutrals, keeps celadon for washes and fills, and
+deepens the colours that must read on its pale ground.
 
 | Role | Light |
 |---|---|
@@ -47,8 +51,19 @@ Light mode inverts the neutrals and keeps celadon and brick.
 | line (bisque) | `#D6CEC1` |
 | text (soot) | `#1C1B19` |
 | muted text (umber) | `#6B6257` |
+| muted text on a wash (umber deep) | `#645C52` |
+| strong accent (celadon deep) | `#467966` |
+| errors (brick deep) | `#984335` |
 
-The theme follows the Windows app mode unless Settings says Dark or Light.
+- The strong accent draws every celadon line that must be seen: the focus
+  ring, a chosen segment's edge, a selected row's edge, progress and the
+  suggestion dot. In dark it is celadon itself.
+- Every text pair reaches 4.5:1 and every one of those cues 3:1, in both
+  themes. `theme::contrast_report` lists each pair, and a test holds it.
+- The theme follows the Windows app mode unless Settings says Dark or Light.
+- Under a Windows contrast theme Kiln draws in the theme's own colours
+  (window, window text, highlight, highlight text, grey text, hot light).
+  Washes, glows, grain and shadows go; outlines and solid fills stand in.
 
 Never use orange, pure black (`#000000`) or pure white (`#FFFFFF`). The token
 test enforces this.
@@ -74,8 +89,11 @@ test enforces this.
   - Rows are 56 px tall, controls 32 px, and the header 56 px.
 - Corners are 6 px on controls and 12 px on panels. The wheel is circular.
 - Borders are 1 px in kiln-ash and drawn inside their shape, so neighbours never double up. A segmented control has one outer border and hairline dividers.
-- The keyboard focus ring is a 1.5 px celadon line drawn 3 px outside the control.
+- The keyboard focus ring is a 1.5 px strong-celadon line drawn 3 px outside the control. In the list it sits 2 px inside the focused row, and stays after Escape clears the selection.
+- A selected row has the celadon wash and a 1 px strong-celadon edge on its left.
 - Layout is in DIPs, and Direct2D scales it. The layout tests check the grid at several window sizes.
+- Windows' Text size zooms the whole layout, type and all, from 1.0 to 2.25. The smallest window grows with it. On a screen too small for the zoomed window, the zoom gives way so nothing overlaps.
+- Small targets are at least 24 DIPs: a row's "Show details" or "Export" link has its own 24 DIP target on the second line, apart from the row's.
 
 ## Icons
 

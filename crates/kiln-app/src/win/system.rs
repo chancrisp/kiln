@@ -1,5 +1,6 @@
 //! Small pieces of Windows the app leans on: the clipboard, the app-mode
-//! setting, the file, folder, program and save pickers, the leave prompt,
+//! setting, the display settings (contrast themes, Text size, Animation
+//! effects), the file, folder, program and save pickers, the leave prompt,
 //! the right-click menu, Explorer, and the shutdown block reason.
 
 use std::path::{Path, PathBuf};
@@ -109,6 +110,116 @@ pub fn system_light() -> bool {
         )
     };
     err.is_ok() && value == 1
+}
+
+/// Whether Windows' Animation effects are on
+/// (`SPI_GETCLIENTAREAANIMATION`). If it can't be read, they count as on,
+/// as Windows' default.
+pub fn animations_on() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    };
+    let mut on = BOOL(1);
+    let read = unsafe {
+        SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION,
+            0,
+            Some(&mut on as *mut BOOL as *mut _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    };
+    read.is_err() || on.as_bool()
+}
+
+/// The contrast theme's colours, while one is on (`SPI_GETHIGHCONTRAST`
+/// with `HCF_HIGHCONTRASTON`). Only reads; Kiln never changes it.
+pub fn high_contrast() -> Option<crate::theme::SysColors> {
+    use windows::Win32::Graphics::Gdi::{
+        GetSysColor, COLOR_GRAYTEXT, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, COLOR_HOTLIGHT,
+        COLOR_WINDOW, COLOR_WINDOWTEXT, SYS_COLOR_INDEX,
+    };
+    use windows::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SystemParametersInfoW, SPI_GETHIGHCONTRAST, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    };
+    let mut hc = HIGHCONTRASTW {
+        cbSize: std::mem::size_of::<HIGHCONTRASTW>() as u32,
+        ..Default::default()
+    };
+    unsafe {
+        SystemParametersInfoW(
+            SPI_GETHIGHCONTRAST,
+            hc.cbSize,
+            Some(&mut hc as *mut HIGHCONTRASTW as *mut _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+        .ok()?;
+    }
+    if !hc.dwFlags.contains(HCF_HIGHCONTRASTON) {
+        return None;
+    }
+    // COLORREF is 0x00BBGGRR.
+    let sys = |i: SYS_COLOR_INDEX| {
+        let c = unsafe { GetSysColor(i) };
+        crate::theme::Rgb(c as u8, (c >> 8) as u8, (c >> 16) as u8)
+    };
+    Some(crate::theme::SysColors {
+        window: sys(COLOR_WINDOW),
+        window_text: sys(COLOR_WINDOWTEXT),
+        highlight: sys(COLOR_HIGHLIGHT),
+        highlight_text: sys(COLOR_HIGHLIGHTTEXT),
+        gray_text: sys(COLOR_GRAYTEXT),
+        hotlight: sys(COLOR_HOTLIGHT),
+    })
+}
+
+/// Windows' Text size (Settings > Accessibility > Text size), read through
+/// `UISettings.TextScaleFactor`, and told when it changes.
+pub struct TextScale {
+    settings: Option<windows::UI::ViewManagement::UISettings>,
+    token: Option<i64>,
+}
+
+impl TextScale {
+    /// Start listening. `changed` runs on a thread pool thread whenever
+    /// the factor changes, so it should only post a message to the window.
+    /// If WinRT isn't there, the factor stays 1.0.
+    pub fn new(changed: impl Fn() + Send + 'static) -> Self {
+        use windows::Foundation::TypedEventHandler;
+        use windows::UI::ViewManagement::UISettings;
+        let Ok(settings) = UISettings::new() else {
+            return Self {
+                settings: None,
+                token: None,
+            };
+        };
+        let handler =
+            TypedEventHandler::<UISettings, windows::core::IInspectable>::new(move |_, _| {
+                changed();
+                Ok(())
+            });
+        let token = settings.TextScaleFactorChanged(&handler).ok();
+        Self {
+            settings: Some(settings),
+            token,
+        }
+    }
+
+    /// The factor now: 1.0 to 2.25, or 1.0 if it can't be read.
+    pub fn factor(&self) -> f32 {
+        self.settings
+            .as_ref()
+            .and_then(|s| s.TextScaleFactor().ok())
+            .map_or(1.0, |f| f as f32)
+    }
+}
+
+impl Drop for TextScale {
+    fn drop(&mut self) {
+        if let (Some(s), Some(t)) = (&self.settings, self.token) {
+            let _ = s.RemoveTextScaleFactorChanged(t);
+        }
+    }
 }
 
 /// Ask for a folder. `None` if the person cancels.

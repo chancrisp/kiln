@@ -92,6 +92,8 @@ const WM_KILN_PROBE: u32 = WM_APP + 6;
 const WM_KILN_FACTS: u32 = WM_APP + 7;
 /// Posted when an export thread has finished; lparam is a `Box<Exported>`.
 const WM_KILN_EXPORTED: u32 = WM_APP + 8;
+/// Posted from a thread pool thread when Windows' Text size changes.
+const WM_KILN_TEXT_SCALE: u32 = WM_APP + 9;
 /// How long a row's second line takes to cross over to what Kiln found.
 const FACTS_MS: u32 = 160;
 /// Most files the options sheet reads for its estimate.
@@ -126,17 +128,19 @@ impl Tween {
     }
 
     fn value(&self) -> f32 {
-        let t = self.start.elapsed().as_secs_f32() * 1000.0 / self.ms as f32;
-        self.from + (self.to - self.from) * motion::ease_out(t)
+        let t = motion::progress(self.start.elapsed().as_secs_f32() * 1000.0, self.ms);
+        self.from + (self.to - self.from) * t
     }
 
+    /// Ease toward `to` over `ms`, or jump there with Animation effects
+    /// off.
     fn set(&mut self, to: f32, ms: u32) {
         if (self.to - to).abs() < f32::EPSILON {
             return;
         }
         self.from = self.value();
         self.to = to;
-        self.ms = ms;
+        self.ms = motion::ms(ms);
         self.start = Instant::now();
     }
 
@@ -145,21 +149,24 @@ impl Tween {
     }
 }
 
-/// Eased progress, 0 to 1, of something that started at `t`.
+/// Eased progress, 0 to 1, of something of `ms` that started at `t`.
+/// With Animation effects off every motion is already done.
 fn eased(t: Instant, ms: u32) -> f32 {
-    motion::ease_out(t.elapsed().as_secs_f32() * 1000.0 / ms as f32)
+    motion::progress(t.elapsed().as_secs_f32() * 1000.0, motion::ms(ms))
 }
 
+/// Whether a motion of `ms` that started at `t` is still going. With
+/// Animation effects off, none is.
 fn within(t: Instant, ms: u32) -> bool {
-    t.elapsed() < Duration::from_millis(ms as u64)
+    t.elapsed() < Duration::from_millis(motion::ms(ms) as u64)
 }
 
 /// The heat of running progress lines now. Every line shares one clock so
-/// they breathe together.
+/// they breathe together; with Animation effects off they hold still.
 fn heat_now() -> f32 {
     static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     let ms = EPOCH.get_or_init(Instant::now).elapsed().as_secs_f32() * 1000.0;
-    motion::heat(ms)
+    motion::breath(ms, motion::animations())
 }
 
 /// An HWND the worker threads can post to.
@@ -514,7 +521,16 @@ struct App {
     jobs: HashMap<JobId, JobInfo>,
     batches: HashMap<u64, Batch>,
     next_batch: u64,
-    palette: &'static Palette,
+    /// Kiln's dark or light palette, or one from a contrast theme.
+    palette: Palette,
+    /// The contrast theme's colours, while one is on.
+    contrast: Option<theme::SysColors>,
+    /// Windows' Text size, and where it's read from.
+    text_scale: f32,
+    text_scale_source: system::TextScale,
+    /// DIPs per layout unit: the Text size, or less where the screen is
+    /// too small for it (`layout::text_zoom`).
+    zoom: f32,
     settings: Settings,
     /// Where settings.toml is, and whether it could be read.
     settings_store: settings::Store,
@@ -594,9 +610,80 @@ struct App {
 }
 
 impl App {
+    /// The DPI layout units are drawn at: the monitor's, zoomed by Text
+    /// size.
+    fn unit_dpi(&self) -> f32 {
+        layout::px_per_unit(self.dpi, self.zoom) * 96.0
+    }
+
+    /// A client point in layout units.
     fn dips(&self, x: i32, y: i32) -> (f32, f32) {
-        let k = 96.0 / self.dpi;
+        let k = 1.0 / layout::px_per_unit(self.dpi, self.zoom);
         (x as f32 * k, y as f32 * k)
+    }
+
+    /// The client area in DIPs, before the Text size zoom.
+    fn client_dips(&self) -> (f32, f32) {
+        let mut rc = RECT::default();
+        unsafe {
+            let _ = GetClientRect(self.hwnd, &mut rc);
+        }
+        let k = 96.0 / self.dpi;
+        (
+            (rc.right - rc.left) as f32 * k,
+            (rc.bottom - rc.top) as f32 * k,
+        )
+    }
+
+    /// Work out the zoom again after a resize, a DPI change or a new Text
+    /// size, and draw at it.
+    fn rezoom(&mut self) {
+        let zoom = layout::text_zoom(self.text_scale, self.client_dips());
+        if (zoom - self.zoom).abs() < 1e-4 {
+            return;
+        }
+        self.zoom = zoom;
+        let dpi = self.unit_dpi();
+        self.renderer.set_dpi(dpi);
+        if let Some(t) = &self.tips {
+            t.set_dpi(dpi);
+        }
+        self.tip_cache = None;
+        self.clamp_scroll();
+        self.invalidate();
+    }
+
+    /// Windows' Text size changed: zoom to it, growing the window if it's
+    /// now under its smallest size.
+    fn text_scale_changed(&mut self) {
+        let scale = self.text_scale_source.factor();
+        if (scale - self.text_scale).abs() < 1e-4 {
+            return;
+        }
+        self.text_scale = scale;
+        let (w, h) = self.client_dips();
+        let (mw, mh) = layout::min_window(scale);
+        if w < mw || h < mh {
+            grow_client(self.hwnd, self.dpi, (w.max(mw), h.max(mh)));
+        }
+        self.rezoom();
+        self.invalidate();
+    }
+
+    /// Read the contrast theme and Animation effects again; repaint in
+    /// whatever changed.
+    fn display_settings_changed(&mut self) {
+        motion::set_animations(system::animations_on());
+        self.contrast = system::high_contrast();
+        self.apply_theme();
+        if self.animating() {
+            self.animate();
+        } else {
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), ANIM_TIMER);
+            }
+        }
+        self.invalidate();
     }
 
     /// A screen point in window DIPs.
@@ -632,8 +719,10 @@ impl App {
         self.invalidate();
     }
 
+    /// Whether a frame timer is needed: something moves, or a running
+    /// line breathes (not with Animation effects off).
     fn animating(&self) -> bool {
-        self.moving() || self.burning()
+        self.moving() || (self.burning() && motion::animations())
     }
 
     /// Whether any job is running, so its progress line glows.
@@ -1667,7 +1756,7 @@ impl App {
 
     /// A point in window DIPs, in screen pixels.
     fn to_screen(&self, x: f32, y: f32) -> (i32, i32) {
-        let k = self.dpi / 96.0;
+        let k = layout::px_per_unit(self.dpi, self.zoom);
         let mut pt = POINT {
             x: (x * k).round() as i32,
             y: (y * k).round() as i32,
@@ -1942,9 +2031,15 @@ impl App {
             more: w.more.value().clamp(0.0, 1.0),
             open: eased(w.opened, OPEN_MS),
             fade: w.closing.map_or(1.0, |t| 1.0 - eased(t, motion::QUICK_MS)),
-            pulse: w
-                .pulse
-                .map(|(s, t)| (s, t.elapsed().as_secs_f32() * 1000.0 / PULSE_MS as f32)),
+            pulse: w.pulse.map(|(s, t)| {
+                let ms = motion::ms(PULSE_MS);
+                let done = if ms == 0 {
+                    1.0
+                } else {
+                    t.elapsed().as_secs_f32() * 1000.0 / ms as f32
+                };
+                (s, done)
+            }),
             marks: w.marks(),
             dot: w.dot_at.map_or(1.0, |t| eased(t, FACTS_MS)),
             options: None,
@@ -2515,15 +2610,16 @@ impl App {
         }
     }
 
+    /// A contrast theme's colours while one is on; otherwise Kiln's dark
+    /// or light palette, as Settings and the app mode say.
     fn apply_theme(&mut self) {
-        let p = if self.settings.theme.is_light(self.system_light) {
-            &theme::LIGHT
-        } else {
-            &theme::DARK
-        };
-        if !std::ptr::eq(p, self.palette) {
+        let p = palette_for(
+            self.contrast,
+            self.settings.theme.is_light(self.system_light),
+        );
+        if p != self.palette {
             self.palette = p;
-            style_title_bar(self.hwnd, p);
+            style_title_bar(self.hwnd, &p);
         }
         self.invalidate();
     }
@@ -2636,7 +2732,9 @@ impl App {
             tab_marker: Tween::new(0.0),
             switched: Instant::now() - Duration::from_secs(1),
             hover: None,
-            focus: None,
+            // Focus starts on the first tab, so the keyboard has a place
+            // to start and the ring shows where it is.
+            focus: Some(0),
             output_line,
             engine_lines,
             engine_missing,
@@ -3015,15 +3113,17 @@ impl App {
         let mut r = l.rows[i];
         r.y -= self.scroll;
         let e = &self.files.entries()[i];
-        let cancel =
-            matches!(e.job, JobState::Running { .. }) && layout::row_cancel(&r).contains(x, y);
+        let running = matches!(e.job, JobState::Running { .. });
         // A row being exported has no link until it's done.
-        let link = !self.row_saving(i)
-            && match e.link(self.renderer.line_cut(&r, e)) {
-                Some(_) => layout::row_link(&r).contains(x, y),
-                None => e.saved().is_some() && layout::row_line(&r).contains(x, y),
-            };
-        (Some(i), cancel, link)
+        let saving = self.row_saving(i);
+        let link = !saving && e.link(self.renderer.line_cut(&r, e)).is_some();
+        let saved = !saving && e.saved().is_some();
+        let part = layout::row_part(&r, x, y, running, link, saved);
+        (
+            Some(i),
+            part == layout::RowPart::Cancel,
+            part == layout::RowPart::Link,
+        )
     }
 
     fn mouse_move(&mut self, x: f32, y: f32) {
@@ -3516,7 +3616,8 @@ impl App {
             s => s,
         };
         let view = View {
-            palette: self.palette,
+            palette: &self.palette,
+            focus: self.files.focus(),
             entries: self.files.entries(),
             notes: &self.notes,
             saving: &saving,
@@ -3612,7 +3713,7 @@ impl App {
         // tooltip control and goes to DefWindowProc.
         let mut tips = self.tips.take();
         if let (Some(t), Some((_, tools))) = (&mut tips, &self.tip_cache) {
-            t.sync(tools, self.dpi);
+            t.sync(tools, self.unit_dpi());
         }
         self.tips = tips;
     }
@@ -3837,11 +3938,9 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
     // The first frame follows the Windows app mode; settings.toml, read
     // once the window is up, can override it.
     let system_light = system::system_light();
-    let palette = if system_light {
-        &theme::LIGHT
-    } else {
-        &theme::DARK
-    };
+    let contrast = system::high_contrast();
+    motion::set_animations(system::animations_on());
+    let palette = palette_for(contrast, system_light);
     let instance: HINSTANCE = unsafe { GetModuleHandleW(None)? }.into();
     let class = handoff::CLASS;
     let icon = unsafe { LoadIconW(Some(instance), PCWSTR(1 as _)) }.unwrap_or_default();
@@ -3879,7 +3978,13 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
     };
 
     let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96) as f32;
-    style_title_bar(hwnd, palette);
+    style_title_bar(hwnd, &palette);
+    // Text size: its change event comes on a thread pool thread, so it
+    // only posts a message and the window reads the new factor itself.
+    let target = PostTarget(hwnd.0 as usize);
+    let text_scale_source = system::TextScale::new(move || target.post(WM_KILN_TEXT_SCALE, ()));
+    let text_scale = text_scale_source.factor();
+    let zoom = layout::text_zoom(text_scale, layout::default_window(text_scale));
 
     let holding = open_holding();
     // Without a holding folder results go next to each file, as before,
@@ -3912,13 +4017,17 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         batches: HashMap::new(),
         next_batch: 1,
         palette,
+        contrast,
+        text_scale,
+        text_scale_source,
+        zoom,
         settings: Settings::default(),
         settings_store: settings::Store::new(settings::default_path()),
         system_light,
         settings_ui: None,
         settings_hover: false,
         last_mouse: None,
-        renderer: Renderer::new(hwnd, dpi)?,
+        renderer: Renderer::new(hwnd, layout::px_per_unit(dpi, zoom) * 96.0)?,
         files: FileList::default(),
         rows: vec![],
         scroll: 0.0,
@@ -3962,10 +4071,12 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
     let app = Box::into_raw(app);
     unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, app as isize) };
     // The tooltip control is the window's own, and goes with it.
-    unsafe { (*app).tips = Tips::new(hwnd, instance, dpi) };
+    unsafe { (*app).tips = Tips::new(hwnd, instance, app_ref(app).unit_dpi()) };
 
-    // Size the window for its monitor's scale, centred where Windows put it.
-    resize_for_dpi(hwnd, dpi);
+    // Size the window for its monitor's scale and the Text size, centred
+    // where Windows put it.
+    resize_for_dpi(hwnd, dpi, text_scale);
+    unsafe { (*app).rezoom() };
 
     if !app_ref(app).renderer.display_font_bundled() {
         log("bundled serif unavailable; using the fallback");
@@ -4036,15 +4147,28 @@ fn app_ref<'a>(app: *mut App) -> &'a App {
     unsafe { &*app }
 }
 
+/// The palette to draw with: a contrast theme's own colours while one is
+/// on, else Kiln's light or dark.
+fn palette_for(contrast: Option<theme::SysColors>, light: bool) -> Palette {
+    match contrast {
+        Some(c) => theme::theme_from_system(c),
+        None if light => theme::LIGHT,
+        None => theme::DARK,
+    }
+}
+
 fn style_title_bar(hwnd: HWND, p: &Palette) {
     // Dark title bar (Windows 10 20H1+), and on Windows 11 the caption in
-    // the palette's own ground, text and border colours. Errors are fine:
-    // older systems keep the default frame.
+    // the palette's own ground, text and border colours. Under a contrast
+    // theme the caption is Windows' own. Errors are fine: older systems
+    // keep the default frame.
     const USE_IMMERSIVE_DARK_MODE: i32 = 20;
     const BORDER_COLOR: i32 = 34;
     const CAPTION_COLOR: i32 = 35;
     const TEXT_COLOR: i32 = 36;
-    let dark: BOOL = (p.name == "dark").into();
+    /// DWMWA_COLOR_DEFAULT: let Windows choose.
+    const COLOR_DEFAULT: u32 = 0xFFFF_FFFF;
+    let dark: BOOL = (theme::luminance(p.ground) < 0.5).into();
     unsafe {
         let set = |attr: i32, value: *const core::ffi::c_void, size: usize| {
             let _ = DwmSetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE(attr), value, size as u32);
@@ -4055,20 +4179,25 @@ fn style_title_bar(hwnd: HWND, p: &Palette) {
             (TEXT_COLOR, p.text),
             (BORDER_COLOR, p.line),
         ] {
-            let v = c.colorref();
+            let v = if p.high_contrast {
+                COLOR_DEFAULT
+            } else {
+                c.colorref()
+            };
             set(attr, &v as *const u32 as _, 4);
         }
     }
 }
 
-fn resize_for_dpi(hwnd: HWND, dpi: f32) {
-    let (w, h) = layout::DEFAULT_WINDOW;
+/// The outer size of a window whose client area is `client` DIPs at
+/// `dpi`, kept within the work area of the monitor it's on.
+fn window_size(hwnd: HWND, dpi: f32, client: (f32, f32)) -> (i32, i32) {
     let scale = dpi / 96.0;
     let mut rc = RECT {
         left: 0,
         top: 0,
-        right: (w * scale).round() as i32,
-        bottom: (h * scale).round() as i32,
+        right: (client.0 * scale).ceil() as i32,
+        bottom: (client.1 * scale).ceil() as i32,
     };
     unsafe {
         let _ = windows::Win32::UI::HiDpi::AdjustWindowRectExForDpi(
@@ -4078,16 +4207,49 @@ fn resize_for_dpi(hwnd: HWND, dpi: f32) {
             WINDOW_EX_STYLE::default(),
             dpi as u32,
         );
+    }
+    let (mut w, mut h) = (rc.right - rc.left, rc.bottom - rc.top);
+    if let Some(area) = work_area(hwnd) {
+        w = w.min(area.right - area.left);
+        h = h.min(area.bottom - area.top);
+    }
+    (w, h)
+}
+
+/// The work area of the monitor `hwnd` is on, in pixels.
+fn work_area(hwnd: HWND) -> Option<RECT> {
+    use windows::Win32::Graphics::Gdi::MONITOR_DEFAULTTONEAREST;
+    use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO};
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    unsafe {
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        GetMonitorInfoW(monitor, &mut info)
+            .as_bool()
+            .then_some(info.rcWork)
+    }
+}
+
+/// Resize the window, where it is, so its client area is `client` DIPs.
+fn grow_client(hwnd: HWND, dpi: f32, client: (f32, f32)) {
+    let (w, h) = window_size(hwnd, dpi, client);
+    unsafe {
         let _ = SetWindowPos(
             hwnd,
             None,
             0,
             0,
-            rc.right - rc.left,
-            rc.bottom - rc.top,
+            w,
+            h,
             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
         );
     }
+}
+
+fn resize_for_dpi(hwnd: HWND, dpi: f32, text_scale: f32) {
+    grow_client(hwnd, dpi, layout::default_window(text_scale));
 }
 
 fn lo(l: LPARAM) -> i32 {
@@ -4131,16 +4293,18 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
         }
         WM_SIZE => {
             app.renderer.resize();
+            app.rezoom();
             app.clamp_scroll();
             app.invalidate();
             Some(LRESULT(0))
         }
         WM_DPICHANGED => {
             app.dpi = (wparam.0 & 0xFFFF) as f32;
-            app.renderer.set_dpi(app.dpi);
+            app.renderer.set_dpi(app.unit_dpi());
             if let Some(t) = &app.tips {
-                t.set_dpi(app.dpi);
+                t.set_dpi(app.unit_dpi());
             }
+            app.tip_cache = None;
             let r = unsafe { &*(lparam.0 as *const RECT) };
             unsafe {
                 let _ = SetWindowPos(
@@ -4156,14 +4320,12 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             app.invalidate();
             Some(LRESULT(0))
         }
+        // The smallest window holds the smallest layout at the Text size:
+        // its client area is `layout::min_window`, kept within the screen.
         WM_GETMINMAXINFO => {
             let info = unsafe { &mut *(lparam.0 as *mut MINMAXINFO) };
-            let scale = app.dpi / 96.0;
-            let (w, h) = layout::MIN_WINDOW;
-            info.ptMinTrackSize = POINT {
-                x: (w * scale) as i32,
-                y: (h * scale) as i32,
-            };
+            let (w, h) = window_size(hwnd, app.dpi, layout::min_window(app.text_scale));
+            info.ptMinTrackSize = POINT { x: w, y: h };
             Some(LRESULT(0))
         }
         // "Added 2 files." has been read: the idle hint can show. A timer
@@ -4329,15 +4491,29 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
         WM_SYSCOMMAND if (wparam.0 & 0xFFF0) == SC_KEYMENU as usize && lparam.0 == 0 => {
             Some(LRESULT(0))
         }
+        // A contrast theme, Animation effects or Text size may have
+        // changed: each is cheap to read again. Text size also has its own
+        // event (WM_KILN_TEXT_SCALE); this catches it if that never comes.
         WM_SETTINGCHANGE => {
             let name = lparam.0 as *const u16;
             if !name.is_null()
                 && unsafe { PCWSTR(name).to_string() }.ok().as_deref() == Some("ImmersiveColorSet")
             {
                 app.system_light = system::system_light();
-                app.apply_theme();
             }
+            app.display_settings_changed();
+            app.text_scale_changed();
             None
+        }
+        WM_THEMECHANGED | WM_SYSCOLORCHANGE => {
+            app.display_settings_changed();
+            None
+        }
+        WM_KILN_TEXT_SCALE => {
+            // The posted box holds nothing, but it's still ours to free.
+            drop(unsafe { Box::from_raw(lparam.0 as *mut ()) });
+            app.text_scale_changed();
+            Some(LRESULT(0))
         }
         WM_KILN_UPDATE => {
             let reply = unsafe { Box::from_raw(lparam.0 as *mut Reply) };
