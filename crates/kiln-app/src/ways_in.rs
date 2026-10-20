@@ -5,16 +5,19 @@
 use std::path::Path;
 use std::time::Duration;
 
-use crate::model::Entry;
+use crate::model::{Entry, JobState};
 use crate::settings::{KeyMap, Settings};
+use crate::wheel::Action;
 use crate::wheel::WheelKind;
 
 /// A row as the right-click menu sees it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowState {
-    /// Nothing to export or show: idle, running, failed or cancelled, or a
-    /// held result that's being saved or has gone.
+    /// Nothing to export, show or stop: idle, failed or cancelled, a
+    /// running Move, or a held result that's being saved or has gone.
     Plain,
+    /// Converting, or running a tool, which can be stopped.
+    Running,
     /// Holds results that can be exported or opened.
     Held,
     /// Its results were exported to a folder.
@@ -25,6 +28,14 @@ impl Entry {
     /// What the right-click menu offers for this row. `saving` says an
     /// export of it is under way; `exists` whether a path is still on disk.
     pub fn row_state(&self, saving: bool, exists: impl Fn(&Path) -> bool) -> RowState {
+        if let JobState::Running { action, .. } = &self.job {
+            // A Move runs on its own and can't be stopped.
+            return if matches!(action, Action::File(_)) {
+                RowState::Plain
+            } else {
+                RowState::Running
+            };
+        }
         if self.held().is_some() {
             if saving || self.is_gone(exists) {
                 RowState::Plain
@@ -47,6 +58,8 @@ pub enum MenuItem {
     Export,
     Open,
     ShowInFolder,
+    /// Stops a running job and keeps its row.
+    Stop,
     Remove,
     AddFiles,
     Paste,
@@ -75,6 +88,7 @@ impl MenuItem {
             MenuItem::Export => ("Export…", "Ctrl+S".to_owned()),
             MenuItem::Open => ("Open", String::new()),
             MenuItem::ShowInFolder => ("Show in folder", String::new()),
+            MenuItem::Stop => ("Stop", String::new()),
             MenuItem::Remove => ("Remove", "Delete".to_owned()),
             MenuItem::AddFiles => ("Add files…", "Ctrl+O".to_owned()),
             MenuItem::Paste => ("Paste", "Ctrl+V".to_owned()),
@@ -95,8 +109,9 @@ impl MenuItem {
 /// The menu for the rows `selection` (one state per selected row), given
 /// the wheels that have anything for them. Items that don't apply are
 /// left out, never greyed: the wheels, then Export and Open for a held
-/// result or Show in folder for a saved one, then Remove, with a
-/// separator between groups that are there. Empty without a selection.
+/// result, Show in folder for a saved one or Stop for a running one, then
+/// Remove, with a separator between groups that are there. Empty without a
+/// selection.
 pub fn menu_items(selection: &[RowState], wheels: &[WheelKind]) -> Vec<MenuItem> {
     if selection.is_empty() {
         return vec![];
@@ -116,6 +131,9 @@ pub fn menu_items(selection: &[RowState], wheels: &[WheelKind]) -> Vec<MenuItem>
     }
     if one(RowState::Saved) {
         results.push(MenuItem::ShowInFolder);
+    }
+    if selection.contains(&RowState::Running) {
+        results.push(MenuItem::Stop);
     }
     let mut items = vec![];
     for group in [open, results, vec![MenuItem::Remove]] {
@@ -321,6 +339,20 @@ mod tests {
     }
 
     #[test]
+    fn a_running_row_offers_stop_above_remove() {
+        assert_eq!(
+            menu_items(&[Running], &[Actions]),
+            [Wheel(Actions), Separator, Stop, Separator, Remove]
+        );
+        assert_eq!(menu_items(&[Running], &[]), [Stop, Separator, Remove]);
+        // Any running row in the selection can be stopped.
+        assert_eq!(
+            menu_items(&[Held, Running], &[]),
+            [Export, Stop, Separator, Remove]
+        );
+    }
+
+    #[test]
     fn the_empty_list_menu_pastes_only_with_files_to_paste() {
         assert_eq!(list_menu(true), [AddFiles, Paste]);
         assert_eq!(list_menu(false), [AddFiles]);
@@ -336,6 +368,7 @@ mod tests {
             Export,
             Open,
             ShowInFolder,
+            Stop,
             Remove,
             AddFiles,
             Paste,
@@ -352,6 +385,7 @@ mod tests {
                 "Export…\tCtrl+S",
                 "Open",
                 "Show in folder",
+                "Stop",
                 "Remove\tDelete",
                 "Add files…\tCtrl+O",
                 "Paste\tCtrl+V",
@@ -544,5 +578,16 @@ mod tests {
         });
         assert_eq!(moved.row_state(false, there), Plain);
         assert_eq!(entry(JobState::Idle).row_state(false, there), Plain);
+        let converting = entry(JobState::Running {
+            action: Action::Convert("jpg".into()),
+            fraction: Some(0.5),
+        });
+        assert_eq!(converting.row_state(false, there), Running);
+        // A Move can't be stopped, so it offers no Stop.
+        let moving = entry(JobState::Running {
+            action: Action::File(FileAction::Move),
+            fraction: None,
+        });
+        assert_eq!(moving.row_state(false, there), Plain);
     }
 }

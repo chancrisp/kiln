@@ -46,7 +46,8 @@ use crate::layout::{
     SheetLayout, TextScroll, ROW_HEIGHT,
 };
 use crate::model::{
-    self, batch_summary, leave_prompt, status_line, FileList, JobState, Leave, PromptButton, Tone,
+    self, batch_summary, leave_prompt, status_line, FileList, JobState, Leave, Next, PromptButton,
+    Tone,
 };
 use crate::quality::{self as q, Value};
 use crate::settings::{self, Engine, Settings};
@@ -344,6 +345,13 @@ fn export_each(
     results
 }
 
+/// Whether `path` is `dir` or inside it, as Windows compares names: case
+/// doesn't matter.
+fn inside(path: &Path, dir: &Path) -> bool {
+    let lower = |p: &Path| PathBuf::from(p.to_string_lossy().to_lowercase());
+    lower(path).starts_with(lower(dir))
+}
+
 /// An export under way on its own thread.
 struct Export {
     /// The held files it is moving.
@@ -390,11 +398,15 @@ fn pin(rows: Rows, then: Then, listed: Vec<PathBuf>) -> (Rows, Then) {
     }
 }
 
-/// A leave whose prompt chose Export all, waiting for the export.
+/// A leave waiting on exports: its own Export all, or exports already
+/// moving its rows' results.
 struct Leaving {
-    export: u64,
+    /// The exports it waits on. It goes ahead once they're all done.
+    waits: HashSet<u64>,
     rows: Rows,
-    folder: PathBuf,
+    /// Where its Export all went, for results that finish meanwhile.
+    /// `None` when it only waited: those results then ask for a folder.
+    folder: Option<PathBuf>,
     then: Then,
 }
 
@@ -510,6 +522,9 @@ struct RowTimes {
     added: Instant,
     /// When the row's last job finished.
     settled: Option<Instant>,
+    /// The job the row is waiting on. Only it may change the row: a job
+    /// stopped or replaced can still report late.
+    job: Option<JobId>,
 }
 
 struct JobInfo {
@@ -853,6 +868,7 @@ impl App {
             self.rows.push(RowTimes {
                 added: now,
                 settled: None,
+                job: None,
             });
         }
         self.say(status_line(
@@ -1003,7 +1019,17 @@ impl App {
         );
     }
 
-    /// Take `path`'s row out of the list, stopping its job.
+    /// Take the rows for `paths` out of the list, stopping their jobs, and
+    /// say the new count once.
+    fn remove_rows(&mut self, paths: &[PathBuf]) {
+        for path in paths {
+            self.remove_row(path);
+        }
+        self.say(status_line(self.files.len(), 0, 0, 0));
+    }
+
+    /// Take `path`'s row out of the list, stopping its job. The caller
+    /// says the new count.
     fn remove_row(&mut self, path: &Path) {
         // The prompt can take a while; the list may have moved meanwhile.
         let Some(i) = self.files.index_of(path) else {
@@ -1015,7 +1041,6 @@ impl App {
         self.files.remove(i);
         self.rows.remove(i);
         self.notes.remove(&path);
-        self.say(status_line(self.files.len(), 0, 0, 0));
         self.held_changed();
         self.clamp_scroll();
         self.invalidate();
@@ -1058,15 +1083,47 @@ impl App {
     }
 
     /// The held files that only the rows `rows` names hold, less any an
-    /// export is already moving.
+    /// export is already moving and any removed by hand.
     fn held_by(&self, rows: &Rows) -> Vec<PathBuf> {
         let mask = self.mask(rows);
         let saving = self.saving_files();
         self.files
             .held_only_by(|i| mask.get(i).copied().unwrap_or(false))
             .into_iter()
-            .filter(|f| !saving.contains(f))
+            .filter(|f| !saving.contains(f) && f.exists())
             .collect()
+    }
+
+    /// The exports a leave of `rows` by `then` has to wait for: every one
+    /// for a close, which would cut any short, and otherwise those moving
+    /// the rows' results.
+    fn exports_for(&self, rows: &Rows, then: &Then) -> HashSet<u64> {
+        if matches!(then, Then::Close) {
+            return self.exports.keys().copied().collect();
+        }
+        let mask = self.mask(rows);
+        let files: HashSet<PathBuf> = self
+            .files
+            .held_files(|i| mask.get(i).copied().unwrap_or(false))
+            .into_iter()
+            .collect();
+        self.exports
+            .iter()
+            .filter(|(_, x)| x.files.iter().any(|f| files.contains(f)))
+            .map(|(&id, _)| id)
+            .collect()
+    }
+
+    /// Stop the jobs of the rows `rows` names.
+    fn stop_jobs(&self, rows: &Rows) {
+        match rows {
+            Rows::All => self.runner.cancel_all(),
+            Rows::Files(files) => {
+                for f in files {
+                    self.cancel_jobs_for(f);
+                }
+            }
+        }
     }
 
     /// The held files exports are moving now.
@@ -1103,6 +1160,12 @@ impl App {
     /// saves them on a worker thread, and the leave goes ahead once every
     /// one is saved.
     fn leave(&mut self, verb: Leave, rows: Rows, then: Then) {
+        self.leave_after(verb, rows, then, false);
+    }
+
+    /// `leave`, where `stopped` says the rows' jobs were just stopped: they
+    /// still show as running until they report, but aren't asked about.
+    fn leave_after(&mut self, verb: Leave, rows: Rows, then: Then, stopped: bool) {
         // An export under way finishes first.
         if !self.exports.is_empty() {
             if matches!(then, Then::Close) {
@@ -1128,17 +1191,22 @@ impl App {
         let mask = self.mask(&rows);
         let held = self.held_by(&rows).len();
         // A new job on a row only replaces what it holds.
-        let running = match then {
-            Then::Start(..) => 0,
+        let running: Vec<&Action> = match then {
+            Then::Start(..) => vec![],
+            _ if stopped => vec![],
             _ => self
                 .files
                 .entries()
                 .iter()
                 .zip(&mask)
-                .filter(|(e, &picked)| picked && matches!(e.job, JobState::Running { .. }))
-                .count(),
+                .filter_map(|(e, &picked)| match &e.job {
+                    JobState::Running { action, .. } if picked => Some(action),
+                    _ => None,
+                })
+                .collect(),
         };
-        let Some(prompt) = leave_prompt(held, running, verb) else {
+        let moving = running.iter().any(|a| matches!(a, Action::File(_)));
+        let Some(prompt) = leave_prompt(held, running.len(), moving, verb) else {
             self.proceed(then);
             return;
         };
@@ -1154,11 +1222,23 @@ impl App {
                 let (rows, then) = pin(rows, then, listed);
                 self.export_then(rows, then);
             }
-            PromptButton::Discard | PromptButton::Stop(_) => {
-                // Results that finished while the prompt was open go too.
+            PromptButton::Discard => {
+                // Results that finished while the prompt was open go too:
+                // the user chose to lose what was held.
                 let held = self.held_by(&rows);
                 self.discard(&held);
                 self.proceed(then);
+            }
+            PromptButton::Stop(_) => {
+                // Stop first, so nothing more finishes, then look again: a
+                // job that finished while the prompt was open left a result
+                // the prompt never mentioned.
+                self.stop_jobs(&rows);
+                let now = self.held_by(&rows);
+                match model::after_stop(held, now.len()) {
+                    Next::AskAgain => self.leave_after(verb, rows, then, true),
+                    _ => self.proceed(then),
+                }
             }
         }
     }
@@ -1168,27 +1248,64 @@ impl App {
     /// Cancelling the picker cancels the leave and leaves running jobs be.
     fn export_then(&mut self, rows: Rows, then: Then) {
         let held = self.held_by(&rows);
-        if held.is_empty() {
-            self.proceed(then);
-            return;
+        match model::leave_next(held.len(), self.exporting(&rows, &then)) {
+            Next::Export => {}
+            Next::Wait => return self.wait_for_exports(rows, None, then),
+            Next::Proceed | Next::AskAgain => return self.proceed(then),
         }
         let Some(dir) = self.pick_export_folder(&held) else {
             return;
         };
-        // Results that finished while the picker was open go too, and
-        // with nothing left to save, the leave goes ahead now.
+        // Results that finished while the picker was open go too, and an
+        // export that started meanwhile is waited for.
         let held = self.held_by(&rows);
-        if held.is_empty() {
-            self.proceed(then);
-            return;
+        match model::leave_next(held.len(), self.exporting(&rows, &then)) {
+            Next::Export => {
+                if self.export(held, Dest::Into(dir.clone()), true).is_some() {
+                    self.wait_for_exports(rows, Some(dir), then);
+                }
+            }
+            Next::Wait => self.wait_for_exports(rows, Some(dir), then),
+            Next::Proceed | Next::AskAgain => self.proceed(then),
         }
-        if let Some(export) = self.export(held, Dest::Into(dir.clone()), true) {
-            self.leaving = Some(Leaving {
-                export,
-                rows,
-                folder: dir,
-                then,
-            });
+    }
+
+    /// Whether an export is moving results a leave of `rows` by `then`
+    /// has to wait for.
+    fn exporting(&self, rows: &Rows, then: &Then) -> bool {
+        !self.exports_for(rows, then).is_empty()
+    }
+
+    /// Hold a leave until the exports it has to wait for are done.
+    fn wait_for_exports(&mut self, rows: Rows, folder: Option<PathBuf>, then: Then) {
+        let waits = self.exports_for(&rows, &then);
+        if waits.is_empty() {
+            return self.proceed(then);
+        }
+        self.leaving = Some(Leaving {
+            waits,
+            rows,
+            folder,
+            then,
+        });
+        self.invalidate();
+    }
+
+    /// A leave whose exports are all done: go ahead, or first export what
+    /// finished meanwhile.
+    fn resume_leave(&mut self, l: Leaving) {
+        let late = self.held_by(&l.rows);
+        match model::leave_next(late.len(), self.exporting(&l.rows, &l.then)) {
+            Next::Export => match l.folder.clone() {
+                Some(dir) => {
+                    if self.export(late, Dest::Into(dir), true).is_some() {
+                        self.wait_for_exports(l.rows, l.folder, l.then);
+                    }
+                }
+                None => self.export_then(l.rows, l.then),
+            },
+            Next::Wait => self.wait_for_exports(l.rows, l.folder, l.then),
+            Next::Proceed | Next::AskAgain => self.proceed(l.then),
         }
     }
 
@@ -1196,6 +1313,15 @@ impl App {
     fn proceed(&mut self, then: Then) {
         match then {
             Then::Close => {
+                // The run's folder goes with the window: an export still
+                // moving files out of it finishes first, then Kiln closes,
+                // asking again if anything new is at stake.
+                if model::leave_next(0, !self.exports.is_empty()) == Next::Wait {
+                    self.close_when_saved = true;
+                    self.say("Saving… Kiln will close when it's done.".to_owned());
+                    self.invalidate();
+                    return;
+                }
                 self.close_when_saved = false;
                 self.runner.cancel_all();
                 unsafe {
@@ -1208,16 +1334,10 @@ impl App {
                 if all {
                     self.clear_rows();
                 } else {
-                    for path in &paths {
-                        self.remove_row(path);
-                    }
+                    self.remove_rows(&paths);
                 }
             }
-            Then::Remove(paths) => {
-                for path in &paths {
-                    self.remove_row(path);
-                }
-            }
+            Then::Remove(paths) => self.remove_rows(&paths),
             Then::Start(action, paths, quality) => self.launch(action, paths, quality),
         }
     }
@@ -1235,12 +1355,12 @@ impl App {
     /// Keep Windows told, while results are held, why it shouldn't shut
     /// down: "3 results aren't saved yet."
     fn held_changed(&mut self) {
-        let n = self.files.held_count();
+        let n = self.files.held_count_present(|p| p.exists());
         if n == self.shutdown_told {
             return;
         }
         self.shutdown_told = n;
-        let reason = leave_prompt(n, 0, Leave::Close).map(|p| p.title);
+        let reason = leave_prompt(n, 0, false, Leave::Close).map(|p| p.title);
         system::shutdown_reason(self.hwnd, reason.as_deref());
     }
 
@@ -1296,12 +1416,14 @@ impl App {
         system::pick_folder_in(self.hwnd, &title, &start)
     }
 
-    /// Whether `path` is inside this run's own folder, which is no place
-    /// to export to: it's emptied when Kiln closes.
+    /// Whether `path` is inside Kiln's holding folders, which are no place
+    /// to export to: this run's is emptied when Kiln closes, and the next
+    /// launch sweeps the others.
     fn in_holding(&self, path: &Path) -> bool {
-        self.holding
-            .as_ref()
-            .is_some_and(|h| path.starts_with(h.dir()))
+        let run = self.holding.as_ref().map(|h| h.dir());
+        let root = settings::held_root();
+        run.is_some_and(|dir| inside(path, dir))
+            || root.as_deref().is_some_and(|dir| inside(path, dir))
     }
 
     /// Of `files`, those the row for `source` still holds and no export is
@@ -1469,6 +1591,15 @@ impl App {
     /// reports back with WM_KILN_EXPORTED. `all` is an Export all. Returns
     /// the export's id, or `None` when it was settled on the spot.
     fn export(&mut self, files: Vec<PathBuf>, dest: Dest, all: bool) -> Option<u64> {
+        // Only results this run holds: anything else is the user's own
+        // file, which an export must never move.
+        let files: Vec<PathBuf> = match &self.holding {
+            Some(h) => files
+                .into_iter()
+                .filter(|f| f.parent() == Some(h.dir()))
+                .collect(),
+            None => vec![],
+        };
         // Nothing to move: no thread, and no message to wait for.
         if files.is_empty() {
             return None;
@@ -1523,17 +1654,17 @@ impl App {
         if !saved {
             self.close_when_saved = false;
         }
-        if self.leaving.as_ref().is_some_and(|l| l.export == ex.id) {
-            let Some(l) = self.leaving.take() else {
-                return;
-            };
-            if saved {
-                let late = self.held_by(&l.rows);
-                if late.is_empty() {
-                    self.proceed(l.then);
-                } else if let Some(export) = self.export(late, Dest::Into(l.folder.clone()), true) {
-                    self.leaving = Some(Leaving { export, ..l });
-                }
+        let waited = self
+            .leaving
+            .as_mut()
+            .is_some_and(|l| l.waits.remove(&ex.id));
+        if waited && !saved {
+            // Something wasn't saved: the leave is off, and the footer and
+            // the row say what.
+            self.leaving = None;
+        } else if waited && self.leaving.as_ref().is_some_and(|l| l.waits.is_empty()) {
+            if let Some(l) = self.leaving.take() {
+                self.resume_leave(l);
             }
         }
         if self.close_when_saved && self.exports.is_empty() {
@@ -1974,6 +2105,11 @@ impl App {
                 self.open_held(*i);
             }
             (MenuItem::ShowInFolder, [i]) => self.show_saved(*i),
+            (MenuItem::Stop, _) => {
+                for &i in rows {
+                    self.cancel_row(i);
+                }
+            }
             (MenuItem::Remove, _) => {
                 let paths = self.paths_of(rows);
                 self.leave(
@@ -2427,6 +2563,7 @@ impl App {
                         fraction: None,
                     };
                     self.rows[i].settled = None;
+                    self.rows[i].job = Some(id);
                 }
             }
             self.jobs.insert(
@@ -2489,7 +2626,7 @@ impl App {
                     Progress::Indeterminate => None,
                 };
                 for path in &job.paths {
-                    if let Some(i) = self.files.index_of(path) {
+                    if let Some(i) = self.job_row(path, id) {
                         if let JobState::Running { fraction, .. } =
                             &mut self.files.entries_mut()[i].job
                         {
@@ -2527,9 +2664,10 @@ impl App {
                     },
                 };
                 for path in &job.paths {
-                    if let Some(i) = self.files.index_of(path) {
+                    if let Some(i) = self.job_row(path, id) {
                         self.files.entries_mut()[i].job = state.clone();
                         self.rows[i].settled = Some(now);
+                        self.rows[i].job = None;
                     }
                 }
                 if let Some(b) = self.batches.get_mut(&job.batch) {
@@ -2561,6 +2699,14 @@ impl App {
             }
         }
         self.invalidate();
+    }
+
+    /// The row for `path`, if it's waiting on job `id`: a row removed and
+    /// added again, or given a new job, isn't the old job's any more.
+    fn job_row(&self, path: &Path, id: JobId) -> Option<usize> {
+        self.files
+            .index_of(path)
+            .filter(|&i| self.rows.get(i).is_some_and(|r| r.job == Some(id)))
     }
 
     /// "There isn't room on C: to hold the result.", when a job failed for
@@ -2627,6 +2773,7 @@ impl App {
                     fraction: None,
                 };
                 self.rows[i].settled = None;
+                self.rows[i].job = None;
             }
         }
         self.animate();
@@ -3595,10 +3742,15 @@ impl App {
             // Ctrl+S exports the selected rows, Ctrl+Shift+S everything.
             VK_S if ctrl && shift => self.export_everything(),
             VK_S if ctrl => self.export_rows(&self.files.selection()),
-            // Space follows the selected row's link, with one row selected.
+            // Space follows the selected row's link, with one row selected,
+            // or stops it while it runs.
             VK_SPACE => {
                 if let [i] = self.files.selection()[..] {
-                    self.follow_link(i);
+                    if self.row_state(i) == RowState::Running {
+                        self.cancel_row(i);
+                    } else {
+                        self.follow_link(i);
+                    }
                 }
             }
             _ => return false,
@@ -3845,6 +3997,12 @@ impl App {
     /// does the same would.
     fn a11y_do(&mut self, req: a11y::Request) {
         use a11y::{Id, Verb};
+        // A dialog, prompt or menu of Kiln's is open, and its loop still
+        // delivers these. A click couldn't reach the window now, so neither
+        // does this: it could start an export or a leave inside another.
+        if system::modal_open() {
+            return;
+        }
         // Asked of an older tree: what it named may have gone, or can't be
         // used any more.
         if !a11y::accepts(&self.a11y_tree(&[]), &req) {
@@ -4266,7 +4424,7 @@ impl App {
             _ if id >= TIP_ROWS => {
                 let (i, part) = ((id - TIP_ROWS) / 3, (id - TIP_ROWS) % 3);
                 match part {
-                    1 => help::CANCEL_TIP.to_owned(),
+                    1 => help::STOP_TIP.to_owned(),
                     2 => help::EXPORT_TIP.to_owned(),
                     _ => {
                         let (Some(r), Some(line), Some(e)) = (
@@ -5136,7 +5294,9 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
         }
         // While results are held, ask Windows to wait: the shutdown block
         // reason says why, and the person decides.
-        WM_QUERYENDSESSION => Some(LRESULT((app.files.held_count() == 0) as isize)),
+        WM_QUERYENDSESSION => Some(LRESULT(
+            (app.files.held_count_present(|p| p.exists()) == 0) as isize,
+        )),
         // UI Automation asks for the window's tree.
         WM_GETOBJECT if lparam.0 as i32 == uia::ROOT_OBJECT_ID => {
             let first = !app.uia.active();
@@ -5219,6 +5379,25 @@ mod tests {
     }
 
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn no_export_goes_into_any_holding_folder() {
+        let root = Path::new(r"C:\Users\a\AppData\Local\Kiln\held");
+        // Another run's folder, or the root itself, is swept at launch.
+        assert!(inside(&root.join("99-1"), root));
+        assert!(inside(root, root));
+        // Windows doesn't care about case, so neither does the check.
+        assert!(inside(
+            Path::new(r"c:\users\A\appdata\local\kiln\HELD\99-1"),
+            root
+        ));
+        assert!(!inside(Path::new(r"C:\Users\a\AppData\Local\Kiln"), root));
+        assert!(!inside(
+            Path::new(r"C:\Users\a\AppData\Local\Kiln\held2"),
+            root
+        ));
+    }
 
     #[test]
     fn an_export_that_panics_reports_every_file() {

@@ -171,7 +171,7 @@ test enforces this.
 
 - A **?** button sits in the header beside Settings. It, or F1 anywhere but a panel or dialog, opens help over a scrim, drawn like the details dialog: the ways in (drop, Add files, paste, right-click, holding a key while dropping), how results wait until they're exported, and a table of every keyboard shortcut. The shortcuts follow the keys chosen in Settings.
 - The text scrolls with the wheel or touchpad, the arrows, Page Up, Page Down, Home and End. Focus sits on Close. Escape, Enter, a click outside or Close dismisses it.
-- Icon-only controls have native Windows tooltips: "Settings (Ctrl+,)", "Help (F1)", "Add files (Ctrl+O)", "Export all (Ctrl+Shift+S)", a row's "Cancel" and "Export (Ctrl+S)". There are none while a wheel, panel or dialog is up.
+- Icon-only controls have native Windows tooltips: "Settings (Ctrl+,)", "Help (F1)", "Add files (Ctrl+O)", "Export all (Ctrl+Shift+S)", a row's "Stop" and "Export (Ctrl+S)". There are none while a wheel, panel or dialog is up.
 
 ## Voice
 

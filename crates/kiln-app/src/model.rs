@@ -296,8 +296,9 @@ pub struct Prompt {
 }
 
 /// What to ask before `verb` loses `held` unexported results or stops
-/// `running` jobs. `None` when nothing is at stake.
-pub fn leave_prompt(held: usize, running: usize, verb: Leave) -> Option<Prompt> {
+/// `running` jobs. `moving` says a Move is among them, which isn't
+/// converting anything. `None` when nothing is at stake.
+pub fn leave_prompt(held: usize, running: usize, moving: bool, verb: Leave) -> Option<Prompt> {
     let mut sentences = vec![];
     if held > 0 {
         sentences.push(match held {
@@ -306,9 +307,11 @@ pub fn leave_prompt(held: usize, running: usize, verb: Leave) -> Option<Prompt> 
         });
     }
     if running > 0 {
-        sentences.push(match running {
-            1 => "1 file is still converting.".to_owned(),
-            n => format!("{n} files are still converting."),
+        sentences.push(match (running, moving) {
+            (1, false) => "1 file is still converting.".to_owned(),
+            (n, false) => format!("{n} files are still converting."),
+            (1, true) => "Kiln is still working on 1 file.".to_owned(),
+            (n, true) => format!("Kiln is still working on {n} files."),
         });
     }
     if sentences.is_empty() {
@@ -327,6 +330,45 @@ pub fn leave_prompt(held: usize, running: usize, verb: Leave) -> Option<Prompt> 
         title: sentences.join(" "),
         buttons,
     })
+}
+
+/// Where a leave goes once its prompt is answered, or when it needed none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Next {
+    /// Go ahead now.
+    Proceed,
+    /// Export what its rows still hold first.
+    Export,
+    /// Wait for the exports moving its rows' results, then look again.
+    Wait,
+    /// More is held now than the prompt said: ask again.
+    AskAgain,
+}
+
+/// Where a leave stands with nothing left to ask: `held` results of its
+/// rows that no export is moving yet, and `exporting` whether an export is
+/// still moving some. Closing while an export runs would end it halfway,
+/// so the leave waits for it.
+pub fn leave_next(held: usize, exporting: bool) -> Next {
+    if held > 0 {
+        Next::Export
+    } else if exporting {
+        Next::Wait
+    } else {
+        Next::Proceed
+    }
+}
+
+/// After Stop on a leave prompt that counted `asked` held results, with
+/// the rows' jobs stopped and `held` results there now: a job that
+/// finished while the prompt was open left a result nobody was asked
+/// about, so the prompt is asked again.
+pub fn after_stop(asked: usize, held: usize) -> Next {
+    if held > asked {
+        Next::AskAgain
+    } else {
+        Next::Proceed
+    }
 }
 
 /// Where an export dialog opens: the last folder exported to in this run,
@@ -846,6 +888,15 @@ impl FileList {
     /// and a merge's one result counts once however many rows share it).
     pub fn held_count(&self) -> usize {
         self.held_files(|_| true).len()
+    }
+
+    /// How many held result files are still on disk, as `exists` says. A
+    /// result removed by hand is nothing to save, or to keep Windows up for.
+    pub fn held_count_present(&self, exists: impl Fn(&Path) -> bool) -> usize {
+        self.held_files(|_| true)
+            .iter()
+            .filter(|f| exists(f))
+            .count()
     }
 
     /// How many held result files Export all would take now: every one
@@ -2094,14 +2145,68 @@ mod tests {
     }
 
     fn prompt(held: usize, running: usize, verb: Leave) -> Option<(String, Vec<PromptButton>)> {
-        leave_prompt(held, running, verb).map(|p| (p.title, p.buttons))
+        leave_prompt(held, running, false, verb).map(|p| (p.title, p.buttons))
     }
 
     #[test]
     fn nothing_to_lose_means_no_prompt() {
         for verb in [Leave::Close, Leave::Clear, Leave::Remove] {
-            assert_eq!(leave_prompt(0, 0, verb), None);
+            assert_eq!(leave_prompt(0, 0, false, verb), None);
+            assert_eq!(leave_prompt(0, 0, true, verb), None);
         }
+    }
+
+    #[test]
+    fn a_running_move_is_still_working_not_converting() {
+        let p = leave_prompt(0, 1, true, Leave::Close).unwrap();
+        assert_eq!(p.title, "Kiln is still working on 1 file.");
+        assert_eq!(
+            p.buttons,
+            [PromptButton::Stop(Leave::Close), PromptButton::Cancel]
+        );
+        assert_eq!(
+            leave_prompt(2, 3, true, Leave::Clear).unwrap().title,
+            "2 results aren't saved yet. Kiln is still working on 3 files."
+        );
+    }
+
+    #[test]
+    fn a_leave_waits_for_exports_under_way() {
+        // Results not yet moving are exported first, whatever else runs.
+        assert_eq!(leave_next(2, false), Next::Export);
+        assert_eq!(leave_next(1, true), Next::Export);
+        // Nothing left to export, but an export is still moving files:
+        // closing now would cut it off and lose what it hasn't moved.
+        assert_eq!(leave_next(0, true), Next::Wait);
+        assert_eq!(leave_next(0, false), Next::Proceed);
+    }
+
+    #[test]
+    fn stop_asks_again_when_a_result_arrived_meanwhile() {
+        // "1 file is still converting." counted nothing held; the job
+        // finished before Stop was pressed and left a result.
+        assert_eq!(after_stop(0, 1), Next::AskAgain);
+        assert_eq!(after_stop(0, 0), Next::Proceed);
+        assert_eq!(after_stop(2, 2), Next::Proceed);
+        assert_eq!(after_stop(2, 1), Next::Proceed);
+        // Asked again, the prompt offers to export what arrived.
+        let again = leave_prompt(1, 0, false, Leave::Close).unwrap();
+        assert_eq!(again.buttons[0], PromptButton::ExportAll);
+    }
+
+    #[test]
+    fn a_result_removed_by_hand_is_not_counted_as_held() {
+        let list = FileList {
+            entries: vec![
+                held_row("a.png", &["a.jpg"], None),
+                held_row("b.png", &["b.jpg", "b2.jpg"], None),
+            ],
+            ..FileList::default()
+        };
+        assert_eq!(list.held_count(), 3);
+        let gone = |p: &Path| p.file_name().is_some_and(|n| n == "b2.jpg");
+        assert_eq!(list.held_count_present(|p| !gone(p)), 2);
+        assert_eq!(list.held_count_present(|_| false), 0);
     }
 
     #[test]

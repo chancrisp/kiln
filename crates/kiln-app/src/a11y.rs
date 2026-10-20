@@ -747,10 +747,12 @@ fn row(r: &RowIn, rect: Rect, offscreen: bool) -> Node {
     let mut children = vec![];
     if let JobState::Running { .. } = &e.job {
         n.status = r.progress.map(|p| format!("{p}%"));
+        // Named with the file, as a list of buttons reads them out of their
+        // rows: "Stop a.png", not "Stop, Stop, Stop".
         children.push(Node::new(
             Id::RowCancel(path.clone()),
             Role::Button,
-            "Cancel",
+            format!("{} {}", crate::help::STOP_TIP, e.name),
             layout::row_cancel(&rect),
         ));
     }
@@ -758,7 +760,7 @@ fn row(r: &RowIn, rect: Rect, offscreen: bool) -> Node {
         children.push(Node::new(
             Id::RowLink(path.clone()),
             Role::Button,
-            link,
+            format!("{link} {}", e.name),
             layout::row_link(&rect),
         ));
     } else if r.instead.is_none() && e.saved().is_some() {
@@ -1230,7 +1232,7 @@ mod tests {
     }
 
     #[test]
-    fn a_running_row_says_how_far_and_offers_cancel() {
+    fn a_running_row_says_how_far_and_offers_stop() {
         let lines = empty_lines(&Settings::default());
         let es = [entry(
             "a.png",
@@ -1246,7 +1248,7 @@ mod tests {
         let cancel = &row.children[0];
         assert_eq!(
             (cancel.role, cancel.name.as_str()),
-            (Role::Button, "Cancel")
+            (Role::Button, "Stop a.png")
         );
         assert!(cancel.patterns().invoke);
     }
@@ -1270,9 +1272,33 @@ mod tests {
         assert_eq!(row.children.len(), 1);
         assert_eq!(
             (row.children[0].role, row.children[0].name.as_str()),
-            (Role::Button, "Export")
+            (Role::Button, "Export a.png")
         );
         named(&t, Role::Button, "Export all (1)");
+    }
+
+    #[test]
+    fn each_held_rows_export_names_its_file() {
+        let lines = empty_lines(&Settings::default());
+        let held = |name: &str| {
+            entry(
+                name,
+                JobState::Done {
+                    action: Action::Convert("jpg".into()),
+                    outputs: vec![PathBuf::from(format!("held/{name}.jpg"))],
+                    saved: None,
+                },
+            )
+        };
+        let es = [held("a.png"), held("b.png"), held("c.png")];
+        let t = tree(&input(&lines, rows(&es)));
+        let mut links = vec![];
+        t.walk(&mut |n| {
+            if matches!(n.id, Id::RowLink(_)) {
+                links.push(n.name.clone());
+            }
+        });
+        assert_eq!(links, ["Export a.png", "Export b.png", "Export c.png"]);
     }
 
     #[test]
@@ -1310,7 +1336,7 @@ mod tests {
         let t = tree(&input(&lines, rows(&es)));
         sound(&t);
         let row = named(&t, Role::ListItem, &format!("a.mov, {message}"));
-        assert_eq!(row.children[0].name, "Show details");
+        assert_eq!(row.children[0].name, "Show details a.mov");
         assert_eq!(row.children[0].role, Role::Button);
     }
 

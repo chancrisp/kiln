@@ -3,6 +3,7 @@
 //! effects), the file, folder, program and save pickers, the leave prompt,
 //! the right-click menu, Explorer, and the shutdown block reason.
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 
 use windows::core::{s, w, Result, BOOL, HRESULT, HSTRING, PCWSTR};
@@ -37,6 +38,34 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::model::{Prompt, PromptButton};
 use crate::settings::Engine;
+
+thread_local! {
+    /// How many of Kiln's modal dialogs and menus are open on this thread.
+    static MODALS: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Whether a dialog, picker, prompt or menu of Kiln's is open. Its modal
+/// loop still delivers the window's messages, so anything that would start
+/// work of its own waits until it closes.
+pub fn modal_open() -> bool {
+    MODALS.with(Cell::get) > 0
+}
+
+/// Counts a modal as open for as long as it lives.
+struct Modal;
+
+impl Modal {
+    fn open() -> Self {
+        MODALS.with(|m| m.set(m.get() + 1));
+        Modal
+    }
+}
+
+impl Drop for Modal {
+    fn drop(&mut self) {
+        MODALS.with(|m| m.set(m.get().saturating_sub(1)));
+    }
+}
 
 /// Put `text` on the clipboard.
 pub fn set_clipboard(hwnd: HWND, text: &str) -> Result<()> {
@@ -238,6 +267,7 @@ pub fn pick_program(hwnd: HWND, title: &str) -> Option<PathBuf> {
 }
 
 fn pick(hwnd: HWND, title: &str, folder: bool, start: Option<&Path>) -> Option<PathBuf> {
+    let _modal = Modal::open();
     unsafe {
         let dialog: IFileOpenDialog =
             CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).ok()?;
@@ -268,6 +298,7 @@ fn pick(hwnd: HWND, title: &str, folder: bool, start: Option<&Path>) -> Option<P
 /// Ask for files to add, any number at once, starting in `start` when
 /// given; otherwise Windows picks the folder. Empty if the person cancels.
 pub fn pick_files(hwnd: HWND, title: &str, start: Option<&Path>) -> Vec<PathBuf> {
+    let _modal = Modal::open();
     let picked = || -> Option<Vec<PathBuf>> {
         unsafe {
             let dialog: IFileOpenDialog =
@@ -300,6 +331,7 @@ pub fn pick_files(hwnd: HWND, title: &str, start: Option<&Path>) -> Vec<PathBuf>
 /// is a separator. Returns the index of the item chosen, or `None` when
 /// the menu was dismissed.
 pub fn popup_menu(hwnd: HWND, items: &[Option<String>], x: i32, y: i32) -> Option<usize> {
+    let _modal = Modal::open();
     unsafe {
         let menu = CreatePopupMenu().ok()?;
         // Kept alive until the menu has closed.
@@ -331,6 +363,7 @@ pub fn popup_menu(hwnd: HWND, items: &[Option<String>], x: i32, y: i32) -> Optio
 /// Windows asks before replacing a file that's already there. `None` if
 /// the person cancels.
 pub fn save_as(hwnd: HWND, title: &str, start: &Path, name: &str, ext: &str) -> Option<PathBuf> {
+    let _modal = Modal::open();
     unsafe {
         let dialog: IFileSaveDialog =
             CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER).ok()?;
@@ -392,6 +425,7 @@ const PROMPT_FIRST_ID: i32 = 100;
 /// Ask the leave prompt in a Windows task dialog, which screen readers
 /// read. Returns the button chosen; closing the dialog is Cancel.
 pub fn ask(hwnd: HWND, prompt: &Prompt) -> PromptButton {
+    let _modal = Modal::open();
     let id = |k: usize, b: PromptButton| match b {
         PromptButton::Cancel => IDCANCEL.0,
         _ => PROMPT_FIRST_ID + k as i32,

@@ -225,11 +225,18 @@ fn crosses_devices(e: &io::Error) -> bool {
     e.raw_os_error() == Some(CROSS_DEVICE)
 }
 
+/// The temp file's stem for a copy to `to`: named after the target, so a
+/// copy cut short reads as what it was, `photo.jpg.kiln-export.tmp`.
+fn temp_stem(to: &Path) -> String {
+    let name = to.file_name().unwrap_or_default().to_string_lossy();
+    format!("{name}.kiln-export")
+}
+
 /// Copy to a temp name beside `to`, flush it, rename it into place, then
 /// remove the source. The source goes last, so any failure keeps it.
 fn copy_then_remove(from: &Path, to: &Path) -> io::Result<()> {
     let parent = to.parent().unwrap_or_else(|| Path::new("."));
-    let (mut tmp_file, tmp) = output::create_unique(parent, ".kiln-export", "tmp")
+    let (mut tmp_file, tmp) = output::create_unique(parent, &temp_stem(to), "tmp")
         .map_err(|e| io::Error::other(e.to_string()))?;
 
     let copied = (|| {
@@ -414,6 +421,7 @@ mod tests {
         assert!(outside.join("mine.txt").is_file());
     }
 
+    #[cfg(windows)]
     #[test]
     fn sweep_does_not_follow_a_link_out_of_root() {
         let base = tempfile::tempdir().unwrap();
@@ -433,12 +441,24 @@ mod tests {
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false);
-        if !made {
-            return;
-        }
+        // Without the junction there's nothing to test: say so, don't pass.
+        assert!(made, "couldn't make a junction with `cmd /C mklink /J`");
         assert!(sweep_stale(&root).is_empty());
         assert!(outside.join("lock").is_file());
         assert!(outside.join("mine.txt").is_file());
+    }
+
+    #[test]
+    fn a_cross_drive_copy_is_named_after_its_target() {
+        assert_eq!(
+            temp_stem(Path::new(r"D:\out\photo.jpg")),
+            "photo.jpg.kiln-export"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let (_, tmp) =
+            output::create_unique(dir.path(), &temp_stem(&dir.path().join("photo.jpg")), "tmp")
+                .unwrap();
+        assert_eq!(tmp.file_name().unwrap(), "photo.jpg.kiln-export.tmp");
     }
 
     #[test]
