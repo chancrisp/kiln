@@ -14,6 +14,7 @@ pub mod converter;
 pub mod error;
 pub mod facts;
 mod ffmpeg;
+pub mod held;
 mod job;
 mod libreoffice;
 pub mod output;
@@ -32,6 +33,7 @@ pub use converter::{CancelToken, Context, Converter, Engines, Options, Progress,
 pub use error::{Error, Result};
 pub use facts::{inspect, Bars, Facts, Look, PdfFacts, Picture};
 pub use ffmpeg::FfmpegConverter;
+pub use held::{export_as, export_into, sweep_stale, Holding};
 pub use job::{Availability, Kiln};
 pub use libreoffice::{find_installed as find_libreoffice, LibreOfficeConverter};
 pub use pandoc::PandocConverter;
