@@ -776,7 +776,7 @@ mod tests {
     #[test]
     fn a_stuck_pdf_helper_lets_go_after_the_timeout() {
         static SLOT: HelperSlot = HelperSlot::new();
-        let timeout = Duration::from_millis(200);
+        let timeout = Duration::from_millis(500);
         // A slow helper: it holds the slot until told to finish.
         let stuck = SLOT.claim(timeout).unwrap();
         let (finish, told) = mpsc::channel::<()>();

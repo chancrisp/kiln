@@ -1768,8 +1768,7 @@ impl App {
             self.settings.habits.record(from, to);
         }
         let changed = favourites(&self.settings.habits) != before;
-        // Any settings save means looking for the engines again.
-        self.engines.forget();
+        // Picks can't change the engines, so the cached search stands.
         // Not over a settings.toml that couldn't be read: see Store.
         if let Err(e) = self.settings_store.save_picks(&self.settings) {
             self.status = e;
