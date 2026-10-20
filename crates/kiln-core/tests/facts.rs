@@ -214,6 +214,7 @@ fn a_pdf_with_text() {
 
 #[test]
 fn a_huge_pdf_is_not_read() {
+    let _turn = one_pdf_at_a_time();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("huge.pdf");
     let file = fs::File::create(&path).unwrap();
