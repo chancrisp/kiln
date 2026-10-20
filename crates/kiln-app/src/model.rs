@@ -2419,6 +2419,26 @@ mod tests {
     }
 
     #[test]
+    fn a_dragged_file_an_export_is_moving_is_not_dropped() {
+        // A cancelled drag left a.jpg remembered; now Export all is moving
+        // it, and it's already gone from holding before the export reports.
+        let mut list = FileList {
+            entries: vec![held_row("a.png", &["a.jpg"], None)],
+            ..Default::default()
+        };
+        let dragged: HashSet<PathBuf> = [PathBuf::from("a.jpg")].into();
+        let saving: HashSet<PathBuf> = [PathBuf::from("a.jpg")].into();
+        // The win layer counts a file being saved as still there.
+        let present = |p: &Path| saving.contains(p);
+        assert!(!list.settle_drags(&dragged, present));
+        assert_eq!(list.held_count(), 1);
+        assert_ne!(list.entries()[0].line().0, DROPPED);
+        // Once it's no longer being saved, a missing dragged file settles.
+        assert!(list.settle_drags(&dragged, |_| false));
+        assert_eq!(list.entries()[0].line().0, DROPPED);
+    }
+
+    #[test]
     fn a_drag_starts_past_the_system_distance() {
         assert!(!past_drag(2.0, -2.0, 2.0, 2.0));
         assert!(past_drag(2.5, 0.0, 2.0, 2.0));

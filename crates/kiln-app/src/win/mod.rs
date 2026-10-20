@@ -1485,8 +1485,12 @@ impl App {
     /// left be: its files are on their way out.
     fn check_gone(&mut self) {
         // A dragged result that went after its drag was moved by the drop.
-        if self.files.settle_drags(&self.dragged, |p| p.exists()) {
-            self.dragged.retain(|p| p.exists());
+        // One an export is moving counts as still there: the export
+        // records where it went once it reports.
+        let exporting = self.saving_files();
+        let present = |p: &Path| p.exists() || exporting.contains(p);
+        if self.files.settle_drags(&self.dragged, present) {
+            self.dragged.retain(|p| present(p));
             self.forget_dropped_notes();
             self.held_changed();
             self.invalidate();
@@ -1604,6 +1608,11 @@ impl App {
         }
         self.dragged.retain(|p| p.exists());
         if let Err(e) = result {
+            // A drag that failed changes nothing: what it would have
+            // carried isn't remembered as dragged.
+            for f in &files {
+                self.dragged.remove(f);
+            }
             log(&format!("couldn't start the drag: {e}"));
             self.alert(model::DRAG_FAILED.to_owned());
         }
@@ -5470,6 +5479,14 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
                 t.answer(lparam, &text);
             }
             Some(LRESULT(0))
+        }
+        // Another window took the mouse mid-press: no drag or collapse is
+        // left waiting for a release that won't come.
+        WM_CAPTURECHANGED => {
+            if lparam.0 != hwnd.0 as isize {
+                app.list_press = None;
+            }
+            None
         }
         WM_MOUSELEAVE => {
             app.tracking_mouse = false;
