@@ -846,6 +846,22 @@ impl FileList {
         }
     }
 
+    /// A Ctrl-press on row `i`, as in Explorer. On a selected row it takes
+    /// the focus and the anchor and keeps the selection, so it can be
+    /// dragged; it returns true, and the release without a drag is the
+    /// Ctrl-click. On any other row it's the Ctrl-click now, and it
+    /// returns false.
+    pub fn ctrl_press(&mut self, i: usize) -> bool {
+        if self.selected.contains(&i) {
+            self.focus = Some(i);
+            self.anchor = Some(i);
+            true
+        } else {
+            self.ctrl_click(i);
+            false
+        }
+    }
+
     /// A Ctrl-click: row `i` goes in or out of the selection, and ranges
     /// start from it.
     pub fn ctrl_click(&mut self, i: usize) {
@@ -2310,6 +2326,10 @@ mod tests {
         assert!(!e.is_gone(|_| false));
         assert_eq!(e.row_state(false, |_| false), RowState::Plain);
         assert_eq!(list.held_count(), 0);
+        // Nothing to save: closing or removing it doesn't ask, and Windows
+        // isn't kept up for it.
+        assert!(list.held_only_by(|_| true).is_empty());
+        assert_eq!(list.held_count_present(|_| true), 0);
     }
 
     #[test]
@@ -2391,6 +2411,41 @@ mod tests {
         // Past the end is no row.
         assert!(!list.press(9));
         assert_eq!(list.selection(), [1]);
+    }
+
+    #[test]
+    fn a_ctrl_press_on_a_selected_row_waits_for_release() {
+        let mut list = list_of(4);
+        list.click(0);
+        list.ctrl_click(2);
+        // Kept at press, so the selection can be dragged out.
+        assert!(list.ctrl_press(0));
+        assert_eq!(list.selection(), [0, 2]);
+        assert_eq!(list.focus(), Some(0));
+        assert_eq!(list.anchor, Some(0));
+        // Release without a drag: the win layer calls ctrl_click(0).
+        list.ctrl_click(0);
+        assert_eq!(list.selection(), [2]);
+        // The only selected row is kept at press too.
+        assert!(list.ctrl_press(2));
+        assert_eq!(list.selection(), [2]);
+        list.ctrl_click(2);
+        assert!(list.selection().is_empty());
+    }
+
+    #[test]
+    fn a_ctrl_press_on_an_unselected_row_adds_it_at_once() {
+        let mut list = list_of(4);
+        list.click(0);
+        assert!(!list.ctrl_press(3));
+        assert_eq!(list.selection(), [0, 3]);
+        assert_eq!(list.focus(), Some(3));
+        assert_eq!(list.anchor, Some(3));
+        // The release does nothing more.
+        assert_eq!(list.selection(), [0, 3]);
+        // Past the end is no row.
+        assert!(!list.ctrl_press(9));
+        assert_eq!(list.selection(), [0, 3]);
     }
 
     #[test]

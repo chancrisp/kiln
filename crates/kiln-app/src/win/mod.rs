@@ -30,7 +30,8 @@ use windows::Win32::System::Ole::{
 };
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::{
-    GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    GetDpiForWindow, GetSystemMetricsForDpi, SetProcessDpiAwarenessContext,
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -452,16 +453,34 @@ struct DetailsUi {
     last_copy: Option<(bool, Instant)>,
 }
 
-/// A plain press on a list row, until the button is released or a drag
-/// starts.
+/// Whether a held file a drag carried is still there, as the checks after
+/// a drag see it: on disk, or being moved by an export (`exporting`, from
+/// `saving_files`), which records where it went once it reports.
+fn still_there(exporting: &HashSet<PathBuf>, p: &Path) -> bool {
+    p.exists() || exporting.contains(p)
+}
+
+/// What releasing a list press without a drag does to the selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Release {
+    /// The press already did all it does.
+    Nothing,
+    /// A plain press inside a selection of two or more rows kept it: the
+    /// release is the click.
+    Click,
+    /// A Ctrl-press on a selected row kept it: the release is the
+    /// Ctrl-click, which takes the row out.
+    CtrlClick,
+}
+
+/// A press on a list row, until the button is released or a drag starts.
 #[derive(Debug, Clone, Copy)]
 struct ListPress {
     row: usize,
     /// Where the pointer went down, in layout units.
     point: (f32, f32),
-    /// The press was inside a selection of two or more rows and kept it:
-    /// the release without a drag is the click.
-    collapse: bool,
+    /// What the release without a drag does.
+    release: Release,
     /// Moving far enough with the button down drags the selection's held
     /// results out of Kiln.
     drag: bool,
@@ -707,7 +726,7 @@ struct App {
     /// Set while Kiln runs a drag of its own results, shared with the drop
     /// target, which then ignores it.
     own_drag: Rc<Cell<bool>>,
-    /// The plain press on a list row the button is still down on.
+    /// The press on a list row the button is still down on.
     list_press: Option<ListPress>,
     /// Held files dragged out in this run that are still there: one that
     /// goes later was moved by the drop, not lost.
@@ -1485,14 +1504,11 @@ impl App {
     /// left be: its files are on their way out.
     fn check_gone(&mut self) {
         // A dragged result that went after its drag was moved by the drop.
-        // One an export is moving counts as still there: the export
-        // records where it went once it reports.
         let exporting = self.saving_files();
-        let present = |p: &Path| p.exists() || exporting.contains(p);
+        let present = |p: &Path| still_there(&exporting, p);
         if self.files.settle_drags(&self.dragged, present) {
             self.dragged.retain(|p| present(p));
-            self.forget_dropped_notes();
-            self.held_changed();
+            self.dragged_away();
             self.invalidate();
         }
         let saving = self.saving_rows();
@@ -1512,6 +1528,20 @@ impl App {
             } else if !gone && noted {
                 self.notes.remove(&path);
                 self.invalidate();
+            }
+        }
+    }
+
+    /// After a drag moved held results out. Windows is told what's still
+    /// held, and once nothing is, the footer drops its "Export to keep
+    /// them." as an export's does.
+    fn dragged_away(&mut self) {
+        self.forget_dropped_notes();
+        self.held_changed();
+        if self.files.held_count() == 0 {
+            let plain = status_line(self.files.len(), 0, 0, 0);
+            if self.status != plain {
+                self.say(plain);
             }
         }
     }
@@ -1556,8 +1586,15 @@ impl App {
         if keys & MK_LBUTTON_FLAG == 0 {
             return false;
         }
-        let (cx, cy) = unsafe { (GetSystemMetrics(SM_CXDRAG), GetSystemMetrics(SM_CYDRAG)) };
-        // Pixels to layout units, as the pointer is measured.
+        // The drag box in pixels at the window's DPI, as the pointer's
+        // client point is; then to layout units, as `dips` measures it.
+        let dpi = self.dpi as u32;
+        let (cx, cy) = unsafe {
+            (
+                GetSystemMetricsForDpi(SM_CXDRAG, dpi),
+                GetSystemMetricsForDpi(SM_CYDRAG, dpi),
+            )
+        };
         let k = 1.0 / layout::px_per_unit(self.dpi, self.zoom);
         model::past_drag(
             x - p.point.0,
@@ -1569,16 +1606,16 @@ impl App {
 
     /// Drag the selection's held results out of Kiln. When the drag
     /// returns, a file that's gone was moved by the drop; one still there
-    /// was copied, or the drag was cancelled, and stays held.
-    fn drag_out(&mut self) {
+    /// was copied, or the drag was cancelled, and stays held. Returns
+    /// whether a drag ran: with nothing to carry, the press stays a click.
+    fn drag_out(&mut self) -> bool {
         let saving = self.saving_files();
         let files = self.files.drag_files(|p| saving.contains(p) || !p.exists());
         if files.is_empty() {
-            // Nothing left to carry: the press stays a click.
             if let Some(p) = &mut self.list_press {
                 p.drag = false;
             }
-            return;
+            return false;
         }
         self.list_press = None;
         unsafe {
@@ -1596,17 +1633,19 @@ impl App {
         system::window_loop(false);
         self.own_drag.set(false);
         if self.destroyed {
-            return;
+            return true;
         }
         // Only whether each file is still there says it moved: Explorer's
-        // own move reports no effect.
-        let moved: Vec<PathBuf> = files.iter().filter(|p| !p.exists()).cloned().collect();
+        // own move reports no effect. An export started during the drag
+        // may be moving one: that's the export's to record.
+        let exporting = self.saving_files();
+        let present = |p: &Path| still_there(&exporting, p);
+        let moved: Vec<PathBuf> = files.iter().filter(|p| !present(p)).cloned().collect();
+        self.dragged.retain(|p| present(p));
         if !moved.is_empty() {
             self.files.dragged_out(&moved);
-            self.forget_dropped_notes();
-            self.held_changed();
+            self.dragged_away();
         }
-        self.dragged.retain(|p| p.exists());
         if let Err(e) = result {
             // A drag that failed changes nothing: what it would have
             // carried isn't remembered as dragged.
@@ -1614,9 +1653,13 @@ impl App {
                 self.dragged.remove(f);
             }
             log(&format!("couldn't start the drag: {e}"));
-            self.alert(model::DRAG_FAILED.to_owned());
+            // Unless the drop moved some first: those rows say so.
+            if moved.is_empty() {
+                self.alert(model::DRAG_FAILED.to_owned());
+            }
         }
         self.invalidate();
+        true
     }
 
     /// Where an export dialog for `source`'s results opens.
@@ -3685,8 +3728,8 @@ impl App {
             self.wheel_point(x, y);
             return;
         }
-        if self.drag_due(x, y, keys) {
-            self.drag_out();
+        // With nothing to carry, the move goes on to the hover below.
+        if self.drag_due(x, y, keys) && self.drag_out() {
             return;
         }
         let (row, cancel, link) = self.hit_row(x, y);
@@ -3745,9 +3788,14 @@ impl App {
         unsafe {
             let _ = ReleaseCapture();
         }
-        // A press inside a selection that didn't become a drag: the click.
-        if let Some(p) = press.filter(|p| p.collapse) {
-            self.files.click(p.row);
+        // A press that kept the selection and didn't become a drag: the
+        // click, or the Ctrl-click, it held back.
+        if let Some(p) = press {
+            match p.release {
+                Release::Nothing => {}
+                Release::Click => self.files.click(p.row),
+                Release::CtrlClick => self.files.ctrl_click(p.row),
+            }
             self.invalidate();
         }
         if help_close {
@@ -3889,9 +3937,18 @@ impl App {
             // A click in the list hides the focus ring until a key.
             self.files.pointer_used();
             let (row, cancel, link) = self.hit_row(x, y);
-            match row {
-                Some(i) if ctrl => self.files.ctrl_click(i),
-                Some(i) if shift => self.files.shift_click(i),
+            let release = match row {
+                // As in Explorer, a Ctrl-press on a selected row keeps it
+                // until release, so the selection can be dragged out.
+                Some(i) if ctrl => Some(if self.files.ctrl_press(i) {
+                    Release::CtrlClick
+                } else {
+                    Release::Nothing
+                }),
+                Some(i) if shift => {
+                    self.files.shift_click(i);
+                    Some(Release::Nothing)
+                }
                 Some(i) if cancel || link => {
                     self.files.click(i);
                     if cancel {
@@ -3899,23 +3956,32 @@ impl App {
                     } else {
                         self.follow_link(i);
                     }
+                    None
                 }
-                // Held until release or a drag: a press inside a selection
-                // keeps it, so the whole selection can be dragged out.
-                Some(i) => {
-                    let collapse = self.files.press(i);
-                    let drag = self.may_drag(i);
-                    self.list_press = Some(ListPress {
-                        row: i,
-                        point: (x, y),
-                        collapse,
-                        drag,
-                    });
-                    unsafe { SetCapture(self.hwnd) };
-                }
+                // A press inside a selection keeps it, so the whole
+                // selection can be dragged out.
+                Some(i) => Some(if self.files.press(i) {
+                    Release::Click
+                } else {
+                    Release::Nothing
+                }),
                 // A plain click off the rows clears the selection.
-                None if !ctrl && !shift => self.files.clear_selection(),
-                None => {}
+                None if !ctrl && !shift => {
+                    self.files.clear_selection();
+                    None
+                }
+                None => None,
+            };
+            // Held until release or a drag.
+            if let (Some(i), Some(release)) = (row, release) {
+                let drag = self.may_drag(i);
+                self.list_press = Some(ListPress {
+                    row: i,
+                    point: (x, y),
+                    release,
+                    drag,
+                });
+                unsafe { SetCapture(self.hwnd) };
             }
         }
         self.invalidate();
