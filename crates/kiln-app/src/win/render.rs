@@ -2,7 +2,7 @@
 //! DPI maps them to pixels, so 100%, 150% and 200% scaling share one path.
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::f32::consts::{PI, TAU};
 use std::path::PathBuf;
 
@@ -22,7 +22,7 @@ use crate::layout::{
     self, Control, Layout, Rect, SettingsLayout, SettingsTab, SheetControl, SheetLayout,
     CHIP_HEIGHT, CHIP_MIN_WIDTH, PROGRESS_HEIGHT, ROW_HEIGHT,
 };
-use crate::model::{Entry, JobState, Tone};
+use crate::model::{self, Entry, JobState, Tone};
 use crate::quality::{QualityDefaults, Value};
 use crate::settings::{KeyMap, ThemeChoice};
 use crate::theme::{effects, shape, Palette, Rgb};
@@ -93,6 +93,9 @@ pub struct View<'a> {
     /// Lines that stand in for a row's own second line, by the row's
     /// file: a failed export, or a held result that's gone.
     pub notes: &'a HashMap<PathBuf, (String, Tone)>,
+    /// Rows, by file, whose results are being exported: they read
+    /// "Saving…" and have no link until it's done.
+    pub saving: &'a HashSet<PathBuf>,
     /// The footer's "Export all (n)" label, while results are held.
     pub export_all: Option<&'a str>,
     pub export_hover: bool,
@@ -709,7 +712,8 @@ impl Draw<'_> {
 
         let x = r.x + 16.0 + CHIP_MIN_WIDTH.max(chip_w) + 16.0;
         let running = matches!(e.job, JobState::Running { .. });
-        let link = e.link();
+        let saving = v.saving.contains(&e.path);
+        let link = e.link().filter(|_| !saving);
         let right = if running {
             layout::row_cancel(r).x - 8.0
         } else if link.is_some() {
@@ -726,7 +730,11 @@ impl Draw<'_> {
             a,
         );
 
-        let (line, tone) = v.notes.get(&e.path).cloned().unwrap_or_else(|| e.line());
+        let (line, tone) = if saving {
+            (model::SAVING.to_owned(), Tone::Muted)
+        } else {
+            v.notes.get(&e.path).cloned().unwrap_or_else(|| e.line())
+        };
         let (c, la) = match tone {
             Tone::Muted => (p.text_muted, a),
             // The result cools into place over the settle fade.

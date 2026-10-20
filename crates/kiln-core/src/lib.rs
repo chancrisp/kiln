@@ -30,7 +30,7 @@ mod tools;
 
 pub use calibre::{find_installed as find_calibre, CalibreConverter};
 pub use converter::{CancelToken, Context, Converter, Engines, Options, Progress, Request};
-pub use error::{Error, Result};
+pub use error::{is_disk_full, Error, Result};
 pub use facts::{inspect, Bars, Facts, Look, PdfFacts, Picture};
 pub use ffmpeg::FfmpegConverter;
 pub use held::{export_as, export_into, sweep_stale, Holding};

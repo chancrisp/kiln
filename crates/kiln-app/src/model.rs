@@ -180,6 +180,47 @@ pub fn export_summary(saved: usize, total: usize) -> String {
     }
 }
 
+/// A row's line while its results are being exported.
+pub const SAVING: &str = "Saving…";
+
+/// The footer, for as long as it has nothing more pressing to say, when
+/// this run has no holding folder.
+pub const NO_HOLDING: &str =
+    "Kiln couldn't make its holding folder, so results are saved next to each file.";
+
+/// What the footer shows: `status`, unless it says nothing more than the
+/// plain count of listed files (`plain`), in which case a `sticky` warning
+/// takes its place.
+pub fn footer_status<'a>(status: &'a str, plain: &str, sticky: Option<&'a str>) -> &'a str {
+    match sticky {
+        Some(warning) if status.is_empty() || status == plain => warning,
+        _ => status,
+    }
+}
+
+/// A failed job's row line when it ran out of room writing `failed` and
+/// that is on the same drive as the holding folder `holding`: "There isn't
+/// room on C: to hold the result." `None` for anything else.
+pub fn no_room_line(failed: &Path, holding: &Path) -> Option<String> {
+    let drive = drive_of(holding)?;
+    let same = drive_of(failed).is_some_and(|d| d.eq_ignore_ascii_case(&drive));
+    same.then(|| format!("There isn't room on {drive} to hold the result."))
+}
+
+/// "C:" for a path on drive C, or the share for a UNC path.
+fn drive_of(path: &Path) -> Option<String> {
+    use std::path::{Component, Prefix};
+    match path.components().next()? {
+        Component::Prefix(p) => Some(match p.kind() {
+            Prefix::Disk(d) | Prefix::VerbatimDisk(d) => {
+                format!("{}:", (d as char).to_ascii_uppercase())
+            }
+            _ => p.as_os_str().to_string_lossy().into_owned(),
+        }),
+        _ => None,
+    }
+}
+
 /// What the user is leaving by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Leave {
@@ -1368,6 +1409,32 @@ mod tests {
         for verb in [Leave::Close, Leave::Clear, Leave::Remove] {
             assert_eq!(leave_prompt(0, 0, verb), None);
         }
+    }
+
+    #[test]
+    fn the_sticky_warning_stands_in_for_the_plain_count() {
+        let warn = Some(NO_HOLDING);
+        assert_eq!(footer_status("", "2 files.", warn), NO_HOLDING);
+        assert_eq!(footer_status("2 files.", "2 files.", warn), NO_HOLDING);
+        assert_eq!(
+            footer_status("Converted 2 files to JPG.", "2 files.", warn),
+            "Converted 2 files to JPG."
+        );
+        assert_eq!(footer_status("2 files.", "2 files.", None), "2 files.");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn no_room_names_the_holding_drive() {
+        let held = Path::new(r"C:\Users\a\AppData\Local\Kiln\held\1-2");
+        let full = Path::new(r"c:\Users\a\AppData\Local\Kiln\held\1-2\photo.jpg");
+        assert_eq!(
+            no_room_line(full, held).as_deref(),
+            Some("There isn't room on C: to hold the result.")
+        );
+        // Out of room somewhere else isn't about holding the result.
+        assert_eq!(no_room_line(Path::new(r"D:\Temp\Kiln\x.tmp"), held), None);
+        assert_eq!(no_room_line(Path::new("relative.tmp"), held), None);
     }
 
     #[test]

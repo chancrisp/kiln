@@ -31,6 +31,9 @@ pub struct JobError {
     pub message: String,
     pub details: String,
     pub cancelled: bool,
+    /// The file a write ran out of room for, when a full disk is why the
+    /// job failed.
+    pub no_room: Option<PathBuf>,
 }
 
 impl From<Error> for JobError {
@@ -41,6 +44,7 @@ impl From<Error> for JobError {
         };
         JobError {
             cancelled: matches!(e, Error::Cancelled),
+            no_room: e.no_room().map(Into::into),
             message: e.to_string(),
             details,
         }
@@ -194,6 +198,7 @@ fn panicked(payload: Box<dyn Any + Send>) -> JobError {
         message: PANICKED.to_owned(),
         details,
         cancelled: false,
+        no_room: None,
     }
 }
 
