@@ -942,10 +942,15 @@ impl FileList {
             .count()
     }
 
-    /// How many held result files Export all would take now: every one
-    /// but those `saving` names, which an export is already moving.
-    pub fn held_count_except(&self, saving: &HashSet<PathBuf>) -> usize {
-        self.held_files(|_| true)
+    /// How many held result files Export all would take now: those of the
+    /// rows `rows` picks, but not those `saving` names, which an export is
+    /// already moving.
+    pub fn held_count_except(
+        &self,
+        rows: impl Fn(usize) -> bool,
+        saving: &HashSet<PathBuf>,
+    ) -> usize {
+        self.held_files(rows)
             .iter()
             .filter(|f| !saving.contains(*f))
             .count()
@@ -2006,12 +2011,14 @@ mod tests {
         assert_eq!(list.held_count(), 4);
         assert_eq!(FileList::default().held_count(), 0);
         // Export all's count leaves out what an export is moving now.
-        assert_eq!(list.held_count_except(&HashSet::new()), 4);
+        assert_eq!(list.held_count_except(|_| true, &HashSet::new()), 4);
         let saving: HashSet<PathBuf> = ["p 1.png", "p 2.png", "p 3.png"]
             .into_iter()
             .map(PathBuf::from)
             .collect();
-        assert_eq!(list.held_count_except(&saving), 1);
+        assert_eq!(list.held_count_except(|_| true, &saving), 1);
+        // Nor the results of rows it skips, such as those that are gone.
+        assert_eq!(list.held_count_except(|_| false, &HashSet::new()), 0);
         assert!(FileList::default().held().is_empty());
     }
 

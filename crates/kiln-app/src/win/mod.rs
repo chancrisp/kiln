@@ -783,10 +783,20 @@ impl App {
         (self.export_all_count() > 0).then(|| layout::export_all_button(&clear))
     }
 
-    /// How many held results Export all would take now: those an export
-    /// is already moving aren't counted, and Export all skips them.
+    /// How many held results Export all would take now: those a row says
+    /// are gone and those an export is already moving aren't counted, and
+    /// Export all skips them.
     fn export_all_count(&self) -> usize {
-        self.files.held_count_except(&self.saving_files())
+        let entries = self.files.entries();
+        self.files.held_count_except(
+            |i| {
+                !self
+                    .notes
+                    .get(&entries[i].path)
+                    .is_some_and(|(l, _)| l == model::GONE)
+            },
+            &self.saving_files(),
+        )
     }
 
     fn invalidate(&self) {
@@ -2072,6 +2082,9 @@ impl App {
                 (rows, focus)
             }
         };
+        // The menu acts on rows, so a Tab-focused button lets the focus go
+        // back to the list.
+        self.button_focus = None;
         let items = if rows.is_empty() {
             ways_in::list_menu(system::clipboard_has_files())
         } else {
@@ -3891,6 +3904,8 @@ impl App {
 
     fn dropped(&mut self, ev: &DragEvent) {
         self.drag.set(0.0, motion::QUICK_MS);
+        // A drop acts on the list, so the focus goes back to it.
+        self.button_focus = None;
         if self.adds_wait() {
             self.queued.extend(ev.paths.iter().cloned());
             self.drag_paths.clear();
