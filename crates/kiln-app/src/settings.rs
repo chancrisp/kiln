@@ -329,11 +329,17 @@ impl fmt::Display for SettingsError {
     }
 }
 
+/// Under "Start exports in" in Settings > General.
+pub const START_EXPORTS_HINT: &str =
+    "Unset: the last folder you exported to, or the file's own folder.";
+
 const HEADER: &str = "\
 # Kiln settings. Kiln rewrites this file when you change settings in the
 # app; comments you add here are not kept.
 #
-# output_folder = 'C:\\Users\\you\\Converted'   # unset: next to each file
+# output_folder = 'C:\\Users\\you\\Converted'   # where export dialogs start;
+#                                             # unset: the last folder you
+#                                             # exported to, or the file's own
 # theme = 'system'                            # system, dark or light
 # suggestions = true
 # [keys]                                      # shift, ctrl or alt, one each
@@ -420,10 +426,11 @@ impl Settings {
         }
     }
 
-    /// The options every job runs with.
+    /// The options every job runs with. The output folder is not set here:
+    /// the app points jobs at its held folder, and `output_folder` only
+    /// says where export dialogs start.
     pub fn options(&self) -> Options {
         Options {
-            out_dir: self.output_folder.clone(),
             engines: Engines {
                 ffmpeg: self.engines.ffmpeg.clone(),
                 pandoc: self.engines.pandoc.clone(),
@@ -611,8 +618,32 @@ mod tests {
         );
         assert_eq!(s.engines.pandoc, None);
         let o = s.options();
-        assert_eq!(o.out_dir, s.output_folder);
+        // The folder only says where export dialogs start; jobs write to
+        // the held folder, which the app sets.
+        assert_eq!(o.out_dir, None);
         assert_eq!(o.engines.ffmpeg, s.engines.ffmpeg);
+    }
+
+    #[test]
+    fn output_folder_only_says_where_exports_start() {
+        // Files from before the change still load, and the key stays.
+        let s = Settings::parse(r"output_folder = 'C:\Exports'").unwrap();
+        assert_eq!(s.output_folder, Some(PathBuf::from(r"C:\Exports")));
+        assert_eq!(s.options().out_dir, None);
+        let text = s.to_toml();
+        assert!(text.contains("\noutput_folder = "), "{text}");
+        assert_eq!(Settings::parse(&text).unwrap(), s);
+        // The comment no longer promises output next to each file.
+        let header = text
+            .lines()
+            .find(|l| l.contains("# output_folder"))
+            .unwrap();
+        assert!(header.contains("export dialogs start"), "{header}");
+        assert!(!header.contains("next to each file"), "{header}");
+        assert_eq!(
+            START_EXPORTS_HINT,
+            "Unset: the last folder you exported to, or the file's own folder."
+        );
     }
 
     #[test]

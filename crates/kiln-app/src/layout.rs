@@ -247,6 +247,8 @@ pub struct SettingsRow {
     pub label_rect: Rect,
     /// Where the row's current value is written, for rows that show one.
     pub value: Option<Rect>,
+    /// A line explaining the row, for rows that need one.
+    pub hint: Option<&'static str>,
 }
 
 pub struct SettingsLayout {
@@ -312,6 +314,7 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
         label,
         label_rect: Rect::new(panel.x + p, row_y(i) + 8.0, SETTINGS_LABEL, 24.0),
         value,
+        hint: None,
     };
 
     let tabs_x = right - SettingsTab::ALL.len() as f32 * TAB_WIDTH;
@@ -356,7 +359,10 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
                 Control::OutputChoose,
                 shape.output_custom.then_some(Control::OutputReset),
             );
-            rows.push(row("Output folder", 0, Some(v)));
+            rows.push(SettingsRow {
+                hint: Some(crate::settings::START_EXPORTS_HINT),
+                ..row("Start exports in", 0, Some(v))
+            });
 
             for (k, t) in ThemeChoice::ALL.into_iter().enumerate() {
                 controls.push((
@@ -405,6 +411,7 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
                     label,
                     label_rect: Rect::new(lx, row_y(i) + 8.0, x - 8.0 - lx, 24.0),
                     value: None,
+                    hint: None,
                 });
             };
             let (c, r) = (&mut controls, &mut rows);
@@ -760,8 +767,13 @@ mod tests {
         let labels: Vec<_> = general.rows.iter().map(|r| r.label).collect();
         assert_eq!(
             labels,
-            ["Output folder", "Theme", "Wheel keys", "Suggestions"]
+            ["Start exports in", "Theme", "Wheel keys", "Suggestions"]
         );
+        assert_eq!(
+            general.rows[0].hint,
+            Some("Unset: the last folder you exported to, or the file's own folder.")
+        );
+        assert!(general.rows[1..].iter().all(|r| r.hint.is_none()));
         assert_eq!(general.controls.len(), 3 + 1 + 3 + 3 + 2 + 1 + 1 + 1);
         assert_eq!(general.controls[0].0, Control::Tab(SettingsTab::General));
         let keys = general

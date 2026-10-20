@@ -22,6 +22,9 @@ pub enum JobState {
     Done {
         action: Action,
         outputs: Vec<PathBuf>,
+        /// The folder the results were exported to. `None` means they are
+        /// still held in Kiln's private folder.
+        saved: Option<PathBuf>,
     },
     Failed {
         message: String,
@@ -137,6 +140,127 @@ pub fn batch_summary(
     s
 }
 
+/// A held result that someone removed by hand.
+pub const GONE: &str = "The result is no longer there. Convert it again.";
+
+/// Footer after a batch that left `held` result files to export:
+/// "Converted 3 files to JPG. Export to keep them." With nothing held,
+/// the summary stands as it is.
+pub fn with_export_hint(summary: String, held: usize) -> String {
+    match held {
+        0 => summary,
+        1 => format!("{summary} Export to keep it."),
+        _ => format!("{summary} Export to keep them."),
+    }
+}
+
+/// The footer button: "Export all (3)".
+pub fn export_all_label(held: usize) -> String {
+    format!("Export all ({held})")
+}
+
+/// A row's line when exporting to `folder` failed.
+pub fn save_failed_line(folder: &Path) -> String {
+    format!(
+        "Couldn't save to {}. Pick another folder.",
+        folder.display()
+    )
+}
+
+/// The footer after exporting `total` files, `saved` of which went through.
+pub fn export_summary(saved: usize, total: usize) -> String {
+    let n = |k: usize| format!("{k} file{}", if k == 1 { "" } else { "s" });
+    if saved == total {
+        format!("Saved {}.", n(saved))
+    } else {
+        format!(
+            "Saved {saved} of {total}. {} couldn't be saved.",
+            total - saved
+        )
+    }
+}
+
+/// What the user is leaving by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Leave {
+    Close,
+    Clear,
+    Remove,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptButton {
+    ExportAll,
+    /// Throw the held results away. Also stops any running jobs.
+    Discard,
+    /// Stop the running jobs and go ahead.
+    Stop(Leave),
+    Cancel,
+}
+
+impl PromptButton {
+    pub fn label(self) -> &'static str {
+        match self {
+            PromptButton::ExportAll => "Export all",
+            PromptButton::Discard => "Discard",
+            PromptButton::Stop(Leave::Close) => "Stop and close",
+            PromptButton::Stop(Leave::Clear) => "Stop and clear",
+            PromptButton::Stop(Leave::Remove) => "Stop and remove",
+            PromptButton::Cancel => "Cancel",
+        }
+    }
+}
+
+/// The question asked before closing, clearing or removing a row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Prompt {
+    pub title: String,
+    pub buttons: Vec<PromptButton>,
+}
+
+/// What to ask before `verb` loses `held` unexported results or stops
+/// `running` jobs. `None` when nothing is at stake.
+pub fn leave_prompt(held: usize, running: usize, verb: Leave) -> Option<Prompt> {
+    let mut sentences = vec![];
+    if held > 0 {
+        sentences.push(match held {
+            1 => "1 result isn't saved yet.".to_owned(),
+            n => format!("{n} results aren't saved yet."),
+        });
+    }
+    if running > 0 {
+        sentences.push(match running {
+            1 => "1 file is still converting.".to_owned(),
+            n => format!("{n} files are still converting."),
+        });
+    }
+    if sentences.is_empty() {
+        return None;
+    }
+    let buttons = if held > 0 {
+        vec![
+            PromptButton::ExportAll,
+            PromptButton::Discard,
+            PromptButton::Cancel,
+        ]
+    } else {
+        vec![PromptButton::Stop(verb), PromptButton::Cancel]
+    };
+    Some(Prompt {
+        title: sentences.join(" "),
+        buttons,
+    })
+}
+
+/// Where an export dialog opens: the last folder exported to in this run,
+/// else the Start exports in setting, else the source's own folder.
+pub fn export_start(last: Option<&Path>, setting: Option<&Path>, source: &Path) -> PathBuf {
+    last.or(setting)
+        .map(Path::to_path_buf)
+        .or_else(|| source.parent().map(Path::to_path_buf))
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entry {
     pub path: PathBuf,
@@ -172,6 +296,13 @@ impl Entry {
                 ),
                 Tone::Result,
             ),
+            JobState::Done {
+                saved: Some(folder),
+                ..
+            } => (
+                format!("Saved to {}.", crate::actions::folder_name(folder)),
+                Tone::Result,
+            ),
             JobState::Done { outputs, .. } => {
                 let first = outputs
                     .first()
@@ -183,10 +314,43 @@ impl Entry {
                     2 => " and 1 more".to_owned(),
                     k => format!(" and {} more", k - 1),
                 };
-                (format!("{first}{more}"), Tone::Result)
+                (format!("Ready: {first}{more}"), Tone::Result)
             }
             JobState::Failed { message, .. } => (message.clone(), Tone::Crack),
             JobState::Cancelled => ("Cancelled.".to_owned(), Tone::Muted),
+        }
+    }
+
+    /// The results this row holds, if it holds any: a finished job that
+    /// hasn't been exported. The Move file action's row isn't one.
+    pub fn held(&self) -> Option<&[PathBuf]> {
+        match &self.job {
+            JobState::Done {
+                action: Action::File(_),
+                ..
+            } => None,
+            JobState::Done {
+                outputs,
+                saved: None,
+                ..
+            } => Some(outputs),
+            _ => None,
+        }
+    }
+
+    /// True when the row holds results and any of them is no longer
+    /// there. `exists` says whether a path is still on disk.
+    pub fn is_gone(&self, exists: impl Fn(&Path) -> bool) -> bool {
+        self.held()
+            .is_some_and(|outputs| outputs.iter().any(|p| !exists(p)))
+    }
+
+    /// [`Entry::line`], except a held result that has gone says so.
+    pub fn line_checked(&self, exists: impl Fn(&Path) -> bool) -> (String, Tone) {
+        if self.is_gone(exists) {
+            (GONE.to_owned(), Tone::Crack)
+        } else {
+            self.line()
         }
     }
 
@@ -354,6 +518,24 @@ impl FileList {
             Some(i.min(self.entries.len() - 1))
         };
         Some(removed)
+    }
+
+    /// The held results by row index: finished jobs not yet exported.
+    pub fn held(&self) -> Vec<(usize, Vec<PathBuf>)> {
+        self.entries
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| Some((i, e.held()?.to_vec())))
+            .collect()
+    }
+
+    /// How many result files are held (not rows: a split counts its parts).
+    pub fn held_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter_map(Entry::held)
+            .map(<[PathBuf]>::len)
+            .sum()
     }
 
     pub fn entries_mut(&mut self) -> &mut [Entry] {
@@ -642,13 +824,15 @@ mod tests {
         e.job = JobState::Done {
             action: jpg,
             outputs: vec![dir.path().join("a.jpg")],
+            saved: None,
         };
-        assert_eq!(e.line(), ("a.jpg".to_owned(), Tone::Result));
+        assert_eq!(e.line(), ("Ready: a.jpg".to_owned(), Tone::Result));
         e.job = JobState::Done {
             action: Action::Tool(Tool::Split),
             outputs: vec!["a part 1.wav".into(), "a part 2.wav".into()],
+            saved: None,
         };
-        assert_eq!(e.line().0, "a part 1.wav and 1 more");
+        assert_eq!(e.line().0, "Ready: a part 1.wav and 1 more");
         e.job = JobState::Failed {
             message: "FFmpeg isn't installed. Get it from Settings > Engines.".into(),
             details: String::new(),
@@ -880,6 +1064,222 @@ mod tests {
         list.forget_facts();
         assert_eq!(list.facts_for(&listed), None);
         assert!(list.entries().iter().all(|e| e.facts_at.is_none()));
+    }
+
+    fn held_row(name: &str, outputs: &[&str], saved: Option<&str>) -> Entry {
+        let mut e = row(name);
+        e.job = JobState::Done {
+            action: Action::Convert("jpg".into()),
+            outputs: outputs.iter().map(PathBuf::from).collect(),
+            saved: saved.map(PathBuf::from),
+        };
+        e
+    }
+
+    #[test]
+    fn held_rows_say_ready() {
+        let e = held_row("a.png", &["held/photo.jpg"], None);
+        assert_eq!(e.line(), ("Ready: photo.jpg".to_owned(), Tone::Result));
+        let e = held_row("a.pdf", &["p 1.png", "p 2.png"], None);
+        assert_eq!(e.line().0, "Ready: p 1.png and 1 more");
+        let e = held_row("a.pdf", &["p 1.png", "p 2.png", "p 3.png"], None);
+        assert_eq!(e.line().0, "Ready: p 1.png and 2 more");
+    }
+
+    #[test]
+    fn saved_rows_name_the_folder() {
+        let e = held_row("a.png", &["held/photo.jpg"], Some(r"C:\Users\me\Pictures"));
+        assert_eq!(e.line(), ("Saved to Pictures.".to_owned(), Tone::Result));
+        let e = held_row("a.png", &["held/photo.jpg"], Some(r"D:\"));
+        assert_eq!(e.line().0, r"Saved to D:\.");
+    }
+
+    #[test]
+    fn a_missing_held_result_is_gone() {
+        let held = held_row("a.png", &["held/photo.jpg"], None);
+        assert!(held.is_gone(|_| false));
+        assert!(!held.is_gone(|_| true));
+        assert_eq!(
+            held.line_checked(|_| false),
+            (
+                "The result is no longer there. Convert it again.".to_owned(),
+                Tone::Crack
+            )
+        );
+        assert_eq!(held.line_checked(|_| true), held.line());
+        // One missing part of several is enough.
+        let many = held_row("a.pdf", &["p 1.png", "p 2.png"], None);
+        assert!(many.is_gone(|p| !p.ends_with("p 1.png")));
+        // Saved results are somewhere the user put them, not ours to check.
+        let saved = held_row("a.png", &["held/photo.jpg"], Some("Pictures"));
+        assert!(!saved.is_gone(|_| false));
+        // The Move action's row isn't a held result.
+        let mut moved = row("a.png");
+        moved.job = JobState::Done {
+            action: Action::File(FileAction::Move),
+            outputs: vec!["Pictures/a.png".into()],
+            saved: None,
+        };
+        assert!(!moved.is_gone(|_| false));
+        assert_eq!(moved.line_checked(|_| false), moved.line());
+    }
+
+    #[test]
+    fn held_counts_files_not_rows() {
+        let mut moved = row("m.png");
+        moved.job = JobState::Done {
+            action: Action::File(FileAction::Move),
+            outputs: vec!["Pictures/m.png".into()],
+            saved: None,
+        };
+        let list = FileList {
+            entries: vec![
+                held_row("a.png", &["a.jpg"], None),
+                row("idle.png"),
+                held_row("b.pdf", &["p 1.png", "p 2.png", "p 3.png"], None),
+                held_row("c.png", &["c.jpg"], Some("Pictures")),
+                moved,
+            ],
+            selected: None,
+        };
+        assert_eq!(
+            list.held(),
+            vec![
+                (0, vec![PathBuf::from("a.jpg")]),
+                (
+                    2,
+                    vec![
+                        PathBuf::from("p 1.png"),
+                        PathBuf::from("p 2.png"),
+                        PathBuf::from("p 3.png")
+                    ]
+                ),
+            ]
+        );
+        assert_eq!(list.held_count(), 4);
+        assert_eq!(FileList::default().held_count(), 0);
+        assert!(FileList::default().held().is_empty());
+    }
+
+    #[test]
+    fn the_footer_points_at_export() {
+        let jpg = Action::Convert("jpg".into());
+        let s = batch_summary(&jpg, 3, 3, 0, 0);
+        assert_eq!(
+            with_export_hint(s.clone(), 3),
+            "Converted 3 files to JPG. Export to keep them."
+        );
+        assert_eq!(
+            with_export_hint(batch_summary(&jpg, 1, 1, 0, 0), 1),
+            "Converted 1 file to JPG. Export to keep it."
+        );
+        // Nothing held, nothing to export.
+        assert_eq!(with_export_hint(s, 0), "Converted 3 files to JPG.");
+    }
+
+    #[test]
+    fn export_copy_is_plain() {
+        assert_eq!(export_all_label(3), "Export all (3)");
+        assert_eq!(
+            save_failed_line(Path::new(r"D:\Locked")),
+            r"Couldn't save to D:\Locked. Pick another folder."
+        );
+        assert_eq!(export_summary(5, 5), "Saved 5 files.");
+        assert_eq!(export_summary(1, 1), "Saved 1 file.");
+        assert_eq!(export_summary(4, 5), "Saved 4 of 5. 1 couldn't be saved.");
+        assert_eq!(export_summary(0, 2), "Saved 0 of 2. 2 couldn't be saved.");
+    }
+
+    fn prompt(held: usize, running: usize, verb: Leave) -> Option<(String, Vec<PromptButton>)> {
+        leave_prompt(held, running, verb).map(|p| (p.title, p.buttons))
+    }
+
+    #[test]
+    fn nothing_to_lose_means_no_prompt() {
+        for verb in [Leave::Close, Leave::Clear, Leave::Remove] {
+            assert_eq!(leave_prompt(0, 0, verb), None);
+        }
+    }
+
+    #[test]
+    fn held_results_ask_export_discard_or_cancel() {
+        let keep = vec![
+            PromptButton::ExportAll,
+            PromptButton::Discard,
+            PromptButton::Cancel,
+        ];
+        for verb in [Leave::Close, Leave::Clear, Leave::Remove] {
+            assert_eq!(
+                prompt(3, 0, verb),
+                Some(("3 results aren't saved yet.".to_owned(), keep.clone()))
+            );
+            assert_eq!(
+                prompt(1, 0, verb),
+                Some(("1 result isn't saved yet.".to_owned(), keep.clone()))
+            );
+        }
+    }
+
+    #[test]
+    fn running_jobs_ask_to_stop() {
+        for (verb, label) in [
+            (Leave::Close, "Stop and close"),
+            (Leave::Clear, "Stop and clear"),
+            (Leave::Remove, "Stop and remove"),
+        ] {
+            let (title, buttons) = prompt(0, 2, verb).unwrap();
+            assert_eq!(title, "2 files are still converting.");
+            assert_eq!(buttons, [PromptButton::Stop(verb), PromptButton::Cancel]);
+            assert_eq!(buttons[0].label(), label);
+            assert_eq!(prompt(0, 1, verb).unwrap().0, "1 file is still converting.");
+        }
+    }
+
+    #[test]
+    fn both_at_once_is_one_prompt() {
+        for verb in [Leave::Close, Leave::Clear, Leave::Remove] {
+            assert_eq!(
+                prompt(3, 2, verb),
+                Some((
+                    "3 results aren't saved yet. 2 files are still converting.".to_owned(),
+                    vec![
+                        PromptButton::ExportAll,
+                        PromptButton::Discard,
+                        PromptButton::Cancel
+                    ]
+                ))
+            );
+        }
+        assert_eq!(
+            prompt(1, 1, Leave::Close).unwrap().0,
+            "1 result isn't saved yet. 1 file is still converting."
+        );
+    }
+
+    #[test]
+    fn prompt_buttons_are_labelled_in_sentence_case() {
+        let labels: Vec<_> = [
+            PromptButton::ExportAll,
+            PromptButton::Discard,
+            PromptButton::Cancel,
+        ]
+        .iter()
+        .map(|b| b.label())
+        .collect();
+        assert_eq!(labels, ["Export all", "Discard", "Cancel"]);
+    }
+
+    #[test]
+    fn exports_start_where_the_user_was() {
+        let last = Path::new(r"C:\Exports");
+        let setting = Path::new(r"C:\Converted");
+        let source = Path::new(r"C:\photos\a.png");
+        assert_eq!(export_start(Some(last), Some(setting), source), last);
+        assert_eq!(export_start(None, Some(setting), source), setting);
+        assert_eq!(
+            export_start(None, None, source),
+            PathBuf::from(r"C:\photos")
+        );
     }
 
     #[test]

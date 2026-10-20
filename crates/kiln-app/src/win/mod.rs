@@ -1133,6 +1133,7 @@ impl App {
                     Ok(outputs) => JobState::Done {
                         action: job.action.clone(),
                         outputs: outputs.clone(),
+                        saved: None,
                     },
                     Err(e) if e.cancelled => JobState::Cancelled,
                     Err(e) => JobState::Failed {
@@ -1262,6 +1263,7 @@ impl App {
                     JobState::Done {
                         action: Action::File(FileAction::Move),
                         outputs: vec![new],
+                        saved: None,
                     }
                 }
                 Err(message) => {
