@@ -6,6 +6,7 @@ mod inspect;
 mod render;
 mod system;
 mod text;
+mod tips;
 mod updates;
 
 use std::cell::OnceCell;
@@ -37,6 +38,7 @@ use kiln_core::{
 };
 
 use crate::actions::{self, FileAction};
+use crate::help::{self, HelpSection};
 use crate::layout::{
     self, Control, DialogButton, SettingsLayout, SettingsShape, SettingsTab, SheetControl,
     SheetLayout, TextScroll, ROW_HEIGHT,
@@ -52,9 +54,17 @@ use crate::ways_in::{self, MenuItem, RowState};
 use crate::wheel::{self, Action, Spot, Wheel, WheelKind};
 use drop::{DragEvent, DropTarget, DRAG_ENTER, DRAG_LEAVE, DRAG_OVER, WM_KILN_DRAG, WM_KILN_DROP};
 use inspect::Inspector;
-use render::{DetailsView, Renderer, RowAnim, SettingsView, SheetView, View, WheelView};
+use render::{DetailsView, HelpView, Renderer, RowAnim, SettingsView, SheetView, View, WheelView};
+use tips::Tips;
 
 const ANIM_TIMER: usize = 1;
+/// Tooltip ids. Rows take three each from `TIP_ROWS`: the row itself, its
+/// cancel cross and its Export link.
+const TIP_SETTINGS: usize = 1;
+const TIP_HELP: usize = 2;
+const TIP_ADD: usize = 3;
+const TIP_EXPORT_ALL: usize = 4;
+const TIP_ROWS: usize = 100;
 /// Fires once, when "Added 2 files." has been up long enough for the
 /// footer's idle hint to take its place.
 const HINT_TIMER: usize = 2;
@@ -189,6 +199,8 @@ struct WheelUi {
     /// When the suggestion arrived while the wheel was open, so its dot
     /// fades in. `None` shows it fully.
     dot_at: Option<Instant>,
+    /// Whether the pointer is on the centre's "Options… (Tab)".
+    options_hover: bool,
 }
 
 impl WheelUi {
@@ -379,6 +391,17 @@ struct DetailsUi {
     last_copy: Option<(bool, Instant)>,
 }
 
+/// The help overlay while it is open. Keys go to it, and its Close has
+/// the focus, until it closes.
+struct HelpUi {
+    sections: Vec<HelpSection>,
+    /// How far the text is scrolled, in DIPs from its top.
+    scroll: f32,
+    hover: bool,
+    /// Close went down under the pointer; it acts on release.
+    pressed: bool,
+}
+
 struct RowTimes {
     added: Instant,
     /// When the row's last job finished.
@@ -457,6 +480,11 @@ struct App {
     next_sheet: u64,
     /// The details dialog, while it's open.
     details: Option<DetailsUi>,
+    /// The help overlay, while it's open.
+    help: Option<HelpUi>,
+    help_hover: bool,
+    /// The native tooltips over the drawn controls, if Windows made them.
+    tips: Option<Tips>,
     status: String,
     clear_hover: bool,
     clear_pressed: bool,
@@ -1551,6 +1579,7 @@ impl App {
             keyboard,
             suggestion,
             dot_at: None,
+            options_hover: false,
         });
         self.animate();
     }
@@ -1747,14 +1776,37 @@ impl App {
         self.animate();
     }
 
-    /// Point the open wheel at whatever is under `(x, y)`.
+    /// Point the open wheel at whatever is under `(x, y)`. Outside a drag,
+    /// the centre leaves lit what was lit, so the pointer can reach its
+    /// "Options… (Tab)". A drop on the centre still chooses nothing.
     fn wheel_point(&mut self, x: f32, y: f32) {
+        let dragging = !self.drag_paths.is_empty();
         if let Some(w) = self.wheel.as_mut().filter(|w| w.is_open()) {
+            if !dragging && wheel::on_centre(&w.wheel, x, y) {
+                let hot = wheel::on_options(&w.wheel, x, y);
+                if w.options_hover != hot {
+                    w.options_hover = hot;
+                    self.invalidate();
+                }
+                return;
+            }
+            let was = std::mem::take(&mut w.options_hover);
             let spot = wheel::hit(&w.wheel, x, y, w.more_open());
-            if w.point(spot) {
+            if w.point(spot) || was {
                 self.animate();
             }
         }
+    }
+
+    /// Whether the open wheel's centre shows "Options… (Tab)": the lit
+    /// target has options, and no drag is under way. `Some(true)` while
+    /// the pointer is on it.
+    fn wheel_options(&self) -> Option<bool> {
+        let w = self.wheel.as_ref().filter(|w| w.is_open())?;
+        if !self.drag_paths.is_empty() {
+            return None;
+        }
+        self.sheet_target(w.hover).map(|_| w.options_hover)
     }
 
     /// The convert target at `spot`, if the options sheet has anything to
@@ -1837,6 +1889,7 @@ impl App {
                 .map(|(s, t)| (s, t.elapsed().as_secs_f32() * 1000.0 / PULSE_MS as f32)),
             marks: w.marks(),
             dot: w.dot_at.map_or(1.0, |t| eased(t, FACTS_MS)),
+            options: None,
         })
     }
 
@@ -2457,6 +2510,60 @@ impl App {
         (output, status.each_ref().map(line), missing)
     }
 
+    /// Open help, unless a panel or dialog is up. An open wheel closes.
+    fn open_help(&mut self) {
+        if self.sheet.is_some() || self.settings_ui.is_some() || self.details.is_some() {
+            return;
+        }
+        self.close_wheel();
+        self.help = Some(HelpUi {
+            sections: help::help_content(&self.settings.keys),
+            scroll: 0.0,
+            hover: false,
+            pressed: false,
+        });
+        self.help_hover = false;
+        self.settings_hover = false;
+        self.invalidate();
+    }
+
+    /// Scroll help's text, kept inside the text.
+    fn scroll_help(&mut self, by: TextScroll) {
+        let (w, h) = self.renderer.size_dips();
+        let body = layout::help(w, h).body;
+        let Some(ui) = &self.help else {
+            return;
+        };
+        let content = self.renderer.help_height(&ui.sections, body.w);
+        let to = layout::scroll_text(by, ui.scroll, content, body.h);
+        if let Some(ui) = self.help.as_mut().filter(|ui| ui.scroll != to) {
+            ui.scroll = to;
+            self.invalidate();
+        }
+    }
+
+    /// Keys while help is open: Escape, Enter and Space close it, as its
+    /// focused Close does. The arrows, Page Up, Page Down, Home and End
+    /// scroll it. Every other key stays with it.
+    fn help_key(&mut self, key: VIRTUAL_KEY) {
+        let scroll = match key {
+            VK_UP => Some(TextScroll::LineUp),
+            VK_DOWN => Some(TextScroll::LineDown),
+            VK_PRIOR => Some(TextScroll::PageUp),
+            VK_NEXT => Some(TextScroll::PageDown),
+            VK_HOME => Some(TextScroll::Home),
+            VK_END => Some(TextScroll::End),
+            _ => None,
+        };
+        if let Some(by) = scroll {
+            return self.scroll_help(by);
+        }
+        if matches!(key, VK_ESCAPE | VK_RETURN | VK_SPACE) {
+            self.help = None;
+            self.invalidate();
+        }
+    }
+
     fn open_settings(&mut self) {
         self.close_wheel();
         let (output_line, engine_lines, engine_missing) = self.settings_lines();
@@ -2878,6 +2985,15 @@ impl App {
             }
             return;
         }
+        if self.help.is_some() {
+            let (w, h) = self.renderer.size_dips();
+            let hot = layout::help(w, h).close.contains(x, y);
+            if let Some(ui) = self.help.as_mut().filter(|ui| ui.hover != hot) {
+                ui.hover = hot;
+                self.invalidate();
+            }
+            return;
+        }
         if self.wheel.is_some() {
             self.wheel_point(x, y);
             return;
@@ -2898,6 +3014,11 @@ impl App {
         let gear = l.settings_button.contains(x, y);
         if gear != self.settings_hover {
             self.settings_hover = gear;
+            self.invalidate();
+        }
+        let ask = l.help_button.contains(x, y);
+        if ask != self.help_hover {
+            self.help_hover = ask;
             self.invalidate();
         }
         if (row, cancel, link, clear)
@@ -2925,8 +3046,20 @@ impl App {
         let setting = self.settings_pressed.take();
         let dialog = self.details.as_mut().and_then(|d| d.pressed.take());
         let sheet = self.sheet.as_mut().and_then(|s| s.pressed.take());
+        let help_close = self
+            .help
+            .as_mut()
+            .is_some_and(|ui| std::mem::take(&mut ui.pressed));
         unsafe {
             let _ = ReleaseCapture();
+        }
+        if help_close {
+            let (w, h) = self.renderer.size_dips();
+            if layout::help(w, h).close.contains(x, y) {
+                self.help = None;
+            }
+            self.invalidate();
+            return;
         }
         if let Some(i) = sheet {
             if let (Some(l), true) = (self.sheet_layout(), self.sheet_hit(x, y) == Some(i)) {
@@ -3004,7 +3137,29 @@ impl App {
             self.invalidate();
             return;
         }
+        if self.help.is_some() {
+            let (w, h) = self.renderer.size_dips();
+            let d = layout::help(w, h);
+            if d.close.contains(x, y) {
+                if let Some(ui) = &mut self.help {
+                    ui.pressed = true;
+                }
+                unsafe { SetCapture(self.hwnd) };
+            } else if !d.panel.contains(x, y) {
+                // A click on the scrim closes help.
+                self.help = None;
+            }
+            self.invalidate();
+            return;
+        }
         if let Some(w) = &self.wheel {
+            // "Options… (Tab)" in the centre opens the lit target's sheet.
+            let options = w.is_open() && wheel::on_options(&w.wheel, x, y);
+            if options && self.wheel_options().is_some() {
+                let hover = w.hover;
+                self.open_sheet(hover);
+                return;
+            }
             if w.is_open() {
                 match wheel::hit(&w.wheel, x, y, w.more_open()) {
                     Some(spot) => self.choose(spot),
@@ -3019,6 +3174,8 @@ impl App {
         let l = self.layout();
         if l.settings_button.contains(x, y) {
             self.open_settings();
+        } else if l.help_button.contains(x, y) {
+            self.open_help();
         } else if l.clear_button.is_some_and(|b| b.contains(x, y)) {
             self.clear_pressed = true;
             unsafe { SetCapture(self.hwnd) };
@@ -3064,8 +3221,17 @@ impl App {
             self.details_key(key, ctrl);
             return true;
         }
+        if self.help.is_some() {
+            self.help_key(key);
+            return true;
+        }
         // A fading wheel no longer takes keys; a pulsing one is busy.
         if self.wheel.as_ref().is_some_and(|w| w.pulse.is_some()) {
+            return true;
+        }
+        // F1 opens help from the list or a wheel.
+        if key == VK_F1 {
+            self.open_help();
             return true;
         }
         if self.wheel.as_ref().is_some_and(|w| w.is_open()) {
@@ -3159,7 +3325,11 @@ impl App {
     /// (Shift convert, Ctrl tools, Alt actions, unless settings say
     /// otherwise); letting go of the key lets it fade.
     fn drag_over(&mut self, ev: &DragEvent) {
-        if self.settings_ui.is_some() || self.details.is_some() || self.sheet.is_some() {
+        if self.settings_ui.is_some()
+            || self.details.is_some()
+            || self.sheet.is_some()
+            || self.help.is_some()
+        {
             return;
         }
         let at = self.screen_dips(ev.x, ev.y);
@@ -3301,7 +3471,10 @@ impl App {
             add_pressed: self.add_pressed,
             clear_hover: self.clear_hover,
             clear_pressed: self.clear_pressed,
-            wheel: Self::wheel_view(self.wheel.as_ref(), &self.settings.keys),
+            wheel: Self::wheel_view(self.wheel.as_ref(), &self.settings.keys).map(|wv| WheelView {
+                options: self.wheel_options(),
+                ..wv
+            }),
             details: self.details.as_ref().map(|d| DetailsView {
                 title: &d.title,
                 text: &d.text,
@@ -3312,6 +3485,13 @@ impl App {
                 pressed: d.pressed,
             }),
             settings_hover: self.settings_hover,
+            help_hover: self.help_hover,
+            help: self.help.as_ref().map(|ui| HelpView {
+                sections: &ui.sections,
+                scroll: ui.scroll,
+                close_hover: ui.hover,
+                close_pressed: ui.pressed,
+            }),
             sheet: match (&self.sheet, &sheet_layout, &sheet_lines) {
                 (Some(s), Some(l), Some((title, target, context, result))) => Some(SheetView {
                     layout: l,
@@ -3354,6 +3534,98 @@ impl App {
         };
         if let Err(e) = self.renderer.draw(&view) {
             log(&format!("draw failed: {e}"));
+        }
+        let tools = self.tip_tools();
+        let dpi = self.dpi;
+        if let Some(t) = &mut self.tips {
+            t.sync(&tools, dpi);
+        }
+    }
+
+    // Tooltips.
+
+    /// The line row `i` shows: a note standing in for it, "Saving…", or
+    /// its own.
+    fn shown_line(&self, i: usize) -> Option<String> {
+        let e = self.files.entries().get(i)?;
+        Some(if self.row_saving(i) {
+            model::SAVING.to_owned()
+        } else {
+            self.notes
+                .get(&e.path)
+                .map_or_else(|| e.line().0, |(line, _)| line.clone())
+        })
+    }
+
+    /// Every tooltip's id and rectangle as the window is now. None while
+    /// a wheel, panel or dialog is up.
+    fn tip_tools(&self) -> Vec<(usize, layout::Rect)> {
+        if self.wheel.is_some()
+            || self.sheet.is_some()
+            || self.settings_ui.is_some()
+            || self.details.is_some()
+            || self.help.is_some()
+        {
+            return vec![];
+        }
+        let l = self.layout();
+        let mut tools = vec![(TIP_SETTINGS, l.settings_button), (TIP_HELP, l.help_button)];
+        tools.extend(self.add_button().map(|b| (TIP_ADD, b)));
+        tools.extend(self.export_button().map(|b| (TIP_EXPORT_ALL, b)));
+        // Rows, cut to the part of the list that shows.
+        let panel = l.panel;
+        let clip = |r: layout::Rect| {
+            let top = r.y.max(panel.y);
+            let bottom = r.bottom().min(panel.bottom());
+            layout::Rect::new(r.x, top, r.w, (bottom - top).max(0.0))
+        };
+        let first = (self.scroll / ROW_HEIGHT).floor().max(0.0) as usize;
+        let visible = (panel.h / ROW_HEIGHT).ceil() as usize + 1;
+        for i in first..(first + visible).min(self.files.len()) {
+            let (Some(r), Some(line)) = (self.row_rect(i), self.shown_line(i)) else {
+                continue;
+            };
+            let e = &self.files.entries()[i];
+            let saving = self.row_saving(i);
+            let (area, _) = self.renderer.row_tip(&r, e, &line, saving);
+            let id = TIP_ROWS + 3 * i;
+            tools.push((id, clip(area)));
+            if matches!(e.job, JobState::Running { .. }) {
+                tools.push((id + 1, clip(layout::row_cancel(&r))));
+            }
+            if !saving && e.link(self.renderer.line_cut(&r, e)) == Some("Export") {
+                tools.push((id + 2, clip(layout::row_link(&r))));
+            }
+        }
+        tools
+    }
+
+    /// What tooltip `id` says, worked out as it shows.
+    fn tip_text(&self, id: usize) -> String {
+        match id {
+            TIP_SETTINGS => help::SETTINGS_TIP.to_owned(),
+            TIP_HELP => help::HELP_TIP.to_owned(),
+            TIP_ADD => help::ADD_FILES_TIP.to_owned(),
+            TIP_EXPORT_ALL => help::EXPORT_ALL_TIP.to_owned(),
+            _ if id >= TIP_ROWS => {
+                let (i, part) = ((id - TIP_ROWS) / 3, (id - TIP_ROWS) % 3);
+                match part {
+                    1 => help::CANCEL_TIP.to_owned(),
+                    2 => help::EXPORT_TIP.to_owned(),
+                    _ => {
+                        let (Some(r), Some(line), Some(e)) = (
+                            self.row_rect(i),
+                            self.shown_line(i),
+                            self.files.entries().get(i),
+                        ) else {
+                            return String::new();
+                        };
+                        let (_, cut) = self.renderer.row_tip(&r, e, &line, self.row_saving(i));
+                        e.tooltip(&line, cut)
+                    }
+                }
+            }
+            _ => String::new(),
         }
     }
 }
@@ -3554,6 +3826,9 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         sheet: None,
         next_sheet: 1,
         details: None,
+        help: None,
+        help_hover: false,
+        tips: None,
         status: String::new(),
         clear_hover: false,
         clear_pressed: false,
@@ -3580,6 +3855,8 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
     });
     let app = Box::into_raw(app);
     unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, app as isize) };
+    // The tooltip control is the window's own, and goes with it.
+    unsafe { (*app).tips = Tips::new(hwnd, instance, dpi) };
 
     // Size the window for its monitor's scale, centred where Windows put it.
     resize_for_dpi(hwnd, dpi);
@@ -3755,6 +4032,9 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
         WM_DPICHANGED => {
             app.dpi = (wparam.0 & 0xFFFF) as f32;
             app.renderer.set_dpi(app.dpi);
+            if let Some(t) = &app.tips {
+                t.set_dpi(app.dpi);
+            }
             let r = unsafe { &*(lparam.0 as *const RECT) };
             unsafe {
                 let _ = SetWindowPos(
@@ -3837,9 +4117,19 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             }
             Some(LRESULT(0))
         }
+        // A tooltip about to show asks what to say.
+        WM_NOTIFY => {
+            let id = app.tips.as_ref()?.asking(lparam)?;
+            let text = app.tip_text(id);
+            if let Some(t) = &mut app.tips {
+                t.answer(lparam, &text);
+            }
+            Some(LRESULT(0))
+        }
         WM_MOUSELEAVE => {
             app.tracking_mouse = false;
             app.last_mouse = None;
+            app.help_hover = false;
             app.hover_row = None;
             app.hover_cancel = false;
             app.hover_link = false;
@@ -3888,6 +4178,8 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
                 // In proportion, as the list scrolls: a precise touchpad
                 // sends many small steps of less than a notch.
                 app.scroll_details(TextScroll::Wheel(raw as f32 / WHEEL_DELTA as f32));
+            } else if app.help.is_some() {
+                app.scroll_help(TextScroll::Wheel(raw as f32 / WHEEL_DELTA as f32));
             } else if app.wheel.is_none() && app.sheet.is_none() {
                 let delta = raw as f32 / WHEEL_DELTA as f32;
                 app.scroll -= delta * ROW_HEIGHT;
@@ -3914,6 +4206,7 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
                 || app.details.is_some()
                 || app.settings_ui.is_some()
                 || app.sheet.is_some()
+                || app.help.is_some()
             {
                 return Some(LRESULT(0));
             }

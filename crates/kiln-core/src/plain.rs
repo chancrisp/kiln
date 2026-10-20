@@ -6,7 +6,7 @@ use std::path::Path;
 /// The Settings tab that lists the helper apps, as the missing-engine
 /// sentence names it. The app's tab label reads it from here too, so a
 /// rename changes both.
-pub const HELPER_APPS_TAB: &str = "Engines";
+pub const HELPER_APPS_TAB: &str = "Helper apps";
 
 /// A failure Kiln recognises in engine output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -367,19 +367,19 @@ mod tests {
         for (engine, want) in [
             (
                 "FFmpeg",
-                "Needs FFmpeg, which isn't installed. Settings > Engines says where to get it.",
+                "Needs FFmpeg, which isn't installed. Settings > Helper apps says where to get it.",
             ),
             (
                 "Pandoc",
-                "Needs Pandoc, which isn't installed. Settings > Engines says where to get it.",
+                "Needs Pandoc, which isn't installed. Settings > Helper apps says where to get it.",
             ),
             (
                 "LibreOffice",
-                "Needs LibreOffice, which isn't installed. Settings > Engines says where to get it.",
+                "Needs LibreOffice, which isn't installed. Settings > Helper apps says where to get it.",
             ),
             (
                 "Calibre",
-                "Needs Calibre, which isn't installed. Settings > Engines says where to get it.",
+                "Needs Calibre, which isn't installed. Settings > Helper apps says where to get it.",
             ),
         ] {
             assert_eq!(missing_engine(engine), want);

@@ -34,7 +34,8 @@ window between them as well.
 
 - [ ] Dropping files adds one row each, fading in over about 180 ms. Nothing bounces.
 - [ ] Format chips are monospace, uppercase and slightly tracked (PNG, MP4, DOCX).
-- [ ] Rows show the name in bone, then the folder, size and number of conversions in stone.
+- [ ] Rows show the name in bone, then in stone the number of conversions (or what the file is and the suggestion), the size, then the folder's last part.
+- [ ] Hovering a row shows a native tooltip: the whole line when the row cuts it short, then the full folder path on its own line. The cancel cross says "Cancel" and a held row's Export link says "Export (Ctrl+S)".
 - [ ] A file with no conversions says "No conversions for this type".
 - [ ] Dropping the same file twice reports it as already in the list. Dropping a folder reports it as skipped.
 - [ ] Hover tints a row; every selected row has the 18% celadon fill, clipped to the panel's rounded corners.
@@ -63,6 +64,7 @@ window between them as well.
 - [ ] A single-item wheel lights the whole ring as one smooth circle.
 - [ ] Letting go of the key mid-drag, or pressing Escape, fades the wheel out over about 120 ms.
 - [ ] Dropping on an item pulses it once, then the job starts and the wheel fades. Dropping on the centre just adds the files.
+- [ ] With a target that has options lit (opened from a row, not mid-drag), the centre shows an underlined "Options… (Tab)" in place of the key. Moving the pointer onto it keeps the target lit, it brightens under the pointer, and a click opens the options sheet, as Tab does.
 - [ ] Enter on a row opens the convert wheel and Ctrl+Enter the tools wheel. A wheel chosen from the right-click menu opens over the row. Arrows move round it, Enter applies, Escape closes.
 - [ ] Tools offered match the file: Merge appears only for two or more files of one type, Crop never for audio.
 - [ ] Office types use their own icons in the convert wheel: a page for DOC, DOCX, ODT, RTF and PDF, a sheet for XLSX, XLS, ODS and CSV, and a screen on a stand for PPTX, PPT and ODP.
@@ -72,7 +74,7 @@ window between them as well.
 - [ ] A running row shows "Converting to WEBM" and a thin celadon line along its bottom that brightens at its leading edge. The glow breathes slowly; nothing flickers. No spinners anywhere.
 - [ ] Hovering or selecting a running row shows a cross; clicking it cancels the job and the row says "Cancelled.".
 - [ ] When a job finishes, the output name appears in bone, fading in over about 200 ms.
-- [ ] A failed job shows one plain line in brick and, when the engine said more, a "Show details" link. Clicking it, or pressing Space on the row, opens the details over a scrim. Escape, Enter or Close dismisses it.
+- [ ] A failed job shows one plain line in brick and, when the helper app said more, a "Show details" link. Clicking it, or pressing Space on the row, opens the details over a scrim. Escape, Enter or Close dismisses it.
 - [ ] The footer sums up each batch calmly: "Converted 3 files to JPG.", "Couldn't convert the file to FLAC.". No exclamation marks.
 - [ ] Clear and Delete cancel running jobs first and leave no partial files behind.
 
@@ -96,9 +98,17 @@ window between them as well.
 - [ ] Every button, key button, theme segment and the dialog's Close show a soft inner shadow while held, and act only when released over them.
 - [ ] Check for updates says "Checking for updates…", then the result in one calm line beside the button. With no network it says "Couldn't reach GitHub.". When a newer version exists, the button reads "Get the update" and opens the releases page.
 - [ ] Output folder: Choose picks a folder and results go there; Reset goes back to "Next to each file".
-- [ ] Wheel keys: pressing a key button moves that wheel to the next key and swaps with the wheel that had it. Dragging follows the new keys at once.
-- [ ] Engines shows "Found on PATH", "Not installed" or the chosen path for FFmpeg, Pandoc and LibreOffice. LibreOffice installed in Program Files shows its path without being chosen. Choose takes an .exe; jobs use it straight away.
+- [ ] Labels read "Sound quality", "Sharpness (DPI)" and "Keys to hold while dropping" (on two lines), and the tabs "General", "Quality" and "Helper apps". None is cut off at the smallest window size.
+- [ ] Keys to hold while dropping: pressing a key button moves that wheel to the next key and swaps with the wheel that had it. Dragging follows the new keys at once.
+- [ ] Helper apps shows "Found on PATH", "Not installed" or the chosen path for FFmpeg, Pandoc and LibreOffice. LibreOffice installed in Program Files shows its path without being chosen. Choose takes an .exe; jobs use it straight away.
 - [ ] Every change is saved to %APPDATA%\Kiln\settings.toml. A broken file starts Kiln with defaults and a footer line saying why.
+
+## Help and tooltips
+
+- [ ] The ? beside the dial, or F1, opens help over a scrim. F1 does nothing while Settings, an options sheet or the details dialog is up, and closes an open wheel.
+- [ ] Help lists the ways in, that nothing is saved until you export, and every shortcut, following the keys chosen in Settings. At the smallest window it scrolls with the wheel, arrows, Page Up, Page Down, Home and End, with a thin thumb.
+- [ ] Close has the focus ring. Escape, Enter, Close or a click on the scrim closes help.
+- [ ] Hovering the dial, the ?, Add files and Export all shows "Settings (Ctrl+,)", "Help (F1)", "Add files (Ctrl+O)" and "Export all (Ctrl+Shift+S)". No tooltips show while a wheel, panel or dialog is up. They are sized right after moving to a monitor with another scale.
 
 ## Themes
 

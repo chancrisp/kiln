@@ -408,7 +408,7 @@ mod tests {
         let e = JobError::new(Error::EngineMissing { engine: "Pandoc" }, &none());
         assert_eq!(
             e.message,
-            "Needs Pandoc, which isn't installed. Settings > Engines says where to get it."
+            "Needs Pandoc, which isn't installed. Settings > Helper apps says where to get it."
         );
         assert!(e.details.is_empty());
         assert_eq!(e.engine, None);

@@ -15,6 +15,12 @@ pub struct Text {
     pub lead_center: IDWriteTextFormat,
     pub body: IDWriteTextFormat,
     pub body_center: IDWriteTextFormat,
+    /// Body text that may take two lines, centred on its box's height.
+    pub body_wrap: IDWriteTextFormat,
+    /// Body text that wraps from the top of its box, for help.
+    pub body_block: IDWriteTextFormat,
+    /// Semi-bold body text, for help's headings.
+    pub heading: IDWriteTextFormat,
     pub caption: IDWriteTextFormat,
     pub caption_center: IDWriteTextFormat,
     /// Captions that may take two lines, centred on their box's height.
@@ -113,6 +119,26 @@ impl Text {
             )?,
             body: make(ui, None, DWRITE_FONT_WEIGHT_NORMAL, type_scale::BODY, false)?,
             body_center: make(ui, None, DWRITE_FONT_WEIGHT_NORMAL, type_scale::BODY, true)?,
+            body_wrap: {
+                let f = make(ui, None, DWRITE_FONT_WEIGHT_NORMAL, type_scale::BODY, false)?;
+                unsafe { f.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)? };
+                f
+            },
+            body_block: {
+                let f = make(ui, None, DWRITE_FONT_WEIGHT_NORMAL, type_scale::BODY, false)?;
+                unsafe {
+                    f.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
+                    f.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
+                }
+                f
+            },
+            heading: make(
+                ui,
+                None,
+                DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                type_scale::BODY,
+                false,
+            )?,
             caption: make(
                 ui,
                 None,

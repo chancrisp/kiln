@@ -17,6 +17,7 @@ use windows_numerics::{Matrix3x2, Vector2};
 
 use kiln_core::Preset;
 
+use crate::help::{self, HelpSection, Placed};
 use crate::icons::{self, Cmd, Icon, Style};
 use crate::layout::{
     self, Control, DialogButton, Layout, Rect, SettingsLayout, SettingsTab, SheetControl,
@@ -50,6 +51,9 @@ pub struct WheelView<'a> {
     /// 0 to 1: the dots' fade in, when the suggestion arrived while the
     /// wheel was open.
     pub dot: f32,
+    /// While the lit target has options: "Options… (Tab)" takes the key's
+    /// place in the centre, brighter (`true`) while the pointer is on it.
+    pub options: Option<bool>,
 }
 
 /// The suggestion's dot: a radius of 2 DIPs (4 across), 6 DIPs above the
@@ -132,8 +136,20 @@ pub struct View<'a> {
     /// The details dialog, while it's open.
     pub details: Option<DetailsView<'a>>,
     pub settings_hover: bool,
+    pub help_hover: bool,
     pub settings: Option<SettingsView<'a>>,
     pub sheet: Option<SheetView<'a>>,
+    /// The help overlay, while it's open.
+    pub help: Option<HelpView<'a>>,
+}
+
+/// The help overlay this frame.
+pub struct HelpView<'a> {
+    pub sections: &'a [HelpSection],
+    pub scroll: f32,
+    /// Close, its only control, which has the keyboard focus.
+    pub close_hover: bool,
+    pub close_pressed: bool,
 }
 
 /// The details dialog this frame: what a failed job's engine said.
@@ -252,7 +268,7 @@ fn compose(inner: &Matrix3x2, outer: &Matrix3x2) -> Matrix3x2 {
     }
 }
 
-/// A missing engine's link in Settings > Engines.
+/// A missing helper app's link in Settings > Helper apps.
 const GET_IT: &str = "Get it";
 
 /// The code on a row's chip.
@@ -273,6 +289,30 @@ fn chip_width(text: &Text, e: &Entry) -> Result<f32> {
 /// Where a row's name and second line start, right of its chip.
 fn row_text_x(r: &Rect, chip_w: f32) -> f32 {
     r.x + 16.0 + CHIP_MIN_WIDTH.max(chip_w) + 16.0
+}
+
+/// Where a row's name and line run, from `x` to `right`, short of the
+/// cancel cross or the link, and the link if there is one. `chip_w` is the
+/// chip's measured width, and `saving` says the row is being exported.
+fn row_text_span(
+    text: &Text,
+    r: &Rect,
+    e: &Entry,
+    chip_w: f32,
+    saving: bool,
+) -> (f32, f32, Option<&'static str>) {
+    let x = row_text_x(r, chip_w);
+    let link = e
+        .link(line_cut_with(text, r, e, chip_w))
+        .filter(|_| !saving);
+    let right = if matches!(e.job, JobState::Running { .. }) {
+        layout::row_cancel(r).x - 8.0
+    } else if link.is_some() {
+        layout::row_link(r).x - 8.0
+    } else {
+        r.right() - 16.0
+    };
+    (x, right, link)
 }
 
 /// Whether a failed row's line runs past the room it has before the row's
@@ -328,6 +368,24 @@ impl Renderer {
     /// How tall the details dialog's text runs when wrapped to `width`.
     pub fn details_height(&self, text: &str, width: f32) -> f32 {
         self.text.block_height(text, &self.text.mono_block, width)
+    }
+
+    /// How tall help's text runs in a body `width` wide, for scrolling it.
+    pub fn help_height(&self, sections: &[HelpSection], width: f32) -> f32 {
+        help::place(sections, width, |s, w| {
+            self.text.block_height(s, &self.text.body_block, w)
+        })
+        .1
+    }
+
+    /// Row `r`'s tooltip area, from its left edge to where its name and
+    /// line end (short of the cancel cross and the link, which have tools
+    /// of their own), and whether `line`, as the row shows it, is cut.
+    pub fn row_tip(&self, r: &Rect, e: &Entry, line: &str, saving: bool) -> (Rect, bool) {
+        let chip_w = chip_width(&self.text, e).unwrap_or(CHIP_MIN_WIDTH);
+        let (x, right, _) = row_text_span(&self.text, r, e, chip_w, saving);
+        let cut = self.text.measure(line, &self.text.caption) > (right - x).max(0.0);
+        (Rect::new(r.x, r.y, (right - r.x).max(0.0), r.h), cut)
     }
 
     /// Whether a failed row's line is too long for row `r`, so it's cut
@@ -470,6 +528,9 @@ impl Renderer {
         }
         if let (Ok(()), Some(sv)) = (&result, &v.sheet) {
             result = d.sheet(w, h, sv, p);
+        }
+        if let (Ok(()), Some(hv)) = (&result, &v.help) {
+            result = d.help(w, h, hv, p);
         }
 
         let end = unsafe { rt.EndDraw(None, None) };
@@ -621,16 +682,17 @@ impl Draw<'_> {
         // The app icon: a celadon vessel on the soot ground.
         self.icon("vessel-solid", l.icon.x, l.icon.y, 1.0, p.accent, 1.0);
         self.label("Kiln", &self.text.display, &l.wordmark, p.text, 1.0);
-        let b = l.settings_button;
-        if v.settings_hover {
-            self.fill(&b, shape::RADIUS_CONTROL, p.line, 1.0);
+        // Help's question mark, then Settings' dial, at the right.
+        for (b, icon, hover) in [
+            (l.help_button, "help", v.help_hover),
+            (l.settings_button, "dial", v.settings_hover),
+        ] {
+            if hover {
+                self.fill(&b, shape::RADIUS_CONTROL, p.line, 1.0);
+            }
+            let c = if hover { p.text } else { p.text_muted };
+            self.icon(icon, b.x + 4.0, b.y + 4.0, 1.0, c, 1.0);
         }
-        let c = if v.settings_hover {
-            p.text
-        } else {
-            p.text_muted
-        };
-        self.icon("dial", b.x + 4.0, b.y + 4.0, 1.0, c, 1.0);
         self.hline(0.0, l.header.w, l.header.bottom() - 1.0, p.line, 1.0);
         Ok(())
     }
@@ -788,19 +850,8 @@ impl Draw<'_> {
         self.fill(&chip, shape::RADIUS_CONTROL, p.line, a);
         self.code(code, &chip, p.text, a)?;
 
-        let x = row_text_x(r, chip_w);
-        let running = matches!(e.job, JobState::Running { .. });
         let saving = v.saving.contains(&e.path);
-        let link = e
-            .link(line_cut_with(self.text, r, e, chip_w))
-            .filter(|_| !saving);
-        let right = if running {
-            layout::row_cancel(r).x - 8.0
-        } else if link.is_some() {
-            layout::row_link(r).x - 8.0
-        } else {
-            r.right() - 16.0
-        };
+        let (x, right, link) = row_text_span(self.text, r, e, chip_w, saving);
         let w = (right - x).max(0.0);
         self.label(
             &e.name,
@@ -1248,7 +1299,17 @@ impl Draw<'_> {
             .unwrap_or((wv.title.as_str(), ""));
         let c = layout::wheel_centre(R_INNER);
         self.label(name, &self.text.display_center, &c.name, p.text, 1.0);
-        self.label(key, &self.text.caption_center, &c.key, p.text_muted, 1.0);
+        match wv.options {
+            // A link: underlined, brighter under the pointer.
+            Some(hot) => {
+                let col = if hot { p.text } else { p.text_muted };
+                let text = wheel::OPTIONS_TARGET;
+                self.label(text, &self.text.caption_center, &c.key, col, 1.0);
+                let tw = self.text.measure(text, &self.text.caption).min(c.key.w);
+                self.hline(-tw / 2.0, tw / 2.0, c.key.y + 14.0, col, 0.8);
+            }
+            None => self.label(key, &self.text.caption_center, &c.key, p.text_muted, 1.0),
+        }
         let line = match lit.and_then(|s| w.item(s)) {
             Some(item) if matches!(item.action, Action::Convert(_)) => {
                 format!("{} → {}", w.source_code, item.label)
@@ -1471,6 +1532,49 @@ impl Draw<'_> {
         Ok(())
     }
 
+    /// Help, over a scrim like the details dialog: the ways in, how results
+    /// are kept, and every shortcut. The text scrolls inside the body.
+    fn help(&self, w: f32, h: f32, hv: &HelpView, p: &Palette) -> Result<()> {
+        let d = layout::help(w, h);
+        self.fill(&Rect::new(0.0, 0.0, w, h), 0.0, p.ground, 0.7);
+        self.fill(&d.panel, shape::RADIUS_PANEL, p.surface, 1.0);
+        self.border(&d.panel, shape::RADIUS_PANEL, p.line, 1.0, shape::BORDER);
+        self.label(help::TITLE, &self.text.display, &d.title, p.text, 1.0);
+
+        let body = d.body;
+        let (placed, content) = help::place(hv.sections, body.w, |s, width| {
+            self.text.block_height(s, &self.text.body_block, width)
+        });
+        let scroll = layout::clamp_text_scroll(hv.scroll, content, body.h);
+        unsafe {
+            self.rt
+                .PushAxisAlignedClip(&rectf(&body), D2D1_ANTIALIAS_MODE_ALIASED);
+        }
+        for piece in &placed {
+            let (text, r, format, c) = match *piece {
+                Placed::Heading(t, r) => (t, r, &self.text.heading, p.text),
+                Placed::Keys(t, r) => (t, r, &self.text.body_block, p.text),
+                Placed::What(t, r) => (t, r, &self.text.body_block, p.text_muted),
+            };
+            let r = Rect::new(body.x + r.x, body.y + r.y - scroll, r.w, r.h + 1.0);
+            if r.bottom() < body.y || r.y > body.bottom() {
+                continue;
+            }
+            self.label(text, format, &r, c, 1.0);
+        }
+        unsafe { self.rt.PopAxisAlignedClip() };
+        let max = (content - body.h).max(0.0);
+        if max > 0.0 {
+            let thumb_h = (body.h * body.h / content).max(24.0).min(body.h);
+            let thumb_y = body.y + (body.h - thumb_h) * (scroll / max);
+            let thumb = Rect::new(d.panel.right() - 8.0, thumb_y, 2.0, thumb_h);
+            self.fill(&thumb, 1.0, p.text_muted, 0.5);
+        }
+        self.button("Close", &d.close, hv.close_hover, hv.close_pressed, p);
+        self.focus_ring(&d.close, p);
+        Ok(())
+    }
+
     /// The settings panel, over a scrim. Changes apply as they are made,
     /// so there is only Close.
     fn settings(&self, w: f32, h: f32, sv: &SettingsView, p: &Palette) -> Result<()> {
@@ -1549,13 +1653,13 @@ impl Draw<'_> {
     fn settings_page(&self, sv: &SettingsView, p: &Palette) -> Result<()> {
         let l = sv.layout;
         for (i, row) in l.rows.iter().enumerate() {
-            self.label(
-                row.label,
-                &self.text.body,
-                &row.label_rect,
-                p.text_muted,
-                1.0,
-            );
+            // A label given two lines' height wraps onto them.
+            let format = if row.label_rect.h > 24.0 {
+                &self.text.body_wrap
+            } else {
+                &self.text.body
+            };
+            self.label(row.label, format, &row.label_rect, p.text_muted, 1.0);
             let Some(r) = row.value else { continue };
             let (text, muted) = match l.tab {
                 SettingsTab::Engines => sv.engines[i],

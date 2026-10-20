@@ -72,6 +72,8 @@ pub struct Layout {
     pub clear_button: Option<Rect>,
     /// The dial at the right of the header that opens settings.
     pub settings_button: Rect,
+    /// The ? beside it that opens help.
+    pub help_button: Rect,
 }
 
 /// Lay out a window of `w` x `h` DIPs holding `rows` files.
@@ -81,6 +83,7 @@ pub fn layout(w: f32, h: f32, rows: usize) -> Layout {
     let icon = Rect::new(p, p, 24.0, 24.0);
     let wordmark = Rect::new(icon.right() + 12.0, 12.0, 160.0, 32.0);
     let settings_button = Rect::new((w - p - 32.0).max(0.0), 12.0, 32.0, 32.0);
+    let help_button = Rect::new((settings_button.x - 8.0 - 32.0).max(0.0), 12.0, 32.0, 32.0);
     let body = Rect::new(
         p,
         HEADER_HEIGHT + p,
@@ -99,6 +102,7 @@ pub fn layout(w: f32, h: f32, rows: usize) -> Layout {
             footer: None,
             clear_button: None,
             settings_button,
+            help_button,
         };
     }
 
@@ -135,6 +139,7 @@ pub fn layout(w: f32, h: f32, rows: usize) -> Layout {
         footer: Some(footer),
         clear_button: Some(clear_button),
         settings_button,
+        help_button,
     }
 }
 
@@ -213,6 +218,10 @@ pub struct WheelCentre {
     pub name: Rect,
     pub key: Rect,
     pub source: Rect,
+    /// Where "Options… (Tab)" can be clicked while a target with options
+    /// is lit. It takes the key line's place, a little taller so it's
+    /// easy to hit.
+    pub options: Rect,
 }
 
 pub fn wheel_centre(radius: f32) -> WheelCentre {
@@ -225,6 +234,7 @@ pub fn wheel_centre(radius: f32) -> WheelCentre {
         name: line(-32.0, 28.0, width(-32.0, 28.0)),
         key: line(-4.0, 16.0, width(-4.0, 16.0)),
         source: line(12.0, 16.0, width(12.0, 16.0)),
+        options: line(-8.0, 24.0, width(-8.0, 24.0)),
     }
 }
 
@@ -334,6 +344,41 @@ pub fn dialog(w: f32, h: f32) -> Dialog {
         title,
         body,
         copy,
+        close,
+    }
+}
+
+/// The help overlay: a panel like the details dialog's, a little taller,
+/// with its text scrolling in the body and Close at the bottom right.
+pub struct HelpPanel {
+    pub panel: Rect,
+    pub title: Rect,
+    pub body: Rect,
+    pub close: Rect,
+}
+
+pub fn help(w: f32, h: f32) -> HelpPanel {
+    let pw = (w - 64.0).clamp(0.0, 560.0);
+    let ph = (h - 64.0).clamp(0.0, 560.0);
+    let panel = Rect::new(((w - pw) / 2.0).round(), ((h - ph) / 2.0).round(), pw, ph);
+    let p = PANEL_PADDING;
+    let title = Rect::new(panel.x + p, panel.y + p, panel.w - 2.0 * p, 32.0);
+    let close = Rect::new(
+        panel.right() - p - BUTTON_WIDTH,
+        panel.bottom() - p - BUTTON_HEIGHT,
+        BUTTON_WIDTH,
+        BUTTON_HEIGHT,
+    );
+    let body = Rect::new(
+        panel.x + p,
+        title.bottom() + 8.0,
+        panel.w - 2.0 * p,
+        (close.y - 16.0 - title.bottom() - 8.0).max(0.0),
+    );
+    HelpPanel {
+        panel,
+        title,
+        body,
         close,
     }
 }
@@ -488,6 +533,9 @@ pub struct SettingsLayout {
 }
 
 pub const SETTINGS_ROW: f32 = 40.0;
+/// The General page's row for the wheel keys. Too long for one line at
+/// the label's width, it wraps onto two.
+pub const WHEEL_KEYS_LABEL: &str = "Keys to hold while dropping";
 /// The muted hint under a settings row, room for two caption lines.
 pub const SETTINGS_HINT: f32 = 32.0;
 pub const SETTINGS_LABEL: f32 = 112.0;
@@ -496,7 +544,7 @@ const SETTINGS_LABEL_2: f32 = 80.0;
 /// Segments of the theme and preset controls.
 pub const SEGMENT_WIDTH: f32 = 64.0;
 /// The tabs at the top of the settings panel.
-pub const TAB_WIDTH: f32 = 80.0;
+pub const TAB_WIDTH: f32 = 88.0;
 /// A control that steps through values.
 pub const STEP_WIDTH: f32 = 96.0;
 /// The left end of a stepping control, where a click steps back.
@@ -627,7 +675,11 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
                     ctl(x0 + k as f32 * (key_w + 8.0), 2, key_w),
                 ));
             }
-            rows.push(row("Wheel keys", 2, None));
+            // The longest label: in two lines, filling the row's height.
+            rows.push(SettingsRow {
+                label_rect: Rect::new(panel.x + p, row_y(2), SETTINGS_LABEL, SETTINGS_ROW),
+                ..row(WHEEL_KEYS_LABEL, 2, None)
+            });
 
             for (k, on) in [true, false].into_iter().enumerate() {
                 controls.push((
@@ -672,7 +724,7 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
             r.push(row("Images", 2, None));
             stepper(c, r, ("Image size", 3, false), DefaultSetting::ImageSize);
             stepper(c, r, ("PDF pages", 3, true), DefaultSetting::PageDpi);
-            stepper(c, r, ("Audio", 4, false), DefaultSetting::Audio);
+            stepper(c, r, ("Sound quality", 4, false), DefaultSetting::Audio);
         }
         SettingsTab::Engines => {
             for (k, e) in Engine::ALL.into_iter().enumerate() {
@@ -774,7 +826,7 @@ pub struct SheetLayout {
 }
 
 pub const SHEET_WIDTH: f32 = 432.0;
-pub const SHEET_LABEL: f32 = 96.0;
+pub const SHEET_LABEL: f32 = 112.0;
 /// The sheet's stepping controls, wider than the settings page's since
 /// each row holds only one.
 pub const SHEET_STEP_WIDTH: f32 = 136.0;
@@ -965,6 +1017,39 @@ mod tests {
             // "Couldn't copy" is about 80 DIPs in 14 px Segoe UI.
             assert!(d.copy.w >= 100.0);
             assert!(d.copy.x >= d.panel.x + 16.0);
+        }
+    }
+
+    #[test]
+    fn help_fits_and_keeps_padding() {
+        for (w, h) in [(480.0, 360.0), (720.0, 480.0), (1600.0, 1000.0)] {
+            let d = help(w, h);
+            assert!(d.panel.x >= 32.0 && d.panel.right() <= w - 32.0);
+            assert!(d.panel.y >= 32.0 && d.panel.bottom() <= h - 32.0);
+            assert_eq!(d.title.x - d.panel.x, 16.0);
+            assert_eq!(d.panel.right() - d.close.right(), 16.0);
+            assert_eq!(d.panel.bottom() - d.close.bottom(), 16.0);
+            assert!(d.body.y >= d.title.bottom() && d.body.bottom() <= d.close.y);
+            // The keys column and room beside it for what they do.
+            assert!(
+                d.body.w >= crate::help::KEYS_WIDTH + 8.0 + 200.0,
+                "at {w}x{h}"
+            );
+            assert!(d.body.h >= 120.0, "at {w}x{h}");
+            // "Help" is 48 DIPs in the serif.
+            assert!(d.title.w >= 48.0);
+        }
+    }
+
+    #[test]
+    fn the_help_button_sits_beside_settings() {
+        for w in [480.0, 720.0, 1600.0] {
+            let l = layout(w, 360.0, 0);
+            let (help, gear) = (l.help_button, l.settings_button);
+            assert_grid(&help, "help button");
+            assert_eq!(gear.x - help.right(), 8.0);
+            assert_eq!((help.y, help.w, help.h), (gear.y, gear.w, gear.h));
+            assert!(help.x > l.wordmark.right(), "at {w}");
         }
     }
 
@@ -1248,6 +1333,84 @@ mod tests {
         // pairs end in an ellipsis.
         assert!(c.name.w >= 80.0);
         assert!(c.source.w >= 93.0);
+        // "Options… (Tab)" takes the key line's place: 79 DIPs in the
+        // caption, its hit area 24 tall and inside the disc too.
+        let o = c.options;
+        assert_eq!(o.x, -o.w / 2.0);
+        assert!(o.w >= 80.0 && o.h >= 24.0, "{o:?}");
+        assert!(o.y <= c.key.y && o.bottom() >= c.key.bottom());
+        for (x, y) in [(o.x, o.y), (o.right(), o.bottom())] {
+            assert!(x * x + y * y <= r * r, "{o:?} leaves the disc");
+        }
+        // Above it the name still reads whole.
+        assert!(o.y >= c.name.y + 16.0);
+    }
+
+    #[test]
+    fn settings_labels_fit_at_the_smallest_window() {
+        // DirectWrite widths in 14 px Segoe UI: every label on one line in
+        // its rect, except the keys label, which takes two.
+        const BODY: [(&str, f32); 9] = [
+            ("Start exports in", 93.2),
+            ("Theme", 42.0),
+            ("Suggestions", 75.3),
+            ("Resolution", 65.0),
+            ("Frame rate", 66.1),
+            ("Image size", 65.3),
+            ("PDF pages", 65.2),
+            ("Sound quality", 85.2),
+            ("Video", 35.9),
+        ];
+        const KEYS: [(&str, f32); 2] = [("Keys to hold", 76.4), ("while dropping", 93.3)];
+        const TABS: [(&str, f32); 3] =
+            [("General", 47.6), ("Quality", 43.9), ("Helper apps", 74.4)];
+        let (w, h) = MIN_WINDOW;
+        for tab in SettingsTab::ALL {
+            let s = settings(
+                w,
+                h,
+                SettingsShape {
+                    tab,
+                    ..SettingsShape::default()
+                },
+            );
+            for row in &s.rows {
+                let r = row.label_rect;
+                if row.label == WHEEL_KEYS_LABEL {
+                    // Two lines of about 19 DIPs, in the row's height.
+                    assert!(r.h >= 38.0, "{r:?}");
+                    for (part, pw) in KEYS {
+                        assert!(pw <= r.w, "{part}");
+                    }
+                    continue;
+                }
+                if let Some((_, lw)) = BODY.iter().find(|(l, _)| *l == row.label) {
+                    assert!(*lw <= r.w, "{} needs {lw}, has {}", row.label, r.w);
+                }
+                // Labels never run into their controls.
+                for (c, cr) in &s.controls {
+                    assert!(apart(&r, cr), "{} overlaps {c:?}", row.label);
+                }
+            }
+            for (c, r) in &s.controls {
+                if let Control::Tab(t) = c {
+                    let (_, lw) = TABS.iter().find(|(l, _)| *l == t.label()).unwrap();
+                    // The label with a little room either side.
+                    assert!(lw + 8.0 <= r.w, "{} in {r:?}", t.label());
+                }
+            }
+            // The tabs leave the title its room: "Settings" is about 80.
+            let first = s.controls[0].1;
+            assert!(first.x - s.title.x >= 96.0);
+        }
+        assert_eq!(WHEEL_KEYS_LABEL, "Keys to hold while dropping");
+        // The sheet's labels: "Sharpness (DPI)" is the longest.
+        let sheet = sheet(w, h, &[Knob::Preset, Knob::PageDpi, Knob::AudioBitrate]);
+        for (name, lw) in [("Sharpness (DPI)", 96.4), ("Sound quality", 85.2)] {
+            for l in &sheet.labels {
+                assert!(lw <= l.w, "{name}");
+            }
+        }
     }
 
     #[test]
@@ -1286,7 +1449,12 @@ mod tests {
         let labels: Vec<_> = general.rows.iter().map(|r| r.label).collect();
         assert_eq!(
             labels,
-            ["Start exports in", "Theme", "Wheel keys", "Suggestions"]
+            [
+                "Start exports in",
+                "Theme",
+                "Keys to hold while dropping",
+                "Suggestions"
+            ]
         );
         assert_eq!(
             general.rows[0].hint,
@@ -1341,7 +1509,7 @@ mod tests {
                 "Images",
                 "Image size",
                 "PDF pages",
-                "Audio"
+                "Sound quality"
             ]
         );
         assert_eq!(quality.controls.len(), 3 + 3 + 2 + 3 + 2 + 1 + 2);
@@ -1387,7 +1555,7 @@ mod tests {
             engines.rows[0].hint,
             Some("Audio, video, GIF, HEIC and AVIF.")
         );
-        assert_eq!(SettingsTab::Engines.label(), "Engines");
+        assert_eq!(SettingsTab::Engines.label(), "Helper apps");
 
         // Pages share one panel, so switching never moves it.
         assert_eq!(general.panel, quality.panel);

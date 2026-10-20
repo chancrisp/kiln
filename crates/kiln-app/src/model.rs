@@ -475,16 +475,16 @@ impl Entry {
         }
     }
 
-    /// The secondary line under the file name, before any job: what
-    /// Kiln found in the file and what it suggests, once it knows.
+    /// The secondary line under the file name, before any job, most
+    /// useful first: what Kiln found in the file, what it suggests, the
+    /// size, then the folder's own name. The row's tooltip has the whole
+    /// path.
     pub fn detail(&self) -> String {
         let description = self.facts.as_ref().and_then(describe);
         if description.is_none() && self.suggestion.is_none() {
             return self.plain_detail();
         }
-        let mut parts = vec![self.folder.clone()];
-        parts.extend(description);
-        parts.push(human_size(self.size));
+        let mut parts: Vec<String> = description.into_iter().collect();
         if let Some(s) = &self.suggestion {
             let label = match &s.action {
                 Suggested::Convert(ext) => ext.to_ascii_uppercase(),
@@ -495,18 +495,43 @@ impl Entry {
                 None => format!("Suggested: {label}"),
             });
         }
+        parts.push(human_size(self.size));
+        parts.push(self.folder_name());
         parts.join("  ·  ")
     }
 
-    /// The secondary line before facts arrive: folder, size and how many
-    /// formats the file converts to.
+    /// The secondary line before facts arrive: how many formats the file
+    /// converts to, in the place of what it is, then its size and folder.
     pub fn plain_detail(&self) -> String {
         let reach = match self.targets.len() {
             0 => "No conversions for this type".to_owned(),
             1 => format!("Converts to {}", self.targets[0]),
             n => format!("Converts to {n} formats"),
         };
-        format!("{}  ·  {}  ·  {reach}", self.folder, human_size(self.size))
+        format!(
+            "{reach}  ·  {}  ·  {}",
+            human_size(self.size),
+            self.folder_name()
+        )
+    }
+
+    /// The last part of the file's folder: "samples" for
+    /// `C:\kiln\target\samples`.
+    pub fn folder_name(&self) -> String {
+        crate::actions::folder_name(Path::new(&self.folder))
+    }
+
+    /// The row's tooltip: the line whole when the row had to cut it
+    /// (`cut`), a failed row's sentence just as it was written, then the
+    /// folder's full path on a line of its own. `shown` is the line the
+    /// row draws.
+    pub fn tooltip(&self, shown: &str, cut: bool) -> String {
+        let line = match &self.job {
+            JobState::Failed { message, .. } if cut => message.trim(),
+            _ if cut => shown,
+            _ => return self.folder.clone(),
+        };
+        format!("{line}\n{}", self.folder)
     }
 }
 
@@ -1028,7 +1053,8 @@ mod tests {
             ]
         );
         assert!(
-            e.detail().ends_with("1.5 KB  ·  Converts to 12 formats"),
+            e.detail()
+                .starts_with("Converts to 12 formats  ·  1.5 KB  ·  "),
             "{}",
             e.detail()
         );
@@ -1066,7 +1092,7 @@ mod tests {
         assert!(list.entries()[0].targets.is_empty());
         assert!(list.entries()[0]
             .detail()
-            .ends_with("No conversions for this type"));
+            .starts_with("No conversions for this type  ·  "));
     }
 
     /// A list of `n` rows that aren't on disk: "0.png", "1.png"…
@@ -1357,7 +1383,7 @@ mod tests {
         assert_eq!(e.line().0, "Ready: a part 1.wav and 1 more");
         e.job = JobState::Failed {
             message:
-                "Needs FFmpeg, which isn't installed.\nSettings > Engines says where to get it."
+                "Needs FFmpeg, which isn't installed.\nSettings > Helper apps says where to get it."
                     .into(),
             details: String::new(),
             engine: None,
@@ -1366,7 +1392,7 @@ mod tests {
         assert_eq!(
             e.line(),
             (
-                "Needs FFmpeg, which isn't installed. Settings > Engines says where to get it."
+                "Needs FFmpeg, which isn't installed. Settings > Helper apps says where to get it."
                     .to_owned(),
                 Tone::Crack
             )
@@ -1514,7 +1540,7 @@ mod tests {
     #[test]
     fn row_line_before_and_after_facts() {
         let mut e = row("a.png");
-        assert_eq!(e.detail(), "photos  ·  3.1 MB  ·  Converts to 12 formats");
+        assert_eq!(e.detail(), "Converts to 12 formats  ·  3.1 MB  ·  photos");
         e.facts = Some(photo());
         e.suggestion = Some(Suggestion {
             action: Suggested::Convert("jpg".into()),
@@ -1523,19 +1549,118 @@ mod tests {
         });
         assert_eq!(
             e.detail(),
-            "photos  ·  4032 × 3024 photo  ·  3.1 MB  ·  Suggested: JPG, about 2 MB"
+            "4032 × 3024 photo  ·  Suggested: JPG, about 2 MB  ·  3.1 MB  ·  photos"
         );
         assert_eq!(e.line(), (e.detail(), Tone::Muted));
         assert_eq!(
             e.plain_detail(),
-            "photos  ·  3.1 MB  ·  Converts to 12 formats"
+            "Converts to 12 formats  ·  3.1 MB  ·  photos"
         );
         e.suggestion = None;
-        assert_eq!(e.detail(), "photos  ·  4032 × 3024 photo  ·  3.1 MB");
+        assert_eq!(e.detail(), "4032 × 3024 photo  ·  3.1 MB  ·  photos");
 
         let mut txt = row("notes.txt");
         txt.facts = Some(facts("txt", Kind::Document));
-        assert_eq!(txt.detail(), "photos  ·  3.1 MB  ·  Converts to 12 formats");
+        assert_eq!(txt.detail(), "Converts to 12 formats  ·  3.1 MB  ·  photos");
+    }
+
+    /// The spec's order: what it is, the suggestion, the size, then only
+    /// the folder's last part. The other rows' lines say something else
+    /// in their own words, and keep them.
+    #[test]
+    fn row_line_order_is_what_suggestion_size_folder() {
+        let mut e = row("photo.png");
+        e.folder = r"C:\kiln\target\samples".to_owned();
+        e.size = 3_900_000;
+        e.facts = Some(picture(facts("png", Kind::Image), 1600, 1200, Look::Photo));
+        e.suggestion = Some(Suggestion {
+            action: Suggested::Convert("jpg".into()),
+            reason: String::new(),
+            estimate: Some(890_000),
+        });
+        let line = e.line().0;
+        let parts: Vec<&str> = line.split("  ·  ").collect();
+        assert_eq!(
+            parts,
+            [
+                "1600 × 1200 photo",
+                "Suggested: JPG, about 890 KB",
+                "3.9 MB",
+                "samples"
+            ]
+        );
+        // With only the suggestion, it leads.
+        e.facts = None;
+        assert_eq!(
+            e.line().0,
+            "Suggested: JPG, about 890 KB  ·  3.9 MB  ·  samples"
+        );
+        // Before facts, the reach stands where what it is goes.
+        e.suggestion = None;
+        assert_eq!(e.line().0, "Converts to 12 formats  ·  3.9 MB  ·  samples");
+        // Queued or running, held, saved and failed rows keep their own
+        // lines, and none of them carries the folder's path.
+        let jpg = Action::Convert("jpg".into());
+        let mut lines = vec![];
+        e.job = JobState::Running {
+            action: jpg.clone(),
+            fraction: None,
+        };
+        lines.push(e.line().0);
+        e.job = JobState::Done {
+            action: jpg.clone(),
+            outputs: vec!["photo.jpg".into()],
+            saved: None,
+        };
+        lines.push(e.line().0);
+        e.job = JobState::Done {
+            action: jpg,
+            outputs: vec!["photo.jpg".into()],
+            saved: Some(r"D:\Pictures\Out".into()),
+        };
+        lines.push(e.line().0);
+        e.job = JobState::Failed {
+            message: "Couldn't convert the file.".into(),
+            details: String::new(),
+            engine: None,
+        };
+        lines.push(e.line().0);
+        assert_eq!(
+            lines,
+            [
+                "Converting to JPG",
+                "Ready: photo.jpg",
+                "Saved to Out.",
+                "Couldn't convert the file."
+            ]
+        );
+    }
+
+    #[test]
+    fn the_row_tooltip_has_the_cut_line_then_the_full_folder() {
+        let mut e = row("photo.png");
+        e.folder = r"C:\kiln\target\samples".to_owned();
+        // Nothing cut: where the file is, in full.
+        let line = e.line().0;
+        assert_eq!(e.tooltip(&line, false), r"C:\kiln\target\samples");
+        // A cut line comes whole, then the path on a line of its own.
+        assert_eq!(
+            e.tooltip(&line, true),
+            format!("{line}\nC:\\kiln\\target\\samples")
+        );
+        // A failed row's sentence comes as it was written, unfolded.
+        e.job = JobState::Failed {
+            message: "Needs FFmpeg, which isn't installed.\nSettings > Helper apps says where to get it.\n"
+                .into(),
+            details: String::new(),
+            engine: None,
+        };
+        let line = e.line().0;
+        assert_eq!(
+            e.tooltip(&line, true),
+            "Needs FFmpeg, which isn't installed.\nSettings > Helper apps says where to get it.\nC:\\kiln\\target\\samples"
+        );
+        assert_eq!(e.tooltip(&line, false), r"C:\kiln\target\samples");
     }
 
     #[test]
@@ -1549,7 +1674,7 @@ mod tests {
         });
         assert!(
             e.detail()
-                .ends_with("  ·  Suggested: Compress, about 180 MB"),
+                .starts_with("Suggested: Compress, about 180 MB  ·  "),
             "{}",
             e.detail()
         );

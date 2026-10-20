@@ -29,8 +29,9 @@ The first version.
 - The Windows app:
   - A drop target and file list.
   - The glaze wheel, with Convert, Tools and Actions. The convert wheel keeps eight common targets close, and a More segment pours a second ring with every other format, grouped by kind and named (Images, Video, Audio, Documents). A lit format says what it is in the footer and on the options sheet, as in "WEBP: a small image for the web".
-  - An options sheet: Tab or right-click on a format in the wheel shows only the quality settings that fit the file, what the file is, and an estimate of the result.
-  - Settings in three tabs, General, Quality and Engines, with quality defaults for video, images, audio and PDF pages.
+  - An options sheet: Tab, right-click, or **Options… (Tab)** in the centre on a format in the wheel shows only the quality settings that fit the file, what the file is, and an estimate of the result.
+  - Settings in three tabs, General, Quality and Helper apps, with quality defaults for video, images, audio and PDF pages. Labels say what they change, as in Sound quality, Sharpness (DPI) and Keys to hold while dropping.
+  - Help: a **?** in the header, or F1, lists the ways in, how results wait to be exported, and every keyboard shortcut. Icon-only controls have tooltips with their shortcuts, and a row's tooltip gives its whole line and full folder path.
   - Progress, results and errors shown in each row, plus a details dialog. The progress line glows and breathes while a job runs.
   - Pressed controls show a soft inner shadow, and the empty list's hint follows the wheel keys.
   - One window: files dropped on the icon while Kiln is open go to the open window.
@@ -44,7 +45,7 @@ The first version.
   - Only targets whose engine is installed are suggested. For several files, a conversion is suggested only when every file gets the same answer.
   - Picks are counted per source type in `settings.toml` under `[habits]`. A target picked at least three times, and more than any other, becomes the suggestion.
   - `kiln suggest FILE...` prints each file's suggestion and the set's, ignoring picks.
-  - In the app, files are inspected on one low-priority thread as they are added. Each row's second line shows what Kiln found and its suggestion, fading in over 160 ms.
+  - In the app, files are inspected on one low-priority thread as they are added. Each row's second line shows what Kiln found and its suggestion, then the size and folder, fading in over 160 ms.
   - The convert and Tools wheels mark the suggestion with a small celadon dot, on More and in the ring when it sits there. Opened from the keyboard, a wheel starts on the suggestion, and the footer gives the reason.
   - **Settings > General** gains **Suggestions**, On or Off, and **Forget picks**. `settings.toml` gains `suggestions = true`.
 - Packaging: an MSI installer, a portable ZIP and optional code signing.

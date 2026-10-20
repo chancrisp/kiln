@@ -3,6 +3,7 @@
 //! compiled only for Windows.
 
 pub mod actions;
+pub mod help;
 pub mod icons;
 pub mod layout;
 pub mod model;

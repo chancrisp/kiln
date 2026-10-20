@@ -27,7 +27,7 @@ background, right on your PC.
 - **Nothing is saved until you export it**, and Kiln never overwrites a file without asking. Results wait inside Kiln until you export them, one at a time or all at once, to a folder you pick. Exporting into a folder never replaces a file there: a taken name becomes `name (1).jpg`.
 - **Small and quick.** A single native executable of about 7.5 MB, drawn with Direct2D. No web view. The window is up in about 215 ms.
 - **Other ways in.** **Add files** or <kbd>Ctrl</kbd>+<kbd>O</kbd> opens the Windows Open dialog, <kbd>Ctrl</kbd>+<kbd>V</kbd> adds files copied in File Explorer, and right-clicking a row opens a menu with every wheel.
-- **Keyboard first.** Arrow keys pick a row, Enter opens the wheel, Escape closes it.
+- **Keyboard first.** Arrow keys pick a row, Enter opens the wheel, Escape closes it. <kbd>F1</kbd>, or the **?** in the header, lists every shortcut.
 - **Light and dark.** Follows the Windows app mode and every monitor's DPI.
 - **A command line too.** `kiln convert photo.png jpg` does the same work from a terminal.
 
@@ -50,6 +50,7 @@ Three wheels, one per modifier key. Each shows only what fits the files you drop
 From the keyboard, select a row and press <kbd>Enter</kbd> for Convert,
 <kbd>Ctrl</kbd>+<kbd>Enter</kbd> for Tools or <kbd>Alt</kbd>+<kbd>Enter</kbd>
 for Actions. Inside a wheel, the arrows move, Enter applies and Escape closes.
+Tab, or **Options… (Tab)** in the centre, opens the lit format's options.
 
 The convert wheel keeps the eight most useful targets close. When a file can
 become more than that, a **More** segment pours a second ring around the
@@ -88,23 +89,23 @@ picks**, beside it, clears the picks Kiln has counted.
 <table>
   <tr>
     <td align="center"><img src="docs/screenshots/m7/jobs-light-100.png" alt="A running job, a finished one and a failed one" width="400"><br><b>JOBS</b><br><sub>Run in the background, each with its own progress line and cancel</sub></td>
-    <td align="center"><img src="docs/screenshots/m7/settings-update-100.png" alt="The settings panel" width="400"><br><b>SETTINGS</b><br><sub>Output folder, theme, wheel keys, quality defaults and engines</sub></td>
+    <td align="center"><img src="docs/screenshots/m7/settings-update-100.png" alt="The settings panel" width="400"><br><b>SETTINGS</b><br><sub>Output folder, theme, wheel keys, quality defaults and helper apps</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/screenshots/m5/details-100.png" alt="The details dialog with engine output" width="400"><br><b>DETAILS</b><br><sub>A failed job shows one plain line, with the full engine output a click away</sub></td>
+    <td align="center"><img src="docs/screenshots/m5/details-100.png" alt="The details dialog with a helper app's output" width="400"><br><b>DETAILS</b><br><sub>A failed job shows one plain line, with the helper app's full output a click away</sub></td>
     <td align="center"><img src="docs/screenshots/m6/wheel-convert-light-100.png" alt="The convert wheel in light mode" width="400"><br><b>LIGHT MODE</b><br><sub>Same stoneware, lighter glaze</sub></td>
   </tr>
 </table>
 
 ## Formats
 
-Kiln knows 85 formats and converts between 1,245 pairs. When no single engine
-does a pair, Kiln chains two steps through a shared format, such as HEIC to
+Kiln knows 85 formats and converts between 1,245 pairs. When no single helper
+app does a pair, Kiln chains two steps through a shared format, such as HEIC to
 JPG through PNG, or MOBI to PDF through DOCX. The steps run in one temporary
 folder, and only the finished file is kept, held inside Kiln until you
 export it.
 
-| Kind | Reads | Converts to | Engine |
+| Kind | Reads | Converts to | Helper app |
 |---|---|---|---|
 | Image | PNG, JPG, WEBP, BMP, GIF, TIFF, ICO, TGA, QOI, PPM | any other of those, plus AVIF, JXL and PDF | built in |
 | | SVG, and camera RAW: DNG, CR2, CR3, NEF, ARW, ORF, RW2, RAF, PEF, SRW | the image formats above, and PDF | built in (resvg draws SVG, Windows decodes RAW) |
@@ -117,7 +118,7 @@ export it.
 | | the same | PDF and DOC | Pandoc, then LibreOffice |
 | E-book | EPUB, MOBI, AZW3 | any other of those. MOBI and AZW3 also become documents and PDF | Calibre |
 | PDF | PDF | TXT, and PNG, JPG, WEBP, BMP or TIFF with one image per page | built in (Windows draws the pages) |
-| | | DOCX, ODT, DOC, RTF, the Pandoc formats, MOBI and AZW3, from its text | built in, then the document engines |
+| | | DOCX, ODT, DOC, RTF, the Pandoc formats, MOBI and AZW3, from its text | built in, then the document helper apps |
 | Office document | DOC, RTF, TXT, and read only PAGES and WPD | DOC, DOCX, ODT, RTF, PDF, and through DOCX the Pandoc formats | LibreOffice |
 | | DOCX, ODT | DOC, PDF, and PNG or JPG with one image per page | LibreOffice |
 | | read only VSDX and PUB | PDF, and PNG or JPG with one image per page | LibreOffice |
@@ -181,22 +182,22 @@ up, so a 720p clip stays 720p when the cap is 1080p.
 - **Installer.** `Kiln-<version>-x64.msi` installs into Program Files, adds a Start menu entry and puts `kiln` on PATH.
 - **Portable.** Unzip `Kiln-<version>-x64-portable.zip` anywhere and run `kiln-app.exe`.
 
-Images convert out of the box. The other kinds use free engines that Kiln
+Images convert out of the box. The other kinds use free helper apps that Kiln
 finds on your PC. It never bundles or downloads them.
 
-| Engine | Needed for |
+| Helper app | Needed for |
 |---|---|
 | [FFmpeg](https://ffmpeg.org/download.html) | audio and video |
 | [Pandoc](https://pandoc.org/installing.html) | documents |
 | [LibreOffice](https://www.libreoffice.org/download/) (optional) | office files, spreadsheets, slides and PDF output |
 | [Calibre](https://calibre-ebook.com/download) (optional) | MOBI and AZW3 e-books |
 
-PDF text, PDF pages as images, SVG and camera RAW need no engine. Kiln reads
+PDF text, PDF pages as images, SVG and camera RAW need no helper app. Kiln reads
 them itself, with Windows drawing PDF pages and decoding RAW.
 
 Kiln looks on PATH, and for LibreOffice and Calibre in their default install
 folders. You can
-also choose the executables in **Settings > Engines**. Each LibreOffice job
+also choose the executables in **Settings > Helper apps**. Each LibreOffice job
 runs with a fresh profile inside its temporary folder, with macros and active
 content (OLE objects, DDE and other self-updating links) turned off and no
 update check.

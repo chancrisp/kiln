@@ -513,6 +513,31 @@ pub fn on_outer_band(w: &Wheel, x: f32, y: f32, more_open: bool) -> bool {
     d > (R_OUTER + R_MORE_INNER) / 2.0 && d <= R_MORE_OUTER + REACH
 }
 
+/// A point (window DIPs) in the wheel's own coordinates, unscaled.
+fn local(w: &Wheel, x: f32, y: f32) -> (f32, f32) {
+    let s = w.scale.max(0.01);
+    ((x - w.center.0) / s, (y - w.center.1) / s)
+}
+
+/// Whether a point (window DIPs) is on the centre disc. Pointing there
+/// leaves lit whatever was lit, so its Options… can be reached.
+pub fn on_centre(w: &Wheel, x: f32, y: f32) -> bool {
+    let (dx, dy) = local(w, x, y);
+    dx.hypot(dy) < R_INNER
+}
+
+/// Whether a point (window DIPs) is on the centre's "Options… (Tab)".
+pub fn on_options(w: &Wheel, x: f32, y: f32) -> bool {
+    let (dx, dy) = local(w, x, y);
+    crate::layout::wheel_centre(R_INNER)
+        .options
+        .contains(dx, dy)
+}
+
+/// What "Options… (Tab)" says in the wheel's centre while a target with
+/// options is lit.
+pub const OPTIONS_TARGET: &str = "Options… (Tab)";
+
 /// What is under a point (window DIPs). The centre selects nothing, and
 /// neither does a group's icon on the outer ring. With `more_open`, the
 /// outer ring takes the space past the wheel's edge.
@@ -799,6 +824,28 @@ mod tests {
         );
         assert_eq!(hit(&w, 200.0 + reach + 1.0, 200.0, false), None);
         assert_eq!(hit(&w, 200.0 + R_INNER * 0.5 - 1.0, 200.0, false), None);
+    }
+
+    #[test]
+    fn options_sit_in_the_centre_and_follow_the_scale() {
+        for scale in [1.0, 0.5] {
+            let w = Wheel { scale, ..wheel(4) };
+            let (cx, cy) = w.center;
+            // On the key line, a little either side of the middle.
+            for dx in [-30.0, 0.0, 30.0] {
+                let (x, y) = (cx + dx * scale, cy + 4.0 * scale);
+                assert!(on_options(&w, x, y), "{dx} at {scale}");
+                assert!(on_centre(&w, x, y));
+                assert_eq!(hit(&w, x, y, false), None);
+            }
+            // The name above and the ring outside are not the target.
+            assert!(!on_options(&w, cx, cy - 24.0 * scale));
+            assert!(!on_options(&w, cx, cy + 20.0 * scale));
+            let ring = (R_INNER + R_OUTER) / 2.0 * scale;
+            assert!(!on_centre(&w, cx + ring, cy));
+            assert!(!on_options(&w, cx + ring, cy));
+        }
+        assert_eq!(OPTIONS_TARGET, "Options… (Tab)");
     }
 
     #[test]

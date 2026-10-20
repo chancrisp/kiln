@@ -121,6 +121,29 @@ pub const DIAL_PATH: &[Cmd] = &[
     Line(15.5, 15.5),
 ];
 
+/// Help: a question mark in the dial's circle, its dot a small octagon.
+pub const HELP_PATH: &[Cmd] = &[
+    Move(12.0, 4.75),
+    Cubic(16.0, 4.75, 19.25, 8.0, 19.25, 12.0),
+    Cubic(19.25, 16.0, 16.0, 19.25, 12.0, 19.25),
+    Cubic(8.0, 19.25, 4.75, 16.0, 4.75, 12.0),
+    Cubic(4.75, 8.0, 8.0, 4.75, 12.0, 4.75),
+    Close,
+    Move(9.75, 9.75),
+    Cubic(9.75, 8.5, 10.75, 7.75, 12.0, 7.75),
+    Cubic(13.25, 7.75, 14.25, 8.5, 14.25, 9.75),
+    Cubic(14.25, 11.25, 12.0, 11.5, 12.0, 13.25),
+    Move(12.5, 16.0),
+    Line(12.35, 16.35),
+    Line(12.0, 16.5),
+    Line(11.65, 16.35),
+    Line(11.5, 16.0),
+    Line(11.65, 15.65),
+    Line(12.0, 15.5),
+    Line(12.35, 15.65),
+    Close,
+];
+
 /// Copy path: a sheet in front of another.
 pub const COPY_PATH: &[Cmd] = &[
     Move(9.0, 9.0),
@@ -379,7 +402,7 @@ const fn stroke(name: &'static str, path: &'static [Cmd]) -> Icon {
     }
 }
 
-pub const ALL: [Icon; 22] = [
+pub const ALL: [Icon; 23] = [
     VESSEL,
     VESSEL_SOLID,
     FLAME,
@@ -401,6 +424,7 @@ pub const ALL: [Icon; 22] = [
     stroke("move", MOVE_PATH),
     stroke("terminal", TERMINAL_PATH),
     stroke("dial", DIAL_PATH),
+    stroke("help", HELP_PATH),
     stroke("more", MORE_PATH),
 ];
 

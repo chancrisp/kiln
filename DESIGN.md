@@ -82,7 +82,7 @@ test enforces this.
 - Icons sit on a 24 × 24 grid and use a 1.5 px stroke with round caps and joins.
 - They are built from simple geometric shapes and drawn as vector paths in [`icons.rs`](crates/kiln-app/src/icons.rs). There is no icon font.
 - Keep curves generous. A Bézier smaller than about 2 units strokes poorly in some Direct2D implementations, so draw tiny circles as short polygons.
-- Current set: vessel, vessel-solid, flame, cube, cross, image, audio, video, subtitle, document, sheet, slides, compress, crop, trim, split, merge, copy, move, terminal, dial, more.
+- Current set: vessel, vessel-solid, flame, cube, cross, image, audio, video, subtitle, document, sheet, slides, compress, crop, trim, split, merge, copy, move, terminal, dial, help, more.
 - The app icon is the solid vessel in celadon on a soot tile with rounded corners, at 16, 32, 48 and 256 px. Regenerate it with `cargo run -p kiln-app --example gen_icon`.
 
 ## The glaze wheel
@@ -107,7 +107,7 @@ test enforces this.
   - The 8 DIP groove between the dish and the ring is solid ground, so nothing behind shows through.
   - The centre reads `MP4 → AVI` while a target is lit, so the pair is always spelled out.
 - **Names.** While a convert target is lit, in the wheel or the More ring, the footer says what it is in place of the generic hint: `WEBP: a small image for the web`, `WV: WavPack, lossless audio`. The code is upper-cased and the description comes from `describe_format` in kiln-core: lower case after the colon unless it opens with a proper name, no full stop, at most 40 characters. With nothing lit, the footer goes back to what it said. `wheel::target_label` composes the line, and the options sheet reuses it.
-- **Options.** Tab or right-click on a target opens its options sheet instead of converting.
+- **Options.** Tab or right-click on a target opens its options sheet instead of converting. While a target with options is lit, the centre shows an underlined **Options… (Tab)** in place of the key, and clicking it does the same. Outside a drag, moving the pointer into the centre keeps the target lit, so the link can be reached. A drop on the centre still converts nothing.
 - **Suggestion.** When Kiln has a suggestion for the files, the suggested segment gets a 4 px celadon dot centred 6 px above its icon. Places never change.
   - When the suggestion is in More, the More segment and the suggestion's slot in the outer ring both get the dot. In the ring, where codes have no icon, the dot sits 6 px above the code.
   - When facts arrive while the wheel is open, the dot fades in over 160 ms. Nothing moves or pulses.
@@ -128,31 +128,39 @@ test enforces this.
 
 ## Settings
 
-- One panel with three tabs: **General**, **Quality** and **Engines**. The tabs are a segmented control. The chosen tab's fill slides to it over 160 ms, and the page crossfades over 120 ms. Every page keeps the panel's height, so switching never moves it.
+- One panel with three tabs: **General**, **Quality** and **Helper apps**. The tabs are a segmented control. The chosen tab's fill slides to it over 160 ms, and the page crossfades over 120 ms. Every page keeps the panel's height, so switching never moves it.
 - Every stepper and segmented group has its own label. When two share a line, the second sits in its own labelled column.
 - Changes save straight away. There is no Apply button.
-- On **Engines**, each engine's name has a muted line under it saying what it's for, as in "E-books.". A missing engine gets a **Get it** link that opens its official download page in the browser; if the browser can't open, the panel's note line says so. Kiln itself never downloads anything.
+- Labels say what they change: **Sound quality**, **Sharpness (DPI)**, **Keys to hold while dropping**. A label too long for its column wraps onto a second line, and every label fits at the smallest window.
+- On **Helper apps**, each app's name has a muted line under it saying what it's for, as in "E-books.". A missing app gets a **Get it** link that opens its official download page in the browser; if the browser can't open, the panel's note line says so. Kiln itself never downloads anything.
 
 ## The file list
 
-- Each row shows the file's name, and below it a muted second line: `folder · 3.1 MB · Converts to 12 formats`.
-- Once Kiln has looked inside the file, the second line says what it is and what Kiln suggests, as in `folder · 4032 × 3024 photo · 3.1 MB · Suggested: JPG, about 2 MB`. The new text fades in over 160 ms and stays muted.
+- Each row shows the file's name, and below it a muted second line: `Converts to 12 formats · 3.1 MB · folder`. The folder is the last part of its path.
+- Once Kiln has looked inside the file, the second line says what it is, what Kiln suggests, the size and the folder, in that order, as in `4032 × 3024 photo · Suggested: JPG, about 2 MB · 3.1 MB · folder`. The new text fades in over 160 ms and stays muted.
 - With no suggestion, the description takes the place of "Converts to N formats" and nothing else is added.
+- Hovering a row shows a tooltip: the whole line when the row cuts it short, then the file's full folder path on a line of its own.
 
 ## Progress and results
 
-- **Progress** is a 2 px line along the bottom of the job row, filled with celadon. Its leading edge glows slightly brighter, like a glaze taking heat. This is the only gradient in Kiln. While a job runs, the glow breathes slowly over 2.4 s, like coals. When the engine can't report progress, the whole line holds a low glow that breathes the same way. There are no spinners.
+- **Progress** is a 2 px line along the bottom of the job row, filled with celadon. Its leading edge glows slightly brighter, like a glaze taking heat. This is the only gradient in Kiln. While a job runs, the glow breathes slowly over 2.4 s, like coals. When the helper app can't report progress, the whole line holds a low glow that breathes the same way. There are no spinners.
 - **Success:** the row settles and `Ready:` with the output name appears in bone, fading in over 200 ms, as in `Ready: photo.jpg`. There's no sound or confetti. The result waits inside Kiln until it's exported.
 - **Export:** a held row has an "Export" link where a failed row has "Show details", and Ctrl+S does the same. Once exported, the line reads `Saved to <folder>.`, and clicking it shows the file in Explorer. The footer's **Export all (3)** sits beside Clear while anything is held. A failed export is one line in brick: `Couldn't save to D:\Locked. Pick another folder.`
-- **Failure:** the row shows one plain sentence in brick, with a next step where Kiln recognises the failure: "This file looks damaged, or isn't really an MP4. Try opening it in another app." Otherwise it says what the engine couldn't do, such as "FFmpeg couldn't convert the file." or, for a tool, "FFmpeg couldn't trim the file." The file's own name never picks the sentence. A line too long for the row ends in "…".
-- **Show details** appears when the engine said something or the line was cut short. It opens a dialog titled "What FFmpeg said" ("What Kiln said" for Kiln's own words), with the row's whole sentence first and then the engine's output. The text scrolls with the wheel or touchpad, the arrows, Page Up, Page Down, Home and End. **Copy** copies all of it and reads "Copied" for 1.2 s, or "Couldn't copy" if the clipboard refused. Focus starts on Copy, and Escape or Enter closes the dialog.
+- **Failure:** the row shows one plain sentence in brick, with a next step where Kiln recognises the failure: "This file looks damaged, or isn't really an MP4. Try opening it in another app." Otherwise it says what the helper app couldn't do, such as "FFmpeg couldn't convert the file." or, for a tool, "FFmpeg couldn't trim the file." The file's own name never picks the sentence. A line too long for the row ends in "…".
+- **Show details** appears when the helper app said something or the line was cut short. It opens a dialog titled "What FFmpeg said" ("What Kiln said" for Kiln's own words), with the row's whole sentence first and then the app's output. The text scrolls with the wheel or touchpad, the arrows, Page Up, Page Down, Home and End. **Copy** copies all of it and reads "Copied" for 1.2 s, or "Couldn't copy" if the clipboard refused. Focus starts on Copy, and Escape or Enter closes the dialog.
+
+## Help and tooltips
+
+- A **?** button sits in the header beside Settings. It, or F1 anywhere but a panel or dialog, opens help over a scrim, drawn like the details dialog: the ways in (drop, Add files, paste, right-click, holding a key while dropping), how results wait until they're exported, and a table of every keyboard shortcut. The shortcuts follow the keys chosen in Settings.
+- The text scrolls with the wheel or touchpad, the arrows, Page Up, Page Down, Home and End. Focus sits on Close. Escape, Enter, a click outside or Close dismisses it.
+- Icon-only controls have native Windows tooltips: "Settings (Ctrl+,)", "Help (F1)", "Add files (Ctrl+O)", "Export all (Ctrl+Shift+S)", a row's "Cancel" and "Export (Ctrl+S)". There are none while a wheel, panel or dialog is up.
 
 ## Voice
 
 - Be short, calm and specific: "Converted 3 files to JPG.", not "Success! 🎉".
 - Never use exclamation marks.
 - Menus say "convert". "Fire" appears only in the onboarding tagline, "Fire raw files into finished ones."
-- Error messages name the problem and the next step: "Needs FFmpeg, which isn't installed. Settings > Engines says where to get it."
+- Error messages name the problem and the next step: "Needs FFmpeg, which isn't installed. Settings > Helper apps says where to get it."
 - Say what happened, not how Kiln feels about it: "Couldn't convert the file to FLAC.", "Moved 2 files to Pictures.", "Cancelled."
 - Use sentence case everywhere, with full stops on full sentences in the footer and row lines.
 

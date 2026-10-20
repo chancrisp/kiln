@@ -347,8 +347,8 @@ pub fn knob_name(knob: Knob, to: &Format) -> &'static str {
         Knob::Size if to.kind == Kind::Video => "Resolution",
         Knob::Size => "Size",
         Knob::Fps => "Frame rate",
-        Knob::AudioBitrate => "Audio",
-        Knob::PageDpi => "Page detail",
+        Knob::AudioBitrate => "Sound quality",
+        Knob::PageDpi => "Sharpness (DPI)",
     }
 }
 
@@ -518,6 +518,17 @@ mod tests {
 
     fn f(ext: &str) -> Format {
         Registry::builtin().format(ext).unwrap().clone()
+    }
+
+    #[test]
+    fn sheet_labels_say_what_they_change() {
+        let mp4 = f("mp4");
+        assert_eq!(knob_name(Knob::AudioBitrate, &f("mp3")), "Sound quality");
+        assert_eq!(knob_name(Knob::PageDpi, &f("png")), "Sharpness (DPI)");
+        assert_eq!(knob_name(Knob::Size, &mp4), "Resolution");
+        assert_eq!(knob_name(Knob::Size, &f("png")), "Size");
+        assert_eq!(knob_name(Knob::Fps, &mp4), "Frame rate");
+        assert_eq!(knob_name(Knob::Preset, &mp4), "Quality");
     }
 
     fn info(w: u32, h: u32, fps: f64, secs: f64) -> MediaInfo {
