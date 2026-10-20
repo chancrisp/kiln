@@ -165,7 +165,7 @@ fn work(
             Err(JobError::from(Error::Cancelled))
         } else {
             let mut progress = |p: Progress| on_event(JobEvent::Progress(id, p));
-            caught(|| match &job.kind {
+            caught(&job.cancel, || match &job.kind {
                 JobKind::Convert { input, target } => {
                     kiln.convert_outputs(input, target, &job.options, &mut progress, &job.cancel)
                 }
@@ -180,11 +180,21 @@ fn work(
 }
 
 /// Run a job's work. A panic in it is a failed job, not a lost worker:
-/// the row gets its result and the pool keeps its size.
-fn caught(f: impl FnOnce() -> crate::Result<Vec<PathBuf>>) -> Result<Vec<PathBuf>, JobError> {
+/// the row gets its result and the pool keeps its size. A job the user
+/// had already cancelled when it panicked is cancelled, not failed.
+fn caught(
+    cancel: &CancelToken,
+    f: impl FnOnce() -> crate::Result<Vec<PathBuf>>,
+) -> Result<Vec<PathBuf>, JobError> {
     panic::catch_unwind(AssertUnwindSafe(f))
         .map(|r| r.map_err(JobError::from))
-        .unwrap_or_else(|p| Err(panicked(p)))
+        .unwrap_or_else(|p| {
+            Err(if cancel.is_cancelled() {
+                JobError::from(Error::Cancelled)
+            } else {
+                panicked(p)
+            })
+        })
 }
 
 /// The failed job a panic becomes, with the panic's text in the details.
@@ -208,15 +218,27 @@ mod tests {
 
     #[test]
     fn a_panicking_job_is_a_failed_job() {
-        let e = caught(|| panic!("handles() checked the type")).unwrap_err();
+        let e = caught(&CancelToken::new(), || panic!("handles() checked the type")).unwrap_err();
         assert_eq!(e.message, PANICKED);
         assert_eq!(e.details, "handles() checked the type");
         assert!(!e.cancelled);
         let n = 3;
-        let e = caught(|| panic!("{n} went wrong")).unwrap_err();
+        let e = caught(&CancelToken::new(), || panic!("{n} went wrong")).unwrap_err();
         assert_eq!(e.details, "3 went wrong");
-        assert_eq!(caught(|| Ok(vec![])), Ok(vec![]));
-        let e = caught(|| Err(Error::Cancelled)).unwrap_err();
+        assert_eq!(caught(&CancelToken::new(), || Ok(vec![])), Ok(vec![]));
+        let e = caught(&CancelToken::new(), || Err(Error::Cancelled)).unwrap_err();
         assert!(e.cancelled);
+    }
+
+    #[test]
+    fn a_job_that_panics_after_a_cancel_is_cancelled() {
+        let cancel = CancelToken::new();
+        let e = caught(&cancel, || {
+            cancel.cancel();
+            panic!("the engine went down while stopping")
+        })
+        .unwrap_err();
+        assert!(e.cancelled);
+        assert_eq!(e, JobError::from(Error::Cancelled));
     }
 }
