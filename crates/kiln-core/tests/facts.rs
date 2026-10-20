@@ -26,10 +26,7 @@ fn f(name: &str) -> Facts {
 
 fn no_ffmpeg() -> Options {
     let mut o = Options::default();
-    o.engines.ffmpeg = Some(PathBuf::from(
-        r"C:
-owherefmpeg.exe",
-    ));
+    o.engines.ffmpeg = Some(PathBuf::from(r"C:\nowhere\ffmpeg.exe"));
     o
 }
 
@@ -139,6 +136,25 @@ fn heic_is_a_photo_by_its_type() {
     let p = f("sample.heic").picture.unwrap();
     assert_eq!(p.look, Look::Photo);
     assert!(p.width > 0);
+}
+
+#[test]
+fn jxl_and_avif_transparency_comes_from_ffprobe() {
+    for name in ["sample.jxl", "sample.avif"] {
+        assert!(!f(name).picture.unwrap().alpha, "{name}");
+    }
+    // A transparent JXL, made from a half-transparent PNG.
+    let dir = tempfile::tempdir().unwrap();
+    let jxl = dir.path().join("alpha.jxl");
+    let made = std::process::Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-i"])
+        .arg(fixture("rgba_half_transparent.png"))
+        .args(["-c:v", "libjxl"])
+        .arg(&jxl)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    assert!(inspect_at(&jxl).picture.unwrap().alpha);
 }
 
 #[test]

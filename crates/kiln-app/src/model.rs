@@ -382,16 +382,19 @@ impl FileList {
     }
 
     /// Store what `inspect` found for the row at `path`, and its
-    /// suggestion; its second line fades over from now. False, changing
-    /// nothing, when no row has that path.
+    /// suggestion; its second line fades over from now, unless the row
+    /// already had facts, so a repeated result never fades again. False,
+    /// changing nothing, when no row has that path.
     pub fn set_facts(&mut self, path: &Path, facts: Facts, suggestion: Option<Suggestion>) -> bool {
         let Some(i) = self.index_of(path) else {
             return false;
         };
         let e = &mut self.entries[i];
+        if e.facts.is_none() {
+            e.facts_at = Some(Instant::now());
+        }
         e.facts = Some(facts);
         e.suggestion = suggestion;
-        e.facts_at = Some(Instant::now());
         true
     }
 
@@ -863,7 +866,12 @@ mod tests {
         let listed: Vec<PathBuf> = list.entries().iter().map(|e| e.path.clone()).collect();
         assert_eq!(list.facts_for(&listed), None);
         assert!(list.set_facts(&listed[0], photo(), None));
-        assert!(list.entries()[0].facts_at.is_some());
+        let first = list.entries()[0].facts_at;
+        assert!(first.is_some());
+        // The same facts again, as when a stale result lands: no new fade.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        assert!(list.set_facts(&listed[0], photo(), None));
+        assert_eq!(list.entries()[0].facts_at, first);
         assert_eq!(list.facts_for(&listed), None);
         let graphic = picture(facts("png", Kind::Image), 1200, 800, Look::Graphic);
         assert!(list.set_facts(&listed[1], graphic.clone(), None));

@@ -39,7 +39,7 @@ The first version.
   - Light and dark themes that follow Windows.
   - Per-monitor DPI awareness and full keyboard control.
 - Suggestions:
-  - `kiln-core` gains `inspect`, which looks inside a file once, within 2 s: the size and look of a picture (photo or graphic), transparency and motion, audio and video details, black bars, and whether a PDF has text. `suggest` turns those facts into at most one conversion and one tool, each with a one-line reason and, where it can, an estimate.
+  - `kiln-core` gains `inspect`, which looks inside a file once, stopping each engine run or PDF read after 2 s: the size and look of a picture (photo or graphic), transparency and motion, audio and video details, black bars, and whether a PDF has text. `suggest` turns those facts into at most one conversion and one tool, each with a one-line reason and, where it can, an estimate.
   - Only targets whose engine is installed are suggested. For several files, a conversion is suggested only when every file gets the same answer.
   - Picks are counted per source type in `settings.toml` under `[habits]`. A target picked at least three times, and more than any other, becomes the suggestion.
   - `kiln suggest FILE...` prints each file's suggestion and the set's, ignoring picks.

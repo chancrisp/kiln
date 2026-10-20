@@ -68,7 +68,7 @@ clearly helps, Kiln says nothing.
 - **In the list.** Each row's second line says what Kiln found and what it suggests, as in `4032 × 3024 photo · 3.1 MB · Suggested: JPG, about 2 MB`.
 - **In the wheel.** A small celadon dot marks the suggested format or tool. Formats keep their places. Opened from the keyboard, the wheel starts on the suggestion, and the footer gives the reason.
 - **Your picks.** When you have picked the same format for a type of file at least three times, and it is the one you pick most, Kiln suggests it from then on.
-- **What it looks at.** The size and look of a picture, whether it has transparency or motion, the length and bitrate of audio and video, black bars, and whether a PDF has text. Images are read by Kiln itself, and audio and video by FFmpeg.
+- **What it looks at.** The size and look of a picture, whether it has transparency or motion, the length and bitrate of audio and video, black bars, and whether a PDF has text. Images are read by Kiln itself, except HEIC, AVIF and JXL, which FFmpeg reads like audio and video.
 
 Nothing is uploaded, and picks are counted only in `settings.toml`. Turn
 suggestions off with **Suggestions** in **Settings > General**. **Forget
@@ -256,9 +256,9 @@ kiln suggest FILE...
 `kiln` exits with 0 on success, 2 when the request can't be done (an unknown
 format, or an unsupported pair or tool), and 1 when a conversion fails.
 
-`kiln suggest` prints each file's suggestion and its reason. For several
-files it adds an `(all)` line for a tool, or a conversion they share, when
-there is one. It ignores your picks, so its output is the same every time.
+`kiln suggest` prints each file's suggestion and its reason. It adds an
+`(all)` line for a tool when one applies, even to a single file, and, for
+several files, one for a conversion they share, when there is one. It ignores your picks, so its output is the same every time.
 It exits with 2 when a file doesn't exist.
 
 ```text

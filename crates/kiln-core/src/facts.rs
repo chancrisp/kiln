@@ -162,6 +162,9 @@ fn image_facts(path: &Path, opts: &Options, cancel: &CancelToken, facts: &mut Fa
         facts.picture = probe(path, opts, cancel)
             .and_then(|m| Some((m.width?, m.height?)))
             .map(photo);
+        if let Some(p) = facts.picture.as_mut().filter(|_| ext != "heic") {
+            p.alpha = pix_fmt(path, opts, cancel).is_some_and(|f| alpha_format(&f));
+        }
     } else if raster::reads(ext) || ext == "apng" {
         raster_facts(path, ext, opts, cancel, facts);
     }
@@ -218,6 +221,30 @@ fn probe(path: &Path, opts: &Options, cancel: &CancelToken) -> Option<MediaInfo>
     let _low = crate::process::low_priority();
     let info = crate::ffmpeg::probe_media(opts, path, &mut ctx).ok()?;
     (info.duration.is_some() || info.width.is_some()).then_some(info)
+}
+
+/// FFprobe's pixel format for the first video stream, within `LIMIT`.
+fn pix_fmt(path: &Path, opts: &Options, cancel: &CancelToken) -> Option<String> {
+    if cancel.is_cancelled() {
+        return None;
+    }
+    let deadline = Deadline::new(cancel);
+    let mut ctx = Context {
+        progress: &mut |_| {},
+        cancel: &deadline.token,
+    };
+    let _low = crate::process::low_priority();
+    crate::ffmpeg::probe_pix_fmt(opts, path, &mut ctx)
+        .ok()
+        .flatten()
+}
+
+/// Whether an FFmpeg pixel format carries alpha.
+fn alpha_format(pix_fmt: &str) -> bool {
+    ["yuva", "rgba", "gbrap", "ya"]
+        .iter()
+        .any(|p| pix_fmt.starts_with(p))
+        || matches!(pix_fmt, "bgra" | "argb" | "abgr")
 }
 
 /// Whether FFmpeg's black-bar detector finds bars in the first
@@ -585,6 +612,30 @@ mod tests {
     #[test]
     fn stripes_read_as_a_graphic() {
         assert_eq!(look_of(&stripes(64, 48)), Look::Graphic);
+    }
+
+    #[test]
+    fn alpha_is_read_from_the_pixel_format() {
+        for f in [
+            "yuva420p",
+            "yuva444p10le",
+            "rgba",
+            "rgba64le",
+            "gbrap",
+            "gbrap16le",
+            "ya8",
+            "ya16be",
+            "bgra",
+            "argb",
+            "abgr",
+        ] {
+            assert!(alpha_format(f), "{f}");
+        }
+        for f in [
+            "yuv420p", "yuv444p", "rgb24", "gbrp", "gray", "bgr24", "nv12",
+        ] {
+            assert!(!alpha_format(f), "{f}");
+        }
     }
 
     #[test]

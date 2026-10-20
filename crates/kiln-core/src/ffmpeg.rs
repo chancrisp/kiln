@@ -464,6 +464,16 @@ pub(crate) fn probe_media(
     Ok(info)
 }
 
+/// The pixel format of the first video stream, such as "yuva420p".
+pub(crate) fn probe_pix_fmt(
+    opts: &Options,
+    input: &Path,
+    ctx: &mut Context<'_>,
+) -> Result<Option<String>> {
+    let lines = probe_lines(opts, ctx, input, Some("v:0"), "stream=pix_fmt")?;
+    Ok(lines.into_iter().find(|l| !l.is_empty()))
+}
+
 /// Whether the file has an audio stream.
 pub(crate) fn has_audio(opts: &Options, input: &Path, ctx: &mut Context<'_>) -> Result<bool> {
     let lines = probe(opts, ctx, input, "stream=codec_type")?;

@@ -244,6 +244,14 @@ fn is_large_video(f: &Facts) -> bool {
     rate.is_some_and(|r| r > LARGE_BITRATE) || f.bytes > LARGE_BYTES
 }
 
+/// A large video whose compressed size, when known, is under 80% of its
+/// size: a saving too small to see isn't worth suggesting.
+fn worth_compressing(f: &Facts) -> bool {
+    is_large_video(f)
+        && f.compressed
+            .is_none_or(|c| u128::from(c) * 10 < u128::from(f.bytes) * 8)
+}
+
 /// The sum of `values` when every one is known.
 fn sum_all(mut values: impl Iterator<Item = Option<u64>>) -> Option<u64> {
     values.try_fold(0u64, |acc, v| Some(acc.saturating_add(v?)))
@@ -269,7 +277,7 @@ fn tool_suggestion(files: &[Facts], offered: &Offered) -> Option<Suggestion> {
     let every = |test: fn(&Facts) -> bool| files.iter().all(test);
     let several = files.len() >= 2;
     let rules: [(Tool, bool, Reason); 4] = [
-        (Tool::Compress, every(is_large_video), Reason::Compress),
+        (Tool::Compress, every(worth_compressing), Reason::Compress),
         (
             Tool::Merge,
             several && every(|f| f.ext == "pdf"),
@@ -550,6 +558,24 @@ mod tests {
 
         let calm = with_media(facts("mp4", Kind::Video), 50_000_000, 100.0);
         assert_eq!(tool(&[calm]), None);
+
+        // Compress only when the result would be under 80% of the file.
+        for (after, suggested) in [
+            (479_999_999, true),
+            (480_000_000, false),
+            (660_000_000, false),
+        ] {
+            let mut f = with_media(facts("mp4", Kind::Video), 600_000_000, 60.0);
+            f.compressed = Some(after);
+            assert_eq!(tool(&[f]).is_some(), suggested, "{after}");
+        }
+        // In a set, every file has to be worth it.
+        let mut worth = with_media(facts("mp4", Kind::Video), 600_000_000, 60.0);
+        worth.compressed = Some(100_000_000);
+        let mut not = worth.clone();
+        not.compressed = Some(590_000_000);
+        assert_eq!(tool(&[worth.clone(), not]), None);
+        assert!(tool(&[worth.clone(), worth]).is_some());
 
         let pdfs = [
             with_pdf(facts("pdf", Kind::Document), Some(true)),

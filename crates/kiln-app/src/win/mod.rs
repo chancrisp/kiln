@@ -1442,6 +1442,11 @@ impl App {
             }
         }
         self.save_settings();
+        // What Kiln offers follows the engines, and so do the rows'
+        // suggestions.
+        if matches!(c, Control::EngineChoose(_) | Control::EngineReset(_)) {
+            self.habits_changed();
+        }
         let (output_line, engine_lines) = self.settings_lines();
         // Reset buttons come and go. Keep keyboard focus on the same
         // control, or on its Choose button when a Reset went away.
