@@ -8,6 +8,7 @@ mod system;
 mod text;
 mod updates;
 
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -31,8 +32,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use kiln_core::{
-    suggest, Facts, Format, Habits, Holding, JobError, JobEvent, JobId, JobKind, Kiln, Knob,
-    MediaInfo, Offered, Options, Progress, Quality, Runner, Suggestion, Tool,
+    suggest, Availability, Facts, Format, Habits, Holding, JobError, JobEvent, JobId, JobKind,
+    Kiln, Knob, MediaInfo, Offered, Options, Progress, Quality, Runner, Suggestion, Tool,
 };
 
 use crate::actions::{self, FileAction};
@@ -368,12 +369,32 @@ struct Batch {
     held: usize,
 }
 
+/// Which engines are installed, looked for once and kept until settings
+/// are saved or read: looking searches PATH and the usual install
+/// folders, too slow to do for every file's facts or every wheel.
+#[derive(Default)]
+struct Engines(OnceCell<Availability>);
+
+impl Engines {
+    /// The engines found, running `search` only when nothing is kept.
+    fn get(&self, search: impl FnOnce() -> Availability) -> &Availability {
+        self.0.get_or_init(search)
+    }
+
+    /// Look again next time.
+    fn forget(&mut self) {
+        self.0.take();
+    }
+}
+
 struct App {
     hwnd: HWND,
     kiln: Arc<Kiln>,
     runner: Runner,
     /// Looks inside listed files for suggestions, one at a time.
     inspector: Inspector,
+    /// The engines suggestions are worked out with.
+    engines: Engines,
     jobs: HashMap<JobId, JobInfo>,
     batches: HashMap<u64, Batch>,
     next_batch: u64,
@@ -1154,6 +1175,12 @@ impl App {
         }
     }
 
+    /// Which engines are installed, as last looked for.
+    fn availability(&self) -> &Availability {
+        self.engines
+            .get(|| self.kiln.availability(&self.settings.options()))
+    }
+
     /// What Kiln puts forward for one file, given what it offers for it:
     /// its conversion, or else its tool.
     fn suggestion_for(&self, facts: &Facts, offered: &Offered) -> Option<Suggestion> {
@@ -1168,7 +1195,7 @@ impl App {
         }
         let offered = self
             .kiln
-            .offered(&[found.path.as_path()], &self.settings.options());
+            .offered_with(&[found.path.as_path()], self.availability());
         let suggestion = self.suggestion_for(&found.facts, &offered);
         if self.files.set_facts(&found.path, found.facts, suggestion) {
             self.animate();
@@ -1201,7 +1228,7 @@ impl App {
         }
         let facts = self.files.facts_for(paths)?;
         let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
-        let offered = self.kiln.offered(&refs, &self.settings.options());
+        let offered = self.kiln.offered_with(&refs, self.availability());
         let s = suggest(&facts, &offered, &self.settings.habits);
         match kind {
             WheelKind::Convert => s.convert,
@@ -1211,10 +1238,10 @@ impl App {
     }
 
     /// Habits or engines changed: every row's suggestion follows from its
-    /// facts, with no new fade. Engines are looked for once, and what Kiln
-    /// offers is worked out once per type.
+    /// facts, with no new fade. Engines are looked for at most once, and
+    /// what Kiln offers is worked out once per type.
     fn habits_changed(&mut self) {
-        let available = self.kiln.availability(&self.settings.options());
+        let available = self.availability();
         let mut offers: HashMap<String, Offered> = HashMap::new();
         let fresh: Vec<Option<Option<Suggestion>>> = self
             .files
@@ -1224,7 +1251,7 @@ impl App {
                 let f = e.facts.as_ref()?;
                 let offered = offers
                     .entry(f.ext.clone())
-                    .or_insert_with(|| self.kiln.offered_with(&[e.path.as_path()], &available));
+                    .or_insert_with(|| self.kiln.offered_with(&[e.path.as_path()], available));
                 Some(self.suggestion_for(f, offered))
             })
             .collect();
@@ -1741,6 +1768,8 @@ impl App {
             self.settings.habits.record(from, to);
         }
         let changed = favourites(&self.settings.habits) != before;
+        // Any settings save means looking for the engines again.
+        self.engines.forget();
         // Not over a settings.toml that couldn't be read: see Store.
         if let Err(e) = self.settings_store.save_picks(&self.settings) {
             self.status = e;
@@ -1962,6 +1991,7 @@ impl App {
     fn load_settings(&mut self) {
         let (s, err) = self.settings_store.load();
         self.settings = s;
+        self.engines.forget();
         if let Some(e) = err {
             self.status = format!("{e}. Using the defaults.");
             log(&self.status);
@@ -1971,6 +2001,8 @@ impl App {
 
     /// Save after an explicit change in Settings.
     fn save_settings(&mut self) {
+        // The engines may be others now.
+        self.engines.forget();
         if let Err(e) = self.settings_store.save(&self.settings) {
             self.status = e;
         }
@@ -2900,6 +2932,7 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         kiln,
         runner,
         inspector,
+        engines: Engines::default(),
         jobs: HashMap::new(),
         batches: HashMap::new(),
         next_batch: 1,
@@ -3407,5 +3440,22 @@ mod tests {
         );
         assert_eq!(habit_picks(&Action::Tool(Tool::Merge), &paths), []);
         assert_eq!(habit_picks(&Action::File(FileAction::ALL[0]), &paths), []);
+    }
+
+    #[test]
+    fn engines_are_looked_for_once_until_settings_change() {
+        let searches = std::cell::Cell::new(0);
+        let search = || {
+            searches.set(searches.get() + 1);
+            Availability::default()
+        };
+        let mut engines = Engines::default();
+        engines.get(search);
+        engines.get(search);
+        assert_eq!(searches.get(), 1);
+        engines.forget();
+        engines.get(search);
+        engines.get(search);
+        assert_eq!(searches.get(), 2);
     }
 }
