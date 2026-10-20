@@ -2771,7 +2771,7 @@ impl App {
                             None => outputs
                                 .first()
                                 .and_then(|p| p.parent())
-                                .map(Path::to_path_buf),
+                                .map(|p| model::Saved::Folder(p.to_path_buf())),
                         },
                     },
                     Err(e) if e.cancelled => JobState::Cancelled,

@@ -1129,6 +1129,7 @@ mod tests {
     use super::*;
     use crate::help::help_content;
     use crate::layout::SettingsShape;
+    use crate::model::Saved;
     use crate::settings::Settings;
     use crate::ways_in::empty_lines;
     use crate::wheel::{Action, WheelKind};
@@ -1416,7 +1417,7 @@ mod tests {
             JobState::Done {
                 action: Action::Convert("jpg".into()),
                 outputs: vec![PathBuf::from(r"C:\out\a.jpg")],
-                saved: Some(PathBuf::from(r"C:\out")),
+                saved: Some(Saved::Folder(PathBuf::from(r"C:\out"))),
             },
         )];
         let t = tree(&input(&lines, rows(&es)));
@@ -1425,6 +1426,23 @@ mod tests {
         let link = &row.children[0];
         assert_eq!(link.role, Role::Hyperlink);
         assert_eq!(link.name, es[0].line().0);
+    }
+
+    #[test]
+    fn a_dropped_row_says_so_and_links_nowhere() {
+        let lines = empty_lines(&Settings::default());
+        let es = [entry(
+            "a.png",
+            JobState::Done {
+                action: Action::Convert("jpg".into()),
+                outputs: vec![PathBuf::from("held/a.jpg")],
+                saved: Some(Saved::Dropped),
+            },
+        )];
+        let t = tree(&input(&lines, rows(&es)));
+        sound(&t);
+        let row = named(&t, Role::ListItem, "a.png, Saved where you dropped it.");
+        assert!(row.children.is_empty());
     }
 
     #[test]

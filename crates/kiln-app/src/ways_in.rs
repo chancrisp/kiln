@@ -567,7 +567,7 @@ mod tests {
         let saved = entry(JobState::Done {
             action: Action::Convert("jpg".into()),
             outputs: vec![out],
-            saved: Some(PathBuf::from(r"D:\out")),
+            saved: Some(crate::model::Saved::Folder(PathBuf::from(r"D:\out"))),
         });
         assert_eq!(saved.row_state(false, there), Saved);
         // A moved file isn't a result to show.

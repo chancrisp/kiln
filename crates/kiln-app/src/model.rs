@@ -23,9 +23,9 @@ pub enum JobState {
     Done {
         action: Action,
         outputs: Vec<PathBuf>,
-        /// The folder the results were exported to. `None` means they are
-        /// still held in Kiln's private folder.
-        saved: Option<PathBuf>,
+        /// Where the results went. `None` means they are still held in
+        /// Kiln's private folder.
+        saved: Option<Saved>,
     },
     Failed {
         /// One plain sentence, whole. The row cuts it short if it must.
@@ -36,6 +36,15 @@ pub enum JobState {
         engine: Option<&'static str>,
     },
     Cancelled,
+}
+
+/// Where a finished row's results went once they left the holding folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Saved {
+    /// Exported to this folder.
+    Folder(PathBuf),
+    /// Dragged out and dropped somewhere Kiln doesn't know.
+    Dropped,
 }
 
 /// The details dialog's title: "What FFmpeg said", or "What Kiln said"
@@ -178,6 +187,19 @@ pub fn batch_summary(
 
 /// A held result that someone removed by hand.
 pub const GONE: &str = "The result is no longer there. Convert it again.";
+
+/// A row whose held results a drag moved out.
+pub const DROPPED: &str = "Saved where you dropped it.";
+
+/// The footer when Windows wouldn't start a drag of held results.
+pub const DRAG_FAILED: &str = "Couldn't start the drag.";
+
+/// Whether the pointer, `dx` and `dy` from where it was pressed, has gone
+/// far enough to start a drag: past the system's drag box, `half_w` and
+/// `half_h` each way.
+pub fn past_drag(dx: f32, dy: f32, half_w: f32, half_h: f32) -> bool {
+    dx.abs() > half_w || dy.abs() > half_h
+}
 
 /// Footer after a batch that left `held` result files to export:
 /// "Converted 3 files to JPG. Export to keep them." With nothing held,
@@ -486,12 +508,16 @@ impl Entry {
                 Tone::Result,
             ),
             JobState::Done {
-                saved: Some(folder),
+                saved: Some(Saved::Folder(folder)),
                 ..
             } => (
                 format!("Saved to {}.", crate::actions::folder_name(folder)),
                 Tone::Result,
             ),
+            JobState::Done {
+                saved: Some(Saved::Dropped),
+                ..
+            } => (DROPPED.to_owned(), Tone::Result),
             JobState::Done { outputs, .. } => {
                 let first = outputs
                     .first()
@@ -566,12 +592,13 @@ impl Entry {
         }
     }
 
-    /// Where an exported row's results went: the folder and the files.
+    /// Where an exported row's results went: the folder and the files. A
+    /// row whose results were dragged out has no folder to show.
     pub fn saved(&self) -> Option<(&Path, &[PathBuf])> {
         match &self.job {
             JobState::Done {
                 outputs,
-                saved: Some(folder),
+                saved: Some(Saved::Folder(folder)),
                 ..
             } => Some((folder, outputs)),
             _ => None,
@@ -804,6 +831,21 @@ impl FileList {
         self.focus = Some(i);
     }
 
+    /// A plain press on row `i`. Inside a selection of two or more rows it
+    /// takes the focus and the anchor and keeps the selection, so it can
+    /// be dragged; it returns true, and the release without a drag is the
+    /// click. Anywhere else it's the click now, and it returns false.
+    pub fn press(&mut self, i: usize) -> bool {
+        if self.selected.len() > 1 && self.selected.contains(&i) {
+            self.focus = Some(i);
+            self.anchor = Some(i);
+            true
+        } else {
+            self.click(i);
+            false
+        }
+    }
+
     /// A Ctrl-click: row `i` goes in or out of the selection, and ranges
     /// start from it.
     pub fn ctrl_click(&mut self, i: usize) {
@@ -1033,11 +1075,68 @@ impl FileList {
             };
             if left.is_empty() {
                 *outputs = outputs.iter().filter_map(moved_to).cloned().collect();
-                *saved = Some(folder.to_path_buf());
+                *saved = Some(Saved::Folder(folder.to_path_buf()));
             } else {
                 *outputs = left;
             }
         }
+    }
+
+    /// What a drag of the selection carries: the held files of the
+    /// selected rows, once each, in list order, but not those `skip`
+    /// names (being saved, or gone).
+    pub fn drag_files(&self, skip: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
+        self.held_files(|i| self.selected.contains(&i))
+            .into_iter()
+            .filter(|p| !skip(p))
+            .collect()
+    }
+
+    /// Record held files a drag moved out, the drag's twin of
+    /// [`FileList::exported`]. A row whose results all went is saved where
+    /// they were dropped; a row with some left keeps holding those.
+    pub fn dragged_out(&mut self, moved: &[PathBuf]) {
+        for e in &mut self.entries {
+            let Some(held) = e.held() else {
+                continue;
+            };
+            if !held.iter().any(|p| moved.contains(p)) {
+                continue;
+            }
+            let left: Vec<PathBuf> = held
+                .iter()
+                .filter(|p| !moved.contains(p))
+                .cloned()
+                .collect();
+            let JobState::Done { outputs, saved, .. } = &mut e.job else {
+                continue;
+            };
+            if left.is_empty() {
+                *saved = Some(Saved::Dropped);
+            } else {
+                *outputs = left;
+            }
+        }
+    }
+
+    /// Held files this run dragged (`dragged`) that are no longer there,
+    /// as `exists` says, were moved by the drop, not lost: record them as
+    /// dragged out. Returns whether any row changed.
+    pub fn settle_drags(
+        &mut self,
+        dragged: &HashSet<PathBuf>,
+        exists: impl Fn(&Path) -> bool,
+    ) -> bool {
+        let moved: Vec<PathBuf> = self
+            .held_files(|_| true)
+            .into_iter()
+            .filter(|p| dragged.contains(p) && !exists(p))
+            .collect();
+        if moved.is_empty() {
+            return false;
+        }
+        self.dragged_out(&moved);
+        true
     }
 
     pub fn entries_mut(&mut self) -> &mut [Entry] {
@@ -1837,7 +1936,7 @@ mod tests {
         e.job = JobState::Done {
             action: jpg,
             outputs: vec!["photo.jpg".into()],
-            saved: Some(r"D:\Pictures\Out".into()),
+            saved: Some(Saved::Folder(r"D:\Pictures\Out".into())),
         };
         lines.push(e.line().0);
         e.job = JobState::Failed {
@@ -1950,7 +2049,7 @@ mod tests {
         e.job = JobState::Done {
             action: Action::Convert("jpg".into()),
             outputs: outputs.iter().map(PathBuf::from).collect(),
-            saved: saved.map(PathBuf::from),
+            saved: saved.map(|f| Saved::Folder(f.into())),
         };
         e
     }
@@ -2177,7 +2276,7 @@ mod tests {
             JobState::Done {
                 action: Action::Convert("jpg".into()),
                 outputs: vec![out.join("a.jpg")],
-                saved: Some(out.to_path_buf()),
+                saved: Some(Saved::Folder(out.to_path_buf())),
             }
         );
         // Part of a split went out: the row keeps holding the rest.
@@ -2190,6 +2289,140 @@ mod tests {
         // Untouched rows stay as they were.
         assert_eq!(e[4].held(), Some(&[PathBuf::from("held/e.jpg")][..]));
         assert_eq!(list.held_count(), 2);
+    }
+
+    #[test]
+    fn a_dragged_out_row_says_where_it_went() {
+        use crate::ways_in::RowState;
+        let mut list = FileList {
+            entries: vec![held_row("a.png", &["a.jpg"], None)],
+            ..Default::default()
+        };
+        list.dragged_out(&[PathBuf::from("a.jpg")]);
+        let e = &list.entries()[0];
+        assert_eq!(
+            e.line(),
+            ("Saved where you dropped it.".to_owned(), Tone::Result)
+        );
+        assert_eq!(e.held(), None);
+        assert_eq!(e.saved(), None);
+        assert_eq!(e.link(false), None);
+        assert!(!e.is_gone(|_| false));
+        assert_eq!(e.row_state(false, |_| false), RowState::Plain);
+        assert_eq!(list.held_count(), 0);
+    }
+
+    #[test]
+    fn a_partly_dragged_row_keeps_the_rest() {
+        let mut list = FileList {
+            entries: vec![held_row(
+                "talk.mp3",
+                &["p 1.mp3", "p 2.mp3", "p 3.mp3"],
+                None,
+            )],
+            ..Default::default()
+        };
+        list.dragged_out(&[PathBuf::from("p 1.mp3")]);
+        assert_eq!(list.entries()[0].line().0, "Ready: p 2.mp3 and 1 more");
+        assert_eq!(list.held_count(), 2);
+    }
+
+    #[test]
+    fn a_shared_result_moved_by_a_drag_saves_every_row() {
+        let mut list = FileList {
+            entries: vec![
+                held_row("a.pdf", &["merged.pdf"], None),
+                held_row("b.pdf", &["merged.pdf"], None),
+            ],
+            ..Default::default()
+        };
+        list.select_all();
+        assert_eq!(list.drag_files(|_| false), [PathBuf::from("merged.pdf")]);
+        list.dragged_out(&[PathBuf::from("merged.pdf")]);
+        assert!(list.entries().iter().all(|e| e.line().0 == DROPPED));
+    }
+
+    #[test]
+    fn a_drag_carries_held_results_of_the_selection() {
+        let mut running = row("b.png");
+        running.job = JobState::Running {
+            action: Action::Convert("jpg".into()),
+            fraction: None,
+        };
+        let mut list = FileList {
+            entries: vec![
+                held_row("a.png", &["a.jpg"], None),
+                running,
+                held_row("c.png", &["c.jpg"], None),
+                held_row("d.png", &["d.jpg"], None),
+            ],
+            ..Default::default()
+        };
+        // An empty selection carries nothing.
+        assert!(list.drag_files(|_| false).is_empty());
+        // The running row has nothing to carry, c.jpg is being saved, and
+        // d isn't selected.
+        list.click(0);
+        list.ctrl_click(1);
+        list.ctrl_click(2);
+        assert_eq!(
+            list.drag_files(|p| p == Path::new("c.jpg")),
+            [PathBuf::from("a.jpg")]
+        );
+    }
+
+    #[test]
+    fn a_press_inside_the_selection_waits_for_release() {
+        let mut list = list_of(4);
+        list.click(0);
+        list.ctrl_click(2);
+        assert!(list.press(2));
+        assert_eq!(list.selection(), [0, 2]);
+        assert_eq!(list.focus(), Some(2));
+        assert_eq!(list.anchor, Some(2));
+        // Release without a drag: the win layer calls click(2).
+        list.click(2);
+        assert_eq!(list.selection(), [2]);
+        // A press outside the selection, or with one row selected, is a click.
+        assert!(!list.press(1));
+        assert_eq!(list.selection(), [1]);
+        assert!(!list.press(1));
+        assert_eq!(list.selection(), [1]);
+        // Past the end is no row.
+        assert!(!list.press(9));
+        assert_eq!(list.selection(), [1]);
+    }
+
+    #[test]
+    fn files_gone_after_a_drag_were_moved_not_lost() {
+        let mut list = FileList {
+            entries: vec![
+                held_row("a.png", &["a.jpg"], None),
+                held_row("b.png", &["b.jpg"], None),
+            ],
+            ..Default::default()
+        };
+        let dragged: HashSet<PathBuf> = [PathBuf::from("a.jpg")].into();
+        // b.jpg is missing too, but it wasn't dragged: that one is gone.
+        assert!(list.settle_drags(&dragged, |_| false));
+        assert_eq!(list.entries()[0].line().0, DROPPED);
+        assert!(list.entries()[1].is_gone(|_| false));
+        // Nothing more to settle.
+        assert!(!list.settle_drags(&dragged, |_| false));
+        // A dragged file still there was copied, not moved.
+        let mut copied = FileList {
+            entries: vec![held_row("a.png", &["a.jpg"], None)],
+            ..Default::default()
+        };
+        assert!(!copied.settle_drags(&dragged, |_| true));
+        assert_eq!(copied.held_count(), 1);
+    }
+
+    #[test]
+    fn a_drag_starts_past_the_system_distance() {
+        assert!(!past_drag(2.0, -2.0, 2.0, 2.0));
+        assert!(past_drag(2.5, 0.0, 2.0, 2.0));
+        assert!(past_drag(0.0, -3.0, 2.0, 2.0));
     }
 
     #[test]
