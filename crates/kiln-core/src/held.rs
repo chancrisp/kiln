@@ -66,12 +66,28 @@ impl Holding {
         &self.dir
     }
 
-    /// Remove this run's folder and everything in it.
+    /// Remove this run's folder and everything in it. The lock goes last,
+    /// so if a result is open elsewhere and can't be removed, the folder
+    /// keeps its lock and the next launch's sweep can retry it.
     pub fn discard(self) -> Result<()> {
         let Holding { dir, _lock } = self;
+        let entries = fs::read_dir(&dir).map_err(|e| Error::io(&dir, e))?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if entry.file_name() == LOCK_NAME {
+                continue;
+            }
+            let removed = match entry.file_type() {
+                Ok(t) if t.is_dir() => fs::remove_dir_all(&path),
+                _ => fs::remove_file(&path),
+            };
+            removed.map_err(|e| Error::io(&path, e))?;
+        }
         // Windows can't delete an open file.
         drop(_lock);
-        fs::remove_dir_all(&dir).map_err(|e| Error::io(dir, e))
+        let lock = dir.join(LOCK_NAME);
+        fs::remove_file(&lock).map_err(|e| Error::io(&lock, e))?;
+        fs::remove_dir(&dir).map_err(|e| Error::io(dir, e))
     }
 }
 
