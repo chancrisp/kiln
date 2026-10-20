@@ -7,6 +7,7 @@ mod render;
 mod system;
 mod text;
 mod tips;
+mod uia;
 mod updates;
 
 use std::cell::OnceCell;
@@ -37,6 +38,7 @@ use kiln_core::{
     Kiln, Knob, MediaInfo, Offered, Options, Progress, Quality, Runner, Suggestion, Tool,
 };
 
+use crate::a11y;
 use crate::actions::{self, FileAction};
 use crate::help::{self, HelpSection};
 use crate::layout::{
@@ -607,6 +609,8 @@ struct App {
     /// happening. While the status still says it, it stands over the
     /// selection count.
     alert: Option<String>,
+    /// What UI Automation clients are told the window holds.
+    uia: uia::Host,
 }
 
 impl App {
@@ -3554,21 +3558,264 @@ impl App {
         self.drag_paths.clear();
     }
 
-    fn paint(&mut self) {
-        let settings_layout = self.settings_layout();
-        let anims: Vec<RowAnim> = (0..self.files.len()).map(|i| self.row_anim(i)).collect();
-        let anim = |i: usize| {
-            anims.get(i).copied().unwrap_or(RowAnim {
-                appear: 1.0,
-                settle: 1.0,
-                facts: 1.0,
+    // Accessibility.
+
+    /// What the window shows, as a tree for UI Automation.
+    fn a11y_tree(&self) -> a11y::Node {
+        let size = self.renderer.size_dips();
+        let l = self.layout();
+        let saving = self.saving_rows();
+        let rows: Vec<a11y::RowIn> = self
+            .files
+            .entries()
+            .iter()
+            .enumerate()
+            .map(|(i, e)| {
+                let busy = saving.contains(&e.path);
+                let instead = if busy {
+                    Some(model::SAVING)
+                } else {
+                    self.notes.get(&e.path).map(|(line, _)| line.as_str())
+                };
+                let link = l.rows.get(i).and_then(|r| {
+                    let mut r = *r;
+                    r.y -= self.scroll;
+                    (!busy)
+                        .then(|| e.link(self.renderer.line_cut(&r, e)))
+                        .flatten()
+                });
+                a11y::RowIn {
+                    entry: e,
+                    selected: self.files.is_selected(i),
+                    instead,
+                    link,
+                }
             })
-        };
+            .collect();
+        let status = self.footer_text();
+        let empty_status = self.empty_status();
         let empty = ways_in::empty_lines(&self.settings);
+        let held = self.files.held_count();
+        let export_all = (held > 0).then(|| model::export_all_label(held));
+        let settings_layout = self.settings_ui.as_ref().map(|_| self.settings_layout());
         let update_note = self.update.note();
-        let wheel_hint = self.wheel_hint();
+        let (sheet_rows, sheet_lines) = self.sheet_texts();
         let sheet_layout = self.sheet_layout();
-        let sheet_rows: Vec<(String, String)> = self
+        let input = a11y::Input {
+            size,
+            rows,
+            scroll: self.scroll,
+            focus_row: self.files.focus(),
+            status: &status,
+            empty: &empty,
+            empty_status: &empty_status,
+            export_all: export_all.as_deref(),
+            wheel: self
+                .wheel
+                .as_ref()
+                .filter(|w| w.is_open())
+                .map(|w| a11y::WheelIn {
+                    wheel: &w.wheel,
+                    paths: &w.paths,
+                    hover: w.hover,
+                    more_open: w.more_open(),
+                    options: self.wheel_options().is_some(),
+                }),
+            settings: match (&self.settings_ui, &settings_layout) {
+                (Some(ui), Some(l)) => Some(a11y::SettingsIn {
+                    layout: l,
+                    focus: ui.focus,
+                    quality: &self.settings.quality,
+                    theme: self.settings.theme,
+                    suggestions: self.settings.suggestions,
+                    has_habits: !self.settings.habits.is_empty(),
+                    keys: self.settings.keys,
+                    output: &ui.output_line.0,
+                    engines: ui.engine_lines.each_ref().map(|(s, _)| s.as_str()),
+                    update_button: self.update.button(),
+                    update_note: ui.note.as_deref().unwrap_or(&update_note.0),
+                }),
+                _ => None,
+            },
+            details: self.details.as_ref().map(|d| a11y::DetailsIn {
+                title: &d.title,
+                text: &d.text,
+                copy: model::copy_label(d.last_copy.map(|(ok, t)| (ok, t.elapsed()))),
+                focus: d.focus,
+            }),
+            help: self.help.as_ref().map(|ui| &ui.sections[..]),
+            sheet: match (
+                self.sheet.as_ref().filter(|s| s.is_open()),
+                &sheet_layout,
+                &sheet_lines,
+            ) {
+                (Some(s), Some(l), Some((title, target, context, result))) => Some(a11y::SheetIn {
+                    layout: l,
+                    title,
+                    target,
+                    context,
+                    result,
+                    rows: &sheet_rows,
+                    preset: s.quality.preset,
+                    focus: s.focus,
+                }),
+                _ => None,
+            },
+        };
+        let mut tree = a11y::tree(&input);
+        // Settings controls that can't be used now say so.
+        if let Some(l) = &settings_layout {
+            for (c, _) in &l.controls {
+                if let Some(n) = tree.find_mut(&a11y::Id::Setting(*c)) {
+                    n.states.disabled = !self.control_enabled(*c);
+                }
+            }
+        }
+        tree
+    }
+
+    /// Give UI Automation the window as it is now, once a client has
+    /// asked for it. It hears of new focus, rows and status from here.
+    fn sync_a11y(&mut self) {
+        if !self.uia.active() {
+            return;
+        }
+        let tree = self.a11y_tree();
+        let unit_px = layout::px_per_unit(self.dpi, self.zoom);
+        let has_focus = unsafe { GetFocus() } == self.hwnd;
+        let status = self.status.clone();
+        self.uia.update(tree, unit_px, has_focus, &status);
+    }
+
+    /// Do what a UI Automation client asked, as the click or key that
+    /// does the same would.
+    fn a11y_do(&mut self, req: a11y::Request) {
+        use a11y::{Id, Verb};
+        let row = |app: &App, path: &Path| app.files.entries().iter().position(|e| e.path == path);
+        match (&req.id, &req.verb) {
+            (Id::HelpButton, Verb::Invoke) => self.open_help(),
+            (Id::SettingsButton, Verb::Invoke) => self.open_settings(),
+            (Id::AddFiles, Verb::Invoke) => self.add_files(),
+            (Id::ExportAll, Verb::Invoke) => self.export_everything(),
+            (Id::Clear, Verb::Invoke) => self.clear(),
+            (Id::Row(p), verb) => {
+                let Some(i) = row(self, p) else {
+                    return;
+                };
+                match verb {
+                    Verb::Select => self.files.click(i),
+                    Verb::AddToSelection if !self.files.is_selected(i) => self.files.ctrl_click(i),
+                    Verb::RemoveFromSelection if self.files.is_selected(i) => {
+                        self.files.ctrl_click(i)
+                    }
+                    Verb::Focus => self.files.set_focus(i),
+                    Verb::ScrollIntoView => {}
+                    _ => return,
+                }
+                self.files.keyboard_used();
+                self.scroll_to_row(i);
+            }
+            (Id::RowCancel(p), Verb::Invoke) => {
+                if let Some(i) = row(self, p) {
+                    self.cancel_row(i);
+                }
+            }
+            (Id::RowLink(p), Verb::Invoke) => {
+                if let Some(i) = row(self, p) {
+                    self.files.click(i);
+                    self.follow_link(i);
+                }
+            }
+            (Id::WheelItem(spot), Verb::Invoke | Verb::Select) => self.choose(*spot),
+            (Id::WheelItem(spot), Verb::Focus) => {
+                if let Some(w) = self.wheel.as_mut().filter(|w| w.is_open()) {
+                    w.point(Some(*spot));
+                    self.animate();
+                }
+            }
+            (Id::WheelOptions, Verb::Invoke) => {
+                let hover = self.wheel.as_ref().and_then(|w| w.hover);
+                self.open_sheet(hover);
+            }
+            (Id::Setting(c), verb) => {
+                if !self.control_enabled(*c) {
+                    return;
+                }
+                let l = self.settings_layout();
+                let at = l.controls.iter().position(|(k, _)| k == c);
+                if let Some(ui) = &mut self.settings_ui {
+                    ui.focus = at.or(ui.focus);
+                }
+                match (c, verb) {
+                    (Control::Step(s), Verb::SetValue(v)) => {
+                        let Some(to) = s
+                            .values()
+                            .into_iter()
+                            .find(|&x| s.label(x).eq_ignore_ascii_case(v.trim()))
+                        else {
+                            return;
+                        };
+                        self.settings.quality.set(*s, to);
+                        self.save_settings();
+                    }
+                    (_, Verb::Invoke | Verb::Select) => return self.activate(*c, 1),
+                    _ => {}
+                }
+                self.invalidate();
+            }
+            (Id::DetailsButton(b), Verb::Invoke) => self.press_details(*b),
+            (Id::DetailsButton(b), Verb::Focus) => {
+                if let Some(d) = &mut self.details {
+                    d.focus = *b;
+                    self.invalidate();
+                }
+            }
+            (Id::HelpClose, Verb::Invoke) => {
+                self.help = None;
+                self.invalidate();
+            }
+            (Id::SheetControl(c), verb) => {
+                let Some(l) = self.sheet_layout() else {
+                    return;
+                };
+                let at = l.controls.iter().position(|(k, _)| k == c);
+                let Some(s) = self.sheet.as_mut().filter(|s| s.is_open()) else {
+                    return;
+                };
+                s.focus = at.or(s.focus);
+                match (c, verb) {
+                    (SheetControl::Step(row), Verb::SetValue(v)) => {
+                        let Some(&knob) = s.knobs.get(*row) else {
+                            return;
+                        };
+                        let unit = q::size_unit(&s.to);
+                        let to = s
+                            .values(knob)
+                            .into_iter()
+                            .find(|&x| q::label(knob, x, unit).eq_ignore_ascii_case(v.trim()));
+                        if let Some(to) = to {
+                            q::set(&mut s.quality, knob, to);
+                        }
+                    }
+                    (_, Verb::Invoke | Verb::Select) => return self.sheet_activate(*c, 1),
+                    _ => {}
+                }
+                self.invalidate();
+            }
+            _ => {}
+        }
+    }
+
+    /// The options sheet's knobs, each with its value as it reads, and its
+    /// title, target, source and result lines.
+    #[allow(clippy::type_complexity)]
+    fn sheet_texts(
+        &self,
+    ) -> (
+        Vec<(String, String)>,
+        Option<(String, String, String, String)>,
+    ) {
+        let rows: Vec<(String, String)> = self
             .sheet
             .as_ref()
             .map(|s| {
@@ -3584,7 +3831,7 @@ impl App {
                     .collect()
             })
             .unwrap_or_default();
-        let sheet_lines = self.sheet.as_ref().map(|s| {
+        let lines = self.sheet.as_ref().map(|s| {
             let title = match s.paths.len() {
                 1 => format!("Convert to {}", s.to.code()),
                 n => format!("Convert {n} files to {}", s.to.code()),
@@ -3599,9 +3846,11 @@ impl App {
             };
             (title, target, context, result)
         });
-        let held = self.files.held_count();
-        let export_all = (held > 0).then(|| model::export_all_label(held));
-        let saving = self.saving_rows();
+        (rows, lines)
+    }
+
+    /// What the footer says, the open wheel's hint aside.
+    fn footer_text(&self) -> String {
         let plain = status_line(self.files.len(), 0, 0, 0);
         let added = self
             .added
@@ -3619,13 +3868,38 @@ impl App {
         // While several rows are selected, their count stands over all of
         // that, unless something is running or went wrong.
         let count = model::selected_line(self.files.selected_rows().len());
-        let status = ways_in::footer_line(status, count.as_deref(), running, self.alerting());
-        // The empty window has no footer: what the status says, past the
-        // plain "0 files.", sits under its Add files button.
-        let empty_status = match self.status.as_str() {
-            s if s == plain => "",
-            s => s,
+        ways_in::footer_line(status, count.as_deref(), running, self.alerting()).to_owned()
+    }
+
+    /// The empty window has no footer: what the status says, past the
+    /// plain "0 files.", sits under its Add files button.
+    fn empty_status(&self) -> String {
+        match self.status.as_str() {
+            s if s == status_line(self.files.len(), 0, 0, 0) => String::new(),
+            s => s.to_owned(),
+        }
+    }
+
+    fn paint(&mut self) {
+        let settings_layout = self.settings_layout();
+        let anims: Vec<RowAnim> = (0..self.files.len()).map(|i| self.row_anim(i)).collect();
+        let anim = |i: usize| {
+            anims.get(i).copied().unwrap_or(RowAnim {
+                appear: 1.0,
+                settle: 1.0,
+                facts: 1.0,
+            })
         };
+        let empty = ways_in::empty_lines(&self.settings);
+        let update_note = self.update.note();
+        let wheel_hint = self.wheel_hint();
+        let sheet_layout = self.sheet_layout();
+        let (sheet_rows, sheet_lines) = self.sheet_texts();
+        let held = self.files.held_count();
+        let export_all = (held > 0).then(|| model::export_all_label(held));
+        let saving = self.saving_rows();
+        let status = self.footer_text();
+        let empty_status = self.empty_status();
         let view = View {
             palette: &self.palette,
             focus: self.files.visible_focus(),
@@ -3643,9 +3917,9 @@ impl App {
             drag: self.drag.value().clamp(0.0, 1.0),
             heat: heat_now(),
             row_anim: &anim,
-            status: wheel_hint.as_deref().unwrap_or(status),
+            status: wheel_hint.as_deref().unwrap_or(&status),
             empty: &empty,
-            empty_status,
+            empty_status: &empty_status,
             add_hover: self.add_hover,
             add_pressed: self.add_pressed,
             clear_hover: self.clear_hover,
@@ -3727,6 +4001,7 @@ impl App {
             t.sync(tools, self.unit_dpi());
         }
         self.tips = tips;
+        self.sync_a11y();
     }
 
     // Tooltips.
@@ -4078,6 +4353,7 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         last_add: None,
         added: None,
         alert: None,
+        uia: uia::Host::new(hwnd),
     });
     let app = Box::into_raw(app);
     unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, app as isize) };
@@ -4555,6 +4831,7 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
         WM_KILN_EXPORTED => {
             let ex = unsafe { Box::from_raw(lparam.0 as *mut Exported) };
             app.on_exported(*ex);
+            app.sync_a11y();
             Some(LRESULT(0))
         }
         WM_KILN_DRAG => {
@@ -4588,6 +4865,8 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
         WM_KILN_JOB => {
             let ev = unsafe { Box::from_raw(lparam.0 as *mut JobEvent) };
             app.on_job(*ev);
+            // Said even while minimised, when nothing paints.
+            app.sync_a11y();
             Some(LRESULT(0))
         }
         // Coming back to Kiln: a held result may have been removed by hand
@@ -4608,7 +4887,28 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
         // While results are held, ask Windows to wait: the shutdown block
         // reason says why, and the person decides.
         WM_QUERYENDSESSION => Some(LRESULT((app.files.held_count() == 0) as isize)),
+        // UI Automation asks for the window's tree.
+        WM_GETOBJECT if lparam.0 as i32 == uia::ROOT_OBJECT_ID => {
+            let first = !app.uia.active();
+            let root = app.uia.root();
+            if first {
+                app.sync_a11y();
+            }
+            Some(uia::answer(hwnd, wparam, lparam, root))
+        }
+        uia::WM_KILN_A11Y => {
+            let req = unsafe { Box::from_raw(lparam.0 as *mut a11y::Request) };
+            app.a11y_do(*req);
+            app.sync_a11y();
+            Some(LRESULT(0))
+        }
+        WM_SETFOCUS | WM_KILLFOCUS => {
+            app.sync_a11y();
+            None
+        }
         WM_DESTROY => {
+            // UI Automation lets go of the tree first.
+            app.uia.shutdown(hwnd);
             // Stop the inspect thread with the window, without waiting
             // for a decode under way: nothing is reported after this.
             app.inspector.shutdown();

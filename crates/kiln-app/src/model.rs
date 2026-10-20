@@ -653,6 +653,14 @@ impl FileList {
         self.focus.filter(|_| self.focus_visible)
     }
 
+    /// Put the focus on row `i` and leave the selection as it is, as
+    /// assistive technology moving its focus does.
+    pub fn set_focus(&mut self, i: usize) {
+        if i < self.entries.len() {
+            self.focus = Some(i);
+        }
+    }
+
     /// A key moved through or acted on the list: the focus ring shows.
     pub fn keyboard_used(&mut self) {
         self.focus_visible = true;

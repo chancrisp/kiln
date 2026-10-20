@@ -2,6 +2,7 @@
 //! layout and the file list. The Windows half lives in `src/win` and is
 //! compiled only for Windows.
 
+pub mod a11y;
 pub mod actions;
 pub mod help;
 pub mod icons;
