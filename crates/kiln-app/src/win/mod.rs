@@ -618,12 +618,17 @@ struct App {
     progress: a11y::ProgressGate,
     /// When UI Automation's tree was last built.
     a11y_built: Option<Instant>,
-    /// A11Y_TIMER is set to build it again.
-    a11y_pending: bool,
+    /// When A11Y_TIMER is due to build it again, for a change held back.
+    a11y_due: Option<Instant>,
     /// What to tell UI Automation clients once this message is done.
     a11y_events: Vec<uia::Event>,
-    /// Counts each status set: see `say`.
-    status_seq: u64,
+    /// Each status set during this message, in order: see `say`.
+    status_sets: Vec<String>,
+    /// Which status sets are announced.
+    teller: a11y::StatusTeller,
+    /// A UI Automation client moved the focus: the window takes the
+    /// keyboard focus once the message is done.
+    take_focus: bool,
 }
 
 impl App {
@@ -850,11 +855,12 @@ impl App {
         self.say(text);
     }
 
-    /// Set the status line. Each set counts, so an alert set again with
-    /// the same words is said again.
+    /// Set the status line. Each set is told to UI Automation on its own,
+    /// once the message is done, so an alert set again with the same words
+    /// is said again.
     fn say(&mut self, text: impl Into<String>) {
         self.status = text.into();
-        self.status_seq += 1;
+        self.status_sets.push(self.status.clone());
     }
 
     /// Whether the status is an alert that still stands.
@@ -3707,17 +3713,11 @@ impl App {
     }
 
     /// Give UI Automation the window as it is now, once a client has
-    /// asked for it. What to tell clients, a new focus, rows or status,
-    /// waits in `a11y_events` until the message is done.
+    /// asked for it. What to tell clients, a new focus or rows, waits in
+    /// `a11y_events` until the message is done.
     fn sync_a11y(&mut self, announce: bool) {
         if !self.uia.active() {
             return;
-        }
-        if self.a11y_pending {
-            self.a11y_pending = false;
-            unsafe {
-                let _ = KillTimer(Some(self.hwnd), A11Y_TIMER);
-            }
         }
         let now = Instant::now();
         self.a11y_built = Some(now);
@@ -3737,30 +3737,40 @@ impl App {
         let tree = self.a11y_tree(&progress);
         let unit_px = layout::px_per_unit(self.dpi, self.zoom);
         let has_focus = unsafe { GetFocus() } == self.hwnd;
-        let status = uia::Status {
-            text: &self.status,
-            seq: self.status_seq,
-            alert: self.alerting(),
-        };
-        let events = self.uia.update(tree, unit_px, has_focus, status, announce);
+        let events = self.uia.update(tree, unit_px, has_focus, announce);
         self.a11y_events.extend(events);
+        // This build carries every change held back so far, except a
+        // percent the gate still holds: a flush stays set for that alone.
+        self.a11y_due = None;
+        match self.progress.due() {
+            Some(due) => self.flush_a11y_at(due),
+            None => unsafe {
+                let _ = KillTimer(Some(self.hwnd), A11Y_TIMER);
+            },
+        }
     }
 
     /// Bring UI Automation up to date after a message that may change
     /// little: an animation frame, a job's progress, a drag. At most
-    /// every `a11y::PROGRESS_EVERY`; a timer catches up what's left.
+    /// every `a11y::PROGRESS_EVERY`; a flush catches up what's held.
     fn sync_a11y_soon(&mut self) {
-        if !self.uia.active() || self.a11y_pending {
+        if !self.uia.active() {
             return;
         }
-        let wait = self.a11y_built.map_or(Duration::ZERO, |t| {
-            a11y::PROGRESS_EVERY.saturating_sub(t.elapsed())
-        });
-        if wait.is_zero() {
-            return self.sync_a11y(true);
+        match self.a11y_built.map(|t| t + a11y::PROGRESS_EVERY) {
+            Some(due) if Instant::now() < due => self.flush_a11y_at(due),
+            _ => self.sync_a11y(true),
         }
-        self.a11y_pending = true;
-        let ms = wait.as_millis().clamp(1, u32::MAX as u128) as u32;
+    }
+
+    /// Build UI Automation's tree again at `due` or just after, unless a
+    /// flush is already set for sooner.
+    fn flush_a11y_at(&mut self, due: Instant) {
+        if self.a11y_due.is_some_and(|d| d <= due) {
+            return;
+        }
+        self.a11y_due = Some(due);
+        let ms = a11y::timer_ms(Instant::now(), due);
         unsafe {
             SetTimer(Some(self.hwnd), A11Y_TIMER, ms, None);
         }
@@ -3775,10 +3785,10 @@ impl App {
         if !a11y::accepts(&self.a11y_tree(&[]), &req) {
             return;
         }
+        // Taken once the message is done: SetFocus sends focus messages
+        // straight back to this window.
         if req.verb == Verb::Focus {
-            unsafe {
-                let _ = SetFocus(Some(self.hwnd));
-            }
+            self.take_focus = true;
         }
         let row = |app: &App, path: &Path| app.files.entries().iter().position(|e| e.path == path);
         match (&req.id, &req.verb) {
@@ -4444,9 +4454,11 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         uia: uia::Host::new(hwnd),
         progress: a11y::ProgressGate::default(),
         a11y_built: None,
-        a11y_pending: false,
+        a11y_due: None,
         a11y_events: Vec::new(),
-        status_seq: 0,
+        status_sets: Vec::new(),
+        teller: a11y::StatusTeller::default(),
+        take_focus: false,
     });
     let app = Box::into_raw(app);
     unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, app as isize) };
@@ -4645,14 +4657,20 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     if ptr.is_null() {
         return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     }
-    let (answer, events) = {
+    let (answer, events, take_focus) = {
         let app = unsafe { &mut *ptr };
         let answer = handle(app, msg, wparam, lparam);
         after(app, msg, wparam);
-        (answer, std::mem::take(&mut app.a11y_events))
+        let events = std::mem::take(&mut app.a11y_events);
+        (answer, events, std::mem::take(&mut app.take_focus))
     };
-    // With `App` no longer borrowed: a client told something may call
-    // straight back in.
+    // With `App` no longer borrowed: these send messages straight back to
+    // this window, and a client told something may call straight back in.
+    if take_focus {
+        unsafe {
+            let _ = SetFocus(Some(hwnd));
+        }
+    }
     uia::raise(events);
     match answer {
         Some(r) => r,
@@ -4660,25 +4678,59 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     }
 }
 
-/// After each message, bring UI Automation's tree up to date, even while
-/// minimised, when nothing paints. Input and the window's own news go at
-/// once; anything else, such as animation frames and job progress, goes a
-/// few times a second at most. Painting never builds it.
+/// After each message, tell UI Automation each status set, at once, then
+/// bring its tree up to date, even while minimised, when nothing paints.
 fn after(app: &mut App, msg: u32, wparam: WPARAM) {
-    if !app.uia.active() {
+    let sets: Vec<(String, bool)> = app
+        .status_sets
+        .drain(..)
+        .map(|t| {
+            let alert = app.alert.as_deref() == Some(t.as_str());
+            (t, alert)
+        })
+        .collect();
+    let said = !sets.is_empty();
+    let active = app.uia.active();
+    for (text, alert) in app.teller.tell(sets, active) {
+        let event = app.uia.status(text, alert);
+        app.a11y_events.push(event);
+    }
+    if !active {
         return;
     }
+    match sync_kind(msg, wparam.0, said) {
+        SyncKind::Skip => {}
+        SyncKind::Now => app.sync_a11y(true),
+        SyncKind::Soon => app.sync_a11y_soon(),
+    }
+}
+
+/// When a message's changes reach UI Automation's tree.
+#[derive(Debug, PartialEq, Eq)]
+enum SyncKind {
+    /// It changes nothing the tree shows, or builds the tree itself.
+    Skip,
+    Now,
+    /// At most every `a11y::PROGRESS_EVERY`.
+    Soon,
+}
+
+/// Input, a status set and the window's own news go at once; anything
+/// else, such as animation frames and job progress, a few times a second
+/// at most. Painting never builds the tree. `timer` is a WM_TIMER's id.
+fn sync_kind(msg: u32, timer: usize, said: bool) -> SyncKind {
     match msg {
+        _ if said => SyncKind::Now,
         WM_PAINT | WM_ERASEBKGND | WM_GETOBJECT | WM_NCHITTEST | WM_SETCURSOR | WM_DESTROY
-        | WM_NCDESTROY => {}
-        WM_TIMER if wparam.0 == A11Y_TIMER => {}
-        WM_TIMER if wparam.0 == HINT_TIMER || wparam.0 == COPIED_TIMER => app.sync_a11y(true),
+        | WM_NCDESTROY => SyncKind::Skip,
+        WM_TIMER if timer == A11Y_TIMER => SyncKind::Skip,
+        WM_TIMER if timer == HINT_TIMER || timer == COPIED_TIMER => SyncKind::Now,
         WM_KEYDOWN | WM_SYSKEYDOWN | WM_LBUTTONDOWN | WM_LBUTTONUP | WM_LBUTTONDBLCLK
         | WM_CONTEXTMENU | WM_MOUSEWHEEL | WM_SETFOCUS | WM_KILLFOCUS | WM_ACTIVATE
         | WM_COPYDATA | WM_SIZE | WM_DPICHANGED | WM_KILN_DROP | WM_KILN_EXPORTED
-        | WM_KILN_MOVED | WM_KILN_FACTS | WM_KILN_PROBE | WM_KILN_UPDATE => app.sync_a11y(true),
-        m if m == uia::WM_KILN_A11Y => app.sync_a11y(true),
-        _ => app.sync_a11y_soon(),
+        | WM_KILN_MOVED | WM_KILN_FACTS | WM_KILN_PROBE | WM_KILN_UPDATE => SyncKind::Now,
+        m if m == uia::WM_KILN_A11Y => SyncKind::Now,
+        _ => SyncKind::Soon,
     }
 }
 
@@ -4765,12 +4817,16 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             app.invalidate();
             Some(LRESULT(0))
         }
+        // A change held back is due. A timer that fires early waits out
+        // the rest: building early would hold a percent again.
         WM_TIMER if wparam.0 == A11Y_TIMER => {
-            unsafe {
-                let _ = KillTimer(Some(hwnd), A11Y_TIMER);
+            let now = Instant::now();
+            match app.a11y_due {
+                Some(due) if now < due => unsafe {
+                    SetTimer(Some(hwnd), A11Y_TIMER, a11y::timer_ms(now, due), None);
+                },
+                _ => app.sync_a11y(true),
             }
-            app.a11y_pending = false;
-            app.sync_a11y(true);
             Some(LRESULT(0))
         }
         WM_TIMER if wparam.0 == ANIM_TIMER => {
@@ -5021,7 +5077,9 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             let root = app.uia.root();
             if first {
                 // The tree is simply there for the first client: nothing
-                // to announce.
+                // to announce, not even a status set before it came.
+                let sets = std::mem::take(&mut app.status_sets);
+                app.teller.tell(sets.into_iter().map(|t| (t, false)), false);
                 app.sync_a11y(false);
             }
             Some(uia::answer(hwnd, wparam, lparam, root))
@@ -5049,6 +5107,24 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_status_set_reaches_ui_automation_at_once() {
+        use super::*;
+        // Job progress and animation frames wait their turn...
+        assert_eq!(sync_kind(WM_KILN_JOB, 0, false), SyncKind::Soon);
+        assert_eq!(sync_kind(WM_TIMER, ANIM_TIMER, false), SyncKind::Soon);
+        // ...but not a job that set the status, such as a batch summary.
+        assert_eq!(sync_kind(WM_KILN_JOB, 0, true), SyncKind::Now);
+        assert_eq!(sync_kind(WM_TIMER, ANIM_TIMER, true), SyncKind::Now);
+        // Input and the window's own news go at once.
+        assert_eq!(sync_kind(WM_KEYDOWN, 0, false), SyncKind::Now);
+        assert_eq!(sync_kind(uia::WM_KILN_A11Y, 0, false), SyncKind::Now);
+        assert_eq!(sync_kind(WM_SETFOCUS, 0, false), SyncKind::Now);
+        // Painting never builds the tree; the flush timer builds its own.
+        assert_eq!(sync_kind(WM_PAINT, 0, false), SyncKind::Skip);
+        assert_eq!(sync_kind(WM_TIMER, A11Y_TIMER, false), SyncKind::Skip);
+    }
+
     #[test]
     fn help_covers_the_list_like_any_panel() {
         use super::Over;

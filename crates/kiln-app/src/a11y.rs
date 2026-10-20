@@ -328,7 +328,15 @@ pub fn percent(fraction: f32) -> u32 {
 /// screen reader isn't told every frame's percent.
 #[derive(Debug, Default)]
 pub struct ProgressGate {
-    told: HashMap<PathBuf, (u32, Instant)>,
+    told: HashMap<PathBuf, Told>,
+}
+
+/// A row's progress as told, and the newest percent, which may be held.
+#[derive(Debug, Clone, Copy)]
+struct Told {
+    shown: u32,
+    at: Instant,
+    newest: u32,
 }
 
 impl ProgressGate {
@@ -341,21 +349,81 @@ impl ProgressGate {
             return None;
         };
         let pct = percent(f);
-        match self.told.get(path) {
-            Some(&(last, at)) if last != pct && now.duration_since(at) < PROGRESS_EVERY => {
-                Some(last)
+        match self.told.get_mut(path) {
+            Some(t) if t.shown == pct => {
+                t.newest = pct;
+                Some(pct)
             }
-            Some(&(last, _)) if last == pct => Some(last),
+            Some(t) if now.saturating_duration_since(t.at) < PROGRESS_EVERY => {
+                t.newest = pct;
+                Some(t.shown)
+            }
             _ => {
-                self.told.insert(path.to_owned(), (pct, now));
+                let told = Told {
+                    shown: pct,
+                    at: now,
+                    newest: pct,
+                };
+                self.told.insert(path.to_owned(), told);
                 Some(pct)
             }
         }
     }
 
+    /// When the earliest held percent may be told, if any is held. The
+    /// window builds the tree again then, so a held percent is always
+    /// said, even if nothing else happens.
+    pub fn due(&self) -> Option<Instant> {
+        self.told
+            .values()
+            .filter(|t| t.newest != t.shown)
+            .map(|t| t.at + PROGRESS_EVERY)
+            .min()
+    }
+
     /// Forget rows that aren't running any more.
     pub fn keep(&mut self, running: impl Fn(&Path) -> bool) {
         self.told.retain(|p, _| running(p));
+    }
+}
+
+/// Added to a timer's wait: a timer fires on the system tick and can come
+/// in a little early.
+pub const TIMER_SLACK: Duration = Duration::from_millis(2);
+
+/// Milliseconds for a timer that should fire at `due` or just after:
+/// rounded up, with `TIMER_SLACK`, and at least 1.
+pub fn timer_ms(now: Instant, due: Instant) -> u32 {
+    let wait = due.saturating_duration_since(now) + TIMER_SLACK;
+    let ms = wait.as_nanos().div_ceil(1_000_000);
+    ms.clamp(1, u128::from(u32::MAX)) as u32
+}
+
+/// Decides which status lines to announce. Each set of the status is
+/// said on its own, at once, never merged with the next: a new line, or
+/// an alert even if its words are the same as the last.
+#[derive(Debug, Default)]
+pub struct StatusTeller {
+    last: String,
+}
+
+impl StatusTeller {
+    /// The lines to announce from `sets`, in order, each with whether it
+    /// is an alert. With `announce` false, as before any client has
+    /// connected, the sets are only noted.
+    pub fn tell(
+        &mut self,
+        sets: impl IntoIterator<Item = (String, bool)>,
+        announce: bool,
+    ) -> Vec<(String, bool)> {
+        let mut said = Vec::new();
+        for (text, alert) in sets {
+            if announce && !text.is_empty() && (text != self.last || alert) {
+                said.push((text.clone(), alert));
+            }
+            self.last = text;
+        }
+        said
     }
 }
 
@@ -1685,5 +1753,73 @@ mod tests {
         assert_eq!(gate.shown(path, Some(0.5), later), Some(50));
         gate.keep(|_| false);
         assert!(gate.told.is_empty());
+    }
+
+    #[test]
+    fn a_held_percent_is_due_once_its_quarter_second_is_up() {
+        let mut gate = ProgressGate::default();
+        let (a, b) = (Path::new(r"C:\photos\a.mov"), Path::new(r"C:\photos\b.mov"));
+        let t0 = Instant::now();
+        gate.shown(a, Some(0.10), t0);
+        gate.shown(b, Some(0.50), t0 + Duration::from_millis(50));
+        // Nothing is held: nothing is due.
+        assert_eq!(gate.due(), None);
+        // b's 55% is held, so it's due 250 ms after b's 50% was told.
+        let soon = t0 + Duration::from_millis(100);
+        assert_eq!(gate.shown(b, Some(0.55), soon), Some(50));
+        assert_eq!(gate.due(), Some(t0 + Duration::from_millis(300)));
+        // a's held 13% is due sooner.
+        assert_eq!(gate.shown(a, Some(0.13), soon), Some(10));
+        assert_eq!(gate.due(), Some(t0 + PROGRESS_EVERY));
+        // Back to the percent already told, a holds nothing.
+        assert_eq!(gate.shown(a, Some(0.10), soon), Some(10));
+        assert_eq!(gate.due(), Some(t0 + Duration::from_millis(300)));
+        // Told when due, nothing is held any more.
+        let due = gate.due().unwrap();
+        assert_eq!(gate.shown(b, Some(0.55), due), Some(55));
+        assert_eq!(gate.due(), None);
+        // A row that stops saying how far holds nothing.
+        gate.shown(b, Some(0.60), due + Duration::from_millis(10));
+        assert!(gate.due().is_some());
+        gate.shown(b, None, due + Duration::from_millis(20));
+        assert_eq!(gate.due(), None);
+    }
+
+    #[test]
+    fn a_flush_timer_never_fires_before_it_is_due() {
+        let t0 = Instant::now();
+        // Rounded up, never down, with slack for an early tick.
+        let due = t0 + Duration::from_micros(249_400);
+        assert_eq!(timer_ms(t0, due), 252);
+        assert_eq!(timer_ms(t0, t0 + PROGRESS_EVERY), 252);
+        // Already due, or past it: as soon as a timer can.
+        assert_eq!(timer_ms(t0 + PROGRESS_EVERY, t0), 2);
+        assert!(timer_ms(t0, t0) >= 1);
+    }
+
+    #[test]
+    fn every_status_set_is_said_on_its_own() {
+        let mut teller = StatusTeller::default();
+        let set = |t: &str, alert: bool| (t.to_owned(), alert);
+        // Before a client connects, nothing is said, but the line is noted.
+        assert!(teller.tell([set("0 files.", false)], false).is_empty());
+        assert!(teller.tell([set("0 files.", false)], true).is_empty());
+        // Two batches finishing at once are both said, in order.
+        let two = [
+            set("Converted 1 file. 1 failed.", true),
+            set("Converted 2 files.", false),
+        ];
+        assert_eq!(teller.tell(two.clone(), true), two);
+        // The same plain line again says nothing new.
+        assert!(teller
+            .tell([set("Converted 2 files.", false)], true)
+            .is_empty());
+        // The same alert twice is said twice.
+        let alert = set("Couldn't open Terminal.", true);
+        for _ in 0..2 {
+            assert_eq!(teller.tell([alert.clone()], true), vec![alert.clone()]);
+        }
+        // An empty status is never said.
+        assert!(teller.tell([set("", false)], true).is_empty());
     }
 }

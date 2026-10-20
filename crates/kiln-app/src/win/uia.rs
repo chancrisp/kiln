@@ -94,19 +94,6 @@ impl Shared {
 struct Said {
     focus: Option<u64>,
     rows: Vec<u64>,
-    status: String,
-    /// The status's count when it was last said: an alert set again with
-    /// the same words is said again.
-    seq: u64,
-}
-
-/// The status line as `Host::update` needs it.
-pub struct Status<'a> {
-    pub text: &'a str,
-    /// Counts each time the status is set, even to the same words.
-    pub seq: u64,
-    /// It reports something going wrong or not happening.
-    pub alert: bool,
 }
 
 /// Something to tell listening clients, raised by `raise` once the window
@@ -177,14 +164,14 @@ impl Host {
 
     /// Swap in a new tree, unless it's the one clients already have, and
     /// return what to tell them: where the focus went, rows added or
-    /// removed, a new status. With `announce` false, as when the first
-    /// client connects, nothing is told: the tree is simply there.
+    /// removed. With `announce` false, as when the first client connects,
+    /// nothing is told: the tree is simply there. The status is told apart,
+    /// by `status`, never held back with the tree.
     pub fn update(
         &mut self,
         root: Node,
         unit_px: f32,
         has_focus: bool,
-        status: Status,
         announce: bool,
     ) -> Vec<Event> {
         let focus = root.focused().map(|n| n.key).filter(|_| has_focus);
@@ -209,12 +196,8 @@ impl Host {
         }
         let new_focus = (focus != self.said.focus).then_some(focus).flatten();
         let new_rows = rows != self.said.rows;
-        let again = status.alert && status.seq != self.said.seq;
-        let new_status = (status.text != self.said.status || again) && !status.text.is_empty();
         self.said.focus = focus;
         self.said.rows = rows;
-        status.text.clone_into(&mut self.said.status);
-        self.said.seq = status.seq;
         if !announce {
             return Vec::new();
         }
@@ -232,10 +215,16 @@ impl Host {
         if let (true, Some(key)) = (new_rows, list) {
             tell(Kind::Rows(key));
         }
-        if new_status {
-            tell(Kind::Status(status.text.to_owned(), status.alert));
-        }
         events
+    }
+
+    /// A status line to announce, an alert as an action that didn't
+    /// happen.
+    pub fn status(&self, text: String, alert: bool) -> Event {
+        Event {
+            shared: Arc::downgrade(&self.shared),
+            kind: Kind::Status(text, alert),
+        }
     }
 
     /// The window is closing: every element goes, and UI Automation lets
