@@ -325,7 +325,7 @@ enum Rows {
 enum Then {
     Close,
     Clear,
-    Remove(PathBuf),
+    Remove(Vec<PathBuf>),
     /// Start a new job on rows, which replaces what they hold.
     Start(Action, Vec<PathBuf>, Option<Quality>),
 }
@@ -602,7 +602,7 @@ impl App {
                 .path
                 .parent()
                 .map(Path::to_path_buf);
-            self.files.select(Some(self.files.len() - 1));
+            self.files.click(self.files.len() - 1);
             self.scroll_to_selection();
         }
         self.animate();
@@ -673,15 +673,30 @@ impl App {
         }
     }
 
+    /// The files of the selected rows, in list order.
+    fn selected_paths(&self) -> Vec<PathBuf> {
+        self.paths_of(&self.files.selection())
+    }
+
+    /// The files of rows `rows`.
+    fn paths_of(&self, rows: &[usize]) -> Vec<PathBuf> {
+        rows.iter()
+            .filter_map(|&i| self.files.entries().get(i))
+            .map(|e| e.path.clone())
+            .collect()
+    }
+
+    /// Remove every selected row, asking first as one leave when that
+    /// would lose held results or stop running jobs.
     fn remove_selected(&mut self) {
-        let Some(i) = self.files.selected() else {
+        let paths = self.selected_paths();
+        if paths.is_empty() {
             return;
-        };
-        let path = self.files.entries()[i].path.clone();
+        }
         self.leave(
             Leave::Remove,
-            Rows::Files(vec![path.clone()]),
-            Then::Remove(path),
+            Rows::Files(paths.clone()),
+            Then::Remove(paths),
         );
     }
 
@@ -694,8 +709,7 @@ impl App {
         let path = self.files.entries()[i].path.clone();
         self.cancel_jobs_for(&path);
         self.inspector.cancel(&path);
-        self.files.select(Some(i));
-        self.files.remove_selected();
+        self.files.remove(i);
         self.rows.remove(i);
         self.notes.remove(&path);
         self.status = status_line(self.files.len(), 0, 0, 0);
@@ -872,7 +886,11 @@ impl App {
                 }
             }
             Then::Clear => self.clear_rows(),
-            Then::Remove(path) => self.remove_row(&path),
+            Then::Remove(paths) => {
+                for path in &paths {
+                    self.remove_row(path);
+                }
+            }
             Then::Start(action, paths, quality) => self.launch(action, paths, quality),
         }
     }
@@ -1019,6 +1037,71 @@ impl App {
         let held = self.still_held(&source, std::slice::from_ref(one));
         if !held.is_empty() {
             self.export(held, Dest::As(dest), false);
+        }
+    }
+
+    /// Export the held results of rows `rows`: one held row goes the way
+    /// its own Export link does, and several go together into one folder.
+    fn export_rows(&mut self, rows: &[usize]) {
+        let held: Vec<usize> = rows
+            .iter()
+            .copied()
+            .filter(|&i| {
+                self.files
+                    .entries()
+                    .get(i)
+                    .is_some_and(|e| e.held().is_some())
+            })
+            .collect();
+        match held.as_slice() {
+            [] => {}
+            [one] => self.export_row(*one),
+            _ => {
+                let sources = self.paths_of(&held);
+                self.export_together(&sources);
+            }
+        }
+    }
+
+    /// The held files of the rows for `sources`, once each, less those a
+    /// row says are gone and those an export is already moving.
+    fn held_of(&self, sources: &[PathBuf]) -> Vec<PathBuf> {
+        let mask = self.mask(&Rows::Files(sources.to_vec()));
+        let saving = self.saving_files();
+        let entries = self.files.entries();
+        self.files
+            .held_files(|i| {
+                mask.get(i).copied().unwrap_or(false)
+                    && !self
+                        .notes
+                        .get(&entries[i].path)
+                        .is_some_and(|(l, _)| l == model::GONE)
+            })
+            .into_iter()
+            .filter(|f| !saving.contains(f))
+            .collect()
+    }
+
+    /// The held results of several rows, into one folder, summed up in the
+    /// footer.
+    fn export_together(&mut self, sources: &[PathBuf]) {
+        if self.leaving.is_some() {
+            self.status = model::SAVING.to_owned();
+            self.invalidate();
+            return;
+        }
+        self.check_gone();
+        let held = self.held_of(sources);
+        if held.is_empty() {
+            return;
+        }
+        let Some(dir) = self.pick_export_folder(&held) else {
+            return;
+        };
+        // The list can change while the picker is open.
+        let held = self.held_of(sources);
+        if !held.is_empty() {
+            self.export(held, Dest::Into(dir), true);
         }
     }
 
@@ -1362,12 +1445,17 @@ impl App {
             .clamp(0.0, layout::max_scroll(self.files.len(), l.panel.h));
     }
 
+    /// Scroll the focus row into view.
     fn scroll_to_selection(&mut self) {
-        if let Some(i) = self.files.selected() {
-            let l = self.layout();
-            self.scroll = layout::scroll_to_show(i, self.scroll, l.panel.h);
-            self.clamp_scroll();
+        if let Some(i) = self.files.focus() {
+            self.scroll_to_row(i);
         }
+    }
+
+    fn scroll_to_row(&mut self, i: usize) {
+        let l = self.layout();
+        self.scroll = layout::scroll_to_show(i, self.scroll, l.panel.h);
+        self.clamp_scroll();
     }
 
     // The wheel.
@@ -1405,16 +1493,17 @@ impl App {
         self.animate();
     }
 
-    /// Open a wheel for the selected file, from the keyboard.
+    /// Open a wheel for every selected file, from the keyboard, as a drop
+    /// of those files would.
     fn open_wheel_for_selection(&mut self, kind: WheelKind) {
-        let Some(i) = self.files.selected() else {
+        let paths = self.selected_paths();
+        if paths.is_empty() {
             return;
-        };
+        }
         // From the keyboard there's no pointer to pour from, so the wheel
         // opens in the middle of the list.
         let l = self.layout();
         let at = (l.panel.x + l.panel.w / 2.0, l.panel.y + l.panel.h / 2.0);
-        let paths = vec![self.files.entries()[i].path.clone()];
         self.open_wheel(kind, paths, at, true);
     }
 
@@ -1447,44 +1536,54 @@ impl App {
 
     /// The right-click menu. `at` is where it was asked for, in screen
     /// pixels, or `None` from the keyboard (the Menu key or Shift+F10),
-    /// which opens it at the selected row. A row gets the row menu; an
-    /// empty part of the list gets Add files and Paste.
+    /// which opens it at the focus row. The selection gets the row menu,
+    /// whose items apply to every selected row; an empty part of the list
+    /// gets Add files and Paste.
     fn context_menu(&mut self, at: Option<(i32, i32)>) {
-        let row = match at {
+        let (rows, focus) = match at {
             Some((x, y)) => {
                 let (x, y) = self.screen_dips(x, y);
                 if !self.layout().panel.contains(x, y) {
                     return;
                 }
-                // Right-clicking a row selects it first, and an empty part
-                // of the list clears the selection, as File Explorer does.
-                let (row, _, _) = self.hit_row(x, y);
-                self.files.select(row);
-                row
+                // Right-clicking a row outside the selection selects only
+                // it first, and one inside keeps the selection. An empty
+                // part of the list clears it, as File Explorer does.
+                match self.hit_row(x, y).0 {
+                    Some(i) => (self.files.context_target(i), Some(i)),
+                    None => {
+                        self.files.clear_selection();
+                        (vec![], None)
+                    }
+                }
             }
-            None => self.files.selected(),
+            None => {
+                let rows = self.files.selection();
+                let focus = self.files.selected().or(rows.first().copied());
+                (rows, focus)
+            }
         };
-        let items = match row {
-            Some(i) => {
-                let paths = vec![self.files.entries()[i].path.clone()];
-                let wheels: Vec<WheelKind> = WheelKind::ALL
-                    .into_iter()
-                    .filter(|&k| !wheel::items_for(k, &self.kiln, &paths).is_empty())
-                    .collect();
-                ways_in::menu_items(&[self.row_state(i)], &wheels)
-            }
-            None => ways_in::list_menu(system::clipboard_has_files()),
+        let items = if rows.is_empty() {
+            ways_in::list_menu(system::clipboard_has_files())
+        } else {
+            let paths = self.paths_of(&rows);
+            let wheels: Vec<WheelKind> = WheelKind::ALL
+                .into_iter()
+                .filter(|&k| !wheel::items_for(k, &self.kiln, &paths).is_empty())
+                .collect();
+            let states: Vec<RowState> = rows.iter().map(|&i| self.row_state(i)).collect();
+            ways_in::menu_items(&states, &wheels)
         };
         let texts: Vec<Option<String>> = items
             .iter()
             .map(|&item| (item != MenuItem::Separator).then(|| item.text(&self.settings.keys)))
             .collect();
-        let (x, y) = match (at, row) {
+        let (x, y) = match (at, focus) {
             (Some(p), _) => p,
             // From the keyboard: at the row's bottom left, scrolled into
             // view, or the list's top left with nothing selected.
             (None, Some(i)) => {
-                self.scroll_to_selection();
+                self.scroll_to_row(i);
                 let r = self.layout().rows[i];
                 self.to_screen(r.x, r.bottom() - self.scroll)
             }
@@ -1494,39 +1593,55 @@ impl App {
             }
         };
         self.invalidate();
-        // The row by its file: the list can change while the menu is up.
-        let file = row.map(|i| self.files.entries()[i].path.clone());
+        // The rows by file: the list can change while the menu is up.
+        let files = self.paths_of(&rows);
+        let focus_file = focus.and_then(|i| self.files.entries().get(i).map(|e| e.path.clone()));
         let Some(k) = system::popup_menu(self.hwnd, &texts, x, y) else {
             return;
         };
-        let row = match &file {
-            Some(f) => match self.files.index_of(f) {
-                Some(i) => Some(i),
-                None => return,
-            },
-            None => None,
-        };
-        self.menu_chosen(items[k], row, at.is_none());
+        let rows: Vec<usize> = files
+            .iter()
+            .filter_map(|f| self.files.index_of(f))
+            .collect();
+        if !files.is_empty() && rows.is_empty() {
+            return;
+        }
+        let focus = focus_file
+            .and_then(|f| self.files.index_of(&f))
+            .or(rows.first().copied());
+        self.menu_chosen(items[k], &rows, focus, at.is_none());
     }
 
-    /// Do what the menu item `item` says, for `row`.
-    fn menu_chosen(&mut self, item: MenuItem, row: Option<usize>, keyboard: bool) {
-        match (item, row) {
+    /// Do what the menu item `item` says, for the rows `rows`. A wheel
+    /// pours from row `focus`.
+    fn menu_chosen(
+        &mut self,
+        item: MenuItem,
+        rows: &[usize],
+        focus: Option<usize>,
+        keyboard: bool,
+    ) {
+        match (item, rows) {
             (MenuItem::AddFiles, _) => self.add_files(),
             (MenuItem::Paste, _) => self.paste(),
-            (MenuItem::Wheel(kind), Some(i)) => {
-                let paths = vec![self.files.entries()[i].path.clone()];
-                let at = self.row_centre(i);
+            (_, []) => {}
+            (MenuItem::Wheel(kind), _) => {
+                let paths = self.paths_of(rows);
+                let at = self.row_centre(focus.unwrap_or(rows[0]));
                 self.open_wheel(kind, paths, at, keyboard);
             }
-            (MenuItem::Export, Some(i)) => self.export_row(i),
-            (MenuItem::Open, Some(i)) => {
-                self.open_held(i);
+            (MenuItem::Export, _) => self.export_rows(rows),
+            (MenuItem::Open, [i]) => {
+                self.open_held(*i);
             }
-            (MenuItem::ShowInFolder, Some(i)) => self.show_saved(i),
-            (MenuItem::Remove, Some(i)) => {
-                self.files.select(Some(i));
-                self.remove_selected();
+            (MenuItem::ShowInFolder, [i]) => self.show_saved(*i),
+            (MenuItem::Remove, _) => {
+                let paths = self.paths_of(rows);
+                self.leave(
+                    Leave::Remove,
+                    Rows::Files(paths.clone()),
+                    Then::Remove(paths),
+                );
             }
             _ => {}
         }
@@ -2645,7 +2760,10 @@ impl App {
         self.invalidate();
     }
 
-    fn mouse_down(&mut self, x: f32, y: f32) {
+    /// The left button went down at `(x, y)`, with Shift or Ctrl held as
+    /// `keys` (the message's MK_ flags) says.
+    fn mouse_down(&mut self, x: f32, y: f32, keys: u32) {
+        let (shift, ctrl) = (keys & MK_SHIFT_FLAG != 0, keys & MK_CONTROL_FLAG != 0);
         if self.sheet.is_some() {
             let hit = self.sheet_hit(x, y);
             let inside = self.sheet_layout().is_some_and(|l| l.panel.contains(x, y));
@@ -2704,13 +2822,20 @@ impl App {
             unsafe { SetCapture(self.hwnd) };
         } else {
             let (row, cancel, link) = self.hit_row(x, y);
-            self.files.select(row);
-            if let Some(i) = row {
-                if cancel {
-                    self.cancel_row(i);
-                } else if link {
-                    self.follow_link(i);
+            match row {
+                Some(i) if ctrl => self.files.ctrl_click(i),
+                Some(i) if shift => self.files.shift_click(i),
+                Some(i) => {
+                    self.files.click(i);
+                    if cancel {
+                        self.cancel_row(i);
+                    } else if link {
+                        self.follow_link(i);
+                    }
                 }
+                // A plain click off the rows clears the selection.
+                None if !ctrl && !shift => self.files.clear_selection(),
+                None => {}
             }
         }
         self.invalidate();
@@ -2777,12 +2902,25 @@ impl App {
             return true;
         }
         match key {
+            // Shift with an arrow, Home or End extends the selection.
+            VK_UP if shift => self.files.extend(-1),
+            VK_DOWN if shift => self.files.extend(1),
             VK_UP => self.files.step(-1),
             VK_DOWN => self.files.step(1),
-            VK_HOME => self.files.select(Some(0)),
-            VK_END => self.files.select(self.files.len().checked_sub(1)),
+            VK_HOME | VK_END => {
+                let i = match key {
+                    VK_HOME => 0,
+                    _ => self.files.len().saturating_sub(1),
+                };
+                if shift {
+                    self.files.shift_click(i);
+                } else {
+                    self.files.click(i);
+                }
+            }
+            VK_A if ctrl => self.files.select_all(),
             VK_DELETE | VK_BACK => self.remove_selected(),
-            VK_ESCAPE => self.files.select(None),
+            VK_ESCAPE => self.files.clear_selection(),
             // Enter opens the convert wheel; with a modifier, that
             // modifier's wheel, following the key settings.
             VK_RETURN => {
@@ -2796,13 +2934,9 @@ impl App {
             VK_OEM_COMMA if ctrl => self.open_settings(),
             VK_O if ctrl => self.add_files(),
             VK_V if ctrl => self.paste(),
-            // Ctrl+S exports the selected row, Ctrl+Shift+S everything.
+            // Ctrl+S exports the selected rows, Ctrl+Shift+S everything.
             VK_S if ctrl && shift => self.export_everything(),
-            VK_S if ctrl => {
-                if let Some(i) = self.files.selected() {
-                    self.export_row(i);
-                }
-            }
+            VK_S if ctrl => self.export_rows(&self.files.selection()),
             // Space follows the selected row's link.
             VK_SPACE => {
                 if let Some(i) = self.files.selected() {
@@ -2923,11 +3057,19 @@ impl App {
         let running = self.burning() || !self.exports.is_empty();
         // Once the status has nothing more to say, a warning that stands
         // comes first, then the hint on what to do next.
+        // While several rows are selected, their count comes before both.
+        let count = model::selected_line(self.files.selected_rows().len());
         let status =
             match ways_in::idle_hint(self.files.len(), running, &self.status, &plain, added) {
-                Some(hint) => self.sticky.unwrap_or(hint),
+                Some(hint) => ways_in::quiet_line(count.as_deref(), self.sticky, hint),
                 None => model::footer_status(&self.status, &plain, self.sticky),
             };
+        // The empty window has no footer: what the status says, past the
+        // plain "0 files.", sits under its Add files button.
+        let empty_status = match self.status.as_str() {
+            s if s == plain => "",
+            s => s,
+        };
         let view = View {
             palette: self.palette,
             entries: self.files.entries(),
@@ -2936,7 +3078,7 @@ impl App {
             export_all: export_all.as_deref(),
             export_hover: self.export_hover,
             export_pressed: self.export_pressed,
-            selected: self.files.selected(),
+            selected: self.files.selected_rows(),
             hover_row: self.hover_row,
             hover_cancel: self.hover_cancel,
             hover_link: self.hover_link,
@@ -2946,6 +3088,7 @@ impl App {
             row_anim: &anim,
             status: wheel_hint.as_deref().unwrap_or(status),
             empty: &empty,
+            empty_status,
             add_hover: self.add_hover,
             add_pressed: self.add_pressed,
             clear_hover: self.clear_hover,
@@ -3487,7 +3630,7 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
                 let _ = SetFocus(Some(hwnd));
             }
             let (x, y) = app.dips(lo(lparam), hi(lparam));
-            app.mouse_down(x, y);
+            app.mouse_down(x, y, wparam.0 as u32);
             Some(LRESULT(0))
         }
         // The second click of a double-click: on a held row it opens the
@@ -3499,7 +3642,7 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             let (x, y) = app.dips(lo(lparam), hi(lparam));
             // A link acted on the first click; a second would open it twice.
             if !app.open_held_at(x, y) && !app.on_link(x, y) {
-                app.mouse_down(x, y);
+                app.mouse_down(x, y, wparam.0 as u32);
             }
             Some(LRESULT(0))
         }

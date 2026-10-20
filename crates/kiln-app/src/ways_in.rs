@@ -194,6 +194,17 @@ pub fn idle_hint(
     (listed > 0 && !running && quiet).then_some(IDLE_HINT)
 }
 
+/// What the footer says once its status has nothing more to say: how
+/// many rows are selected while several are (`selected`), else a warning
+/// that stands (`sticky`), else the idle hint.
+pub fn quiet_line<'a>(
+    selected: Option<&'a str>,
+    sticky: Option<&'a str>,
+    hint: &'a str,
+) -> &'a str {
+    selected.or(sticky).unwrap_or(hint)
+}
+
 /// The empty window's lines, top to bottom, with the Add files button
 /// between the instruction and the key hint.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -394,6 +405,17 @@ mod tests {
             let said = status_line(3, a, d, s);
             assert_eq!(idle_hint(3, false, &said, &plain, None), None, "{said}");
         }
+    }
+
+    #[test]
+    fn a_selection_count_comes_before_the_warning_and_the_hint() {
+        let warn = "Kiln couldn't make its holding folder.";
+        assert_eq!(
+            quiet_line(Some("3 selected"), Some(warn), IDLE_HINT),
+            "3 selected"
+        );
+        assert_eq!(quiet_line(None, Some(warn), IDLE_HINT), warn);
+        assert_eq!(quiet_line(None, None, IDLE_HINT), IDLE_HINT);
     }
 
     #[test]

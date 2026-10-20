@@ -236,6 +236,10 @@ pub struct EmptyState {
     pub headline: Rect,
     pub instruction: Rect,
     pub button: Rect,
+    /// One muted line under the button for what the status says, such as
+    /// "There are no files to paste.". Kept whether or not it's used, so
+    /// the group doesn't move when a line appears.
+    pub status: Rect,
     pub keys: Rect,
     pub privacy: Rect,
     pub tagline: Rect,
@@ -244,14 +248,15 @@ pub struct EmptyState {
 /// The empty window's group, centred in the drop panel.
 pub fn empty_state(panel: &Rect) -> EmptyState {
     // Each part's height and the gap after it.
-    const PARTS: [(f32, f32); 7] = [
-        (48.0, 16.0),          // vessel
-        (24.0, 4.0),           // headline
-        (20.0, 12.0),          // instruction
-        (BUTTON_HEIGHT, 12.0), // button
-        (16.0, 4.0),           // keys
-        (16.0, 8.0),           // privacy
-        (20.0, 0.0),           // tagline
+    const PARTS: [(f32, f32); 8] = [
+        (48.0, 16.0),         // vessel
+        (24.0, 4.0),          // headline
+        (20.0, 12.0),         // instruction
+        (BUTTON_HEIGHT, 8.0), // button
+        (16.0, 8.0),          // status
+        (16.0, 4.0),          // keys
+        (16.0, 8.0),          // privacy
+        (20.0, 0.0),          // tagline
     ];
     let total: f32 = PARTS.iter().map(|(h, gap)| h + gap).sum();
     let mut y = snap(panel.y + ((panel.h - total) / 2.0).max(0.0));
@@ -271,14 +276,16 @@ pub fn empty_state(panel: &Rect) -> EmptyState {
         ADD_FILES_EMPTY_WIDTH,
         BUTTON_HEIGHT,
     );
-    let keys = line(next(4), 16.0);
-    let privacy = line(next(5), 16.0);
-    let tagline = line(next(6), 20.0);
+    let status = line(next(4), 16.0);
+    let keys = line(next(5), 16.0);
+    let privacy = line(next(6), 16.0);
+    let tagline = line(next(7), 20.0);
     EmptyState {
         vessel,
         headline,
         instruction,
         button,
+        status,
         keys,
         privacy,
         tagline,
@@ -1043,6 +1050,7 @@ mod tests {
                 e.headline,
                 e.instruction,
                 e.button,
+                e.status,
                 e.keys,
                 e.privacy,
                 e.tagline,

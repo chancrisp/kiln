@@ -2,7 +2,7 @@
 //! DPI maps them to pixels, so 100%, 150% and 200% scaling share one path.
 
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::f32::consts::{PI, TAU};
 use std::path::PathBuf;
 
@@ -103,7 +103,8 @@ pub struct View<'a> {
     pub export_all: Option<&'a str>,
     pub export_hover: bool,
     pub export_pressed: bool,
-    pub selected: Option<usize>,
+    /// The selected rows; each draws the selected wash.
+    pub selected: &'a BTreeSet<usize>,
     pub hover_row: Option<usize>,
     pub hover_cancel: bool,
     pub hover_link: bool,
@@ -117,6 +118,9 @@ pub struct View<'a> {
     /// The empty window's lines; its key hint names the current wheel
     /// keys.
     pub empty: &'a EmptyLines,
+    /// What the status says while the list is empty, shown under the Add
+    /// files button. Empty when there's nothing to say.
+    pub empty_status: &'a str,
     /// The Add files button, in the empty window or the footer.
     pub add_hover: bool,
     pub add_pressed: bool,
@@ -585,7 +589,8 @@ impl Draw<'_> {
         );
 
         // The centred group: the headline, how else to add files, the
-        // button, the keys to hold, the privacy note and, last, the tagline.
+        // button, what the status says, the keys to hold, the privacy note
+        // and, last, the tagline.
         let e = layout::empty_state(&panel);
         let lines = v.empty;
         let vessel = mix(p.text_muted, p.accent, v.drag);
@@ -605,6 +610,13 @@ impl Draw<'_> {
             1.0,
         );
         self.primary(lines.button, &e.button, v.add_hover, v.add_pressed, p);
+        self.label(
+            v.empty_status,
+            &self.text.caption_center,
+            &e.status,
+            p.text_muted,
+            1.0,
+        );
         for (text, r) in [(lines.keys.as_str(), &e.keys), (lines.privacy, &e.privacy)] {
             self.label(text, &self.text.caption_center, r, p.text_muted, 1.0);
         }
@@ -691,7 +703,7 @@ impl Draw<'_> {
         let anim = (v.row_anim)(i);
         let a = anim.appear;
         let hovered = v.hover_row == Some(i);
-        if v.selected == Some(i) {
+        if v.selected.contains(&i) {
             self.fill(r, 0.0, p.accent, effects::HOVER_FILL * a);
         } else if hovered {
             self.fill(r, 0.0, p.line, 0.5 * a);
@@ -768,7 +780,7 @@ impl Draw<'_> {
         match &e.job {
             JobState::Running { fraction, .. } => {
                 self.progress(r, *fraction, v.heat, p, a)?;
-                if hovered || v.selected == Some(i) {
+                if hovered || v.selected.contains(&i) {
                     let b = layout::row_cancel(r);
                     let hot = hovered && v.hover_cancel;
                     if hot {

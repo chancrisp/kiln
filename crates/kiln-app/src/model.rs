@@ -1,6 +1,7 @@
 //! The list of dropped files. Platform-independent so it can be tested
 //! anywhere.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -508,10 +509,20 @@ pub struct Added {
     pub skipped: usize,
 }
 
+/// The footer while more than one row is selected: "3 selected".
+pub fn selected_line(selected: usize) -> Option<String> {
+    (selected > 1).then(|| format!("{selected} selected"))
+}
+
 #[derive(Debug, Default)]
 pub struct FileList {
     entries: Vec<Entry>,
-    selected: Option<usize>,
+    /// The selected rows.
+    selected: BTreeSet<usize>,
+    /// Where a Shift-click or Shift+arrow range starts.
+    anchor: Option<usize>,
+    /// The row keyboard actions start from. It can be unselected.
+    focus: Option<usize>,
 }
 
 impl FileList {
@@ -527,8 +538,157 @@ impl FileList {
         self.entries.is_empty()
     }
 
+    /// The one row a single-row action takes: the focus, when it's
+    /// selected.
     pub fn selected(&self) -> Option<usize> {
-        self.selected
+        self.focus.filter(|i| self.selected.contains(i))
+    }
+
+    /// Every selected row, in list order.
+    pub fn selection(&self) -> Vec<usize> {
+        self.selected.iter().copied().collect()
+    }
+
+    /// The selected rows, for drawing.
+    pub fn selected_rows(&self) -> &BTreeSet<usize> {
+        &self.selected
+    }
+
+    pub fn is_selected(&self, i: usize) -> bool {
+        self.selected.contains(&i)
+    }
+
+    pub fn focus(&self) -> Option<usize> {
+        self.focus
+    }
+
+    /// A plain click: only row `i` is selected.
+    pub fn click(&mut self, i: usize) {
+        if i >= self.entries.len() {
+            return;
+        }
+        self.selected = BTreeSet::from([i]);
+        self.anchor = Some(i);
+        self.focus = Some(i);
+    }
+
+    /// A Ctrl-click: row `i` goes in or out of the selection, and ranges
+    /// start from it.
+    pub fn ctrl_click(&mut self, i: usize) {
+        if i >= self.entries.len() {
+            return;
+        }
+        if !self.selected.remove(&i) {
+            self.selected.insert(i);
+        }
+        self.anchor = Some(i);
+        self.focus = Some(i);
+    }
+
+    /// A Shift-click: the rows from the anchor to `i` are the selection.
+    pub fn shift_click(&mut self, i: usize) {
+        if i >= self.entries.len() {
+            return;
+        }
+        let Some(anchor) = self.anchor else {
+            return self.click(i);
+        };
+        self.selected = (anchor.min(i)..=anchor.max(i)).collect();
+        self.focus = Some(i);
+    }
+
+    /// Ctrl+A. The focus stays where it is, or goes to the first row.
+    pub fn select_all(&mut self) {
+        if self.entries.is_empty() {
+            return;
+        }
+        self.selected = (0..self.entries.len()).collect();
+        self.focus = self.focus.or(Some(0));
+        self.anchor = self.anchor.or(self.focus);
+    }
+
+    /// Escape: nothing is selected, but the focus stays.
+    pub fn clear_selection(&mut self) {
+        self.selected.clear();
+    }
+
+    /// Where the focus goes `delta` rows on, clamped to the list: from no
+    /// focus, the first row going down or the last going up.
+    fn stepped(&self, delta: isize) -> Option<usize> {
+        let last = self.entries.len().checked_sub(1)? as isize;
+        Some(match self.focus {
+            None if delta >= 0 => 0,
+            None => last as usize,
+            Some(i) => (i as isize + delta).clamp(0, last) as usize,
+        })
+    }
+
+    /// An arrow key: the focus moves `delta` rows and only it is selected.
+    pub fn step(&mut self, delta: isize) {
+        if let Some(i) = self.stepped(delta) {
+            self.click(i);
+        }
+    }
+
+    /// Shift with an arrow key: the focus moves `delta` rows and the
+    /// selection runs from the anchor to it.
+    pub fn extend(&mut self, delta: isize) {
+        let Some(i) = self.stepped(delta) else {
+            return;
+        };
+        if self.anchor.is_none() {
+            self.anchor = self.focus.or(Some(i));
+        }
+        self.shift_click(i);
+    }
+
+    /// A right-click on row `i`: a row outside the selection becomes the
+    /// whole selection; one inside it keeps the selection and takes the
+    /// focus. Returns the rows the menu acts on.
+    pub fn context_target(&mut self, i: usize) -> Vec<usize> {
+        if i < self.entries.len() {
+            if self.selected.contains(&i) {
+                self.focus = Some(i);
+            } else {
+                self.click(i);
+            }
+        }
+        self.selection()
+    }
+
+    /// Take row `i` out of the list. The rows after it move up one, and so
+    /// do their places in the selection. When the last selected row goes,
+    /// the row that takes the focus's place is selected, so Delete can be
+    /// pressed again.
+    pub fn remove(&mut self, i: usize) -> Option<Entry> {
+        if i >= self.entries.len() {
+            return None;
+        }
+        let removed = self.entries.remove(i);
+        let was_selected = self.selected.remove(&i);
+        let len = self.entries.len();
+        let shift = |k: usize| if k > i { k - 1 } else { k };
+        self.selected = self.selected.iter().map(|&k| shift(k)).collect();
+        // A focus or anchor on the removed row stays at its place, now the
+        // next row's, or the last row's at the end.
+        let follow = |k: Option<usize>| {
+            k.map(|k| {
+                if k == i {
+                    k.min(len.wrapping_sub(1))
+                } else {
+                    shift(k)
+                }
+            })
+            .filter(|&k| k < len)
+        };
+        self.focus = follow(self.focus);
+        self.anchor = follow(self.anchor);
+        if was_selected && self.selected.is_empty() {
+            if let Some(f) = self.focus {
+                self.click(f);
+            }
+        }
+        Some(removed)
     }
 
     pub fn add(&mut self, kiln: &Kiln, paths: impl IntoIterator<Item = PathBuf>) -> Added {
@@ -551,36 +711,6 @@ impl FileList {
             result.added += 1;
         }
         result
-    }
-
-    pub fn select(&mut self, index: Option<usize>) {
-        self.selected = index.filter(|&i| i < self.entries.len());
-    }
-
-    /// Move the selection by `delta` rows, clamped to the list.
-    pub fn step(&mut self, delta: isize) {
-        if self.entries.is_empty() {
-            return;
-        }
-        let last = self.entries.len() as isize - 1;
-        let next = match self.selected {
-            None if delta >= 0 => 0,
-            None => last,
-            Some(i) => (i as isize + delta).clamp(0, last),
-        };
-        self.selected = Some(next as usize);
-    }
-
-    /// Remove the selected entry and keep a sensible selection.
-    pub fn remove_selected(&mut self) -> Option<Entry> {
-        let i = self.selected?;
-        let removed = self.entries.remove(i);
-        self.selected = if self.entries.is_empty() {
-            None
-        } else {
-            Some(i.min(self.entries.len() - 1))
-        };
-        Some(removed)
     }
 
     /// The held results by row index: finished jobs not yet exported.
@@ -677,7 +807,9 @@ impl FileList {
 
     pub fn clear(&mut self) {
         self.entries.clear();
-        self.selected = None;
+        self.selected.clear();
+        self.anchor = None;
+        self.focus = None;
     }
 
     /// Store what `inspect` found for the row at `path`, and its
@@ -880,31 +1012,223 @@ mod tests {
             .ends_with("No conversions for this type"));
     }
 
+    /// A list of `n` rows that aren't on disk: "0.png", "1.png"…
+    fn list_of(n: usize) -> FileList {
+        FileList {
+            entries: (0..n).map(|i| row(&format!("{i}.png"))).collect(),
+            ..Default::default()
+        }
+    }
+
     #[test]
-    fn selection_moves_and_survives_removal() {
-        let (dir, kiln) = setup();
-        let paths: Vec<_> = (0..3)
-            .map(|i| {
-                let p = dir.path().join(format!("{i}.wav"));
-                fs::write(&p, b"x").unwrap();
-                p
-            })
-            .collect();
-        let mut list = FileList::default();
-        list.add(&kiln, paths);
+    fn a_click_selects_only_that_row() {
+        let mut list = list_of(4);
+        assert_eq!(list.selection(), Vec::<usize>::new());
+        assert_eq!(list.selected(), None);
+        list.click(1);
+        list.click(2);
+        assert_eq!(list.selection(), [2]);
+        assert_eq!(list.selected(), Some(2));
+        assert_eq!(list.focus(), Some(2));
+        assert!(list.is_selected(2) && !list.is_selected(1));
+        // Past the end is no row.
+        list.click(9);
+        assert_eq!(list.selection(), [2]);
+    }
+
+    #[test]
+    fn ctrl_click_toggles_a_row() {
+        let mut list = list_of(4);
+        list.click(0);
+        list.ctrl_click(2);
+        assert_eq!(list.selection(), [0, 2]);
+        assert_eq!(list.focus(), Some(2));
+        list.ctrl_click(0);
+        assert_eq!(list.selection(), [2]);
+        // The focus follows the click even when it unselects.
+        assert_eq!(list.focus(), Some(0));
+        assert_eq!(list.selected(), None);
+        list.ctrl_click(2);
+        assert!(list.selection().is_empty());
+        list.ctrl_click(7);
+        assert!(list.selection().is_empty());
+    }
+
+    #[test]
+    fn shift_click_selects_from_the_anchor() {
+        let mut list = list_of(6);
+        list.click(2);
+        list.shift_click(4);
+        assert_eq!(list.selection(), [2, 3, 4]);
+        assert_eq!(list.focus(), Some(4));
+        // The anchor stays put, and the range replaces the last one.
+        list.shift_click(0);
+        assert_eq!(list.selection(), [0, 1, 2]);
+        // A Ctrl-click moves the anchor.
+        list.ctrl_click(5);
+        list.shift_click(3);
+        assert_eq!(list.selection(), [3, 4, 5]);
+        // With no anchor yet, it's a plain click.
+        let mut fresh = list_of(3);
+        fresh.shift_click(1);
+        assert_eq!(fresh.selection(), [1]);
+        fresh.shift_click(9);
+        assert_eq!(fresh.selection(), [1]);
+    }
+
+    #[test]
+    fn select_all_takes_every_row() {
+        let mut list = list_of(3);
+        list.select_all();
+        assert_eq!(list.selection(), [0, 1, 2]);
+        assert_eq!(list.focus(), Some(0));
+        list.click(1);
+        list.select_all();
+        assert_eq!(list.selection(), [0, 1, 2]);
+        assert_eq!(list.selected(), Some(1));
+        let mut empty = FileList::default();
+        empty.select_all();
+        assert!(empty.selection().is_empty());
+        assert_eq!(empty.focus(), None);
+    }
+
+    #[test]
+    fn arrows_move_and_select_one_row() {
+        let mut list = list_of(3);
         list.step(1);
         assert_eq!(list.selected(), Some(0));
         list.step(5);
-        assert_eq!(list.selected(), Some(2));
-        list.remove_selected();
-        assert_eq!(list.selected(), Some(1));
-        list.select(Some(0));
-        list.remove_selected();
-        list.remove_selected();
+        assert_eq!(list.selection(), [2]);
+        list.select_all();
+        list.step(-1);
+        assert_eq!(list.selection(), [1]);
+        let mut fresh = list_of(3);
+        fresh.step(-1);
+        assert_eq!(fresh.selection(), [2]);
+        let mut empty = FileList::default();
+        empty.step(1);
+        assert_eq!(empty.selected(), None);
+    }
+
+    #[test]
+    fn shift_arrows_extend_from_the_anchor() {
+        let mut list = list_of(5);
+        list.click(2);
+        list.extend(1);
+        list.extend(1);
+        assert_eq!(list.selection(), [2, 3, 4]);
+        assert_eq!(list.focus(), Some(4));
+        // Clamped at the end.
+        list.extend(1);
+        assert_eq!(list.selection(), [2, 3, 4]);
+        // Back past the anchor.
+        list.extend(-3);
+        assert_eq!(list.selection(), [1, 2]);
+        assert_eq!(list.focus(), Some(1));
+        // A plain arrow afterwards selects only where it lands.
+        list.step(1);
+        assert_eq!(list.selection(), [2]);
+        // From nothing, it starts at the first row.
+        let mut fresh = list_of(3);
+        fresh.extend(1);
+        assert_eq!(fresh.selection(), [0]);
+        fresh.extend(1);
+        assert_eq!(fresh.selection(), [0, 1]);
+        let mut empty = FileList::default();
+        empty.extend(1);
+        assert_eq!(empty.focus(), None);
+    }
+
+    #[test]
+    fn escape_clears_the_selection_but_keeps_the_focus() {
+        let mut list = list_of(4);
+        list.click(1);
+        list.shift_click(3);
+        list.clear_selection();
+        assert!(list.selection().is_empty());
         assert_eq!(list.selected(), None);
+        assert_eq!(list.focus(), Some(3));
+        // An arrow carries on from the focus.
+        list.step(-1);
+        assert_eq!(list.selection(), [2]);
+    }
+
+    #[test]
+    fn right_click_keeps_a_selection_it_lands_in() {
+        let mut list = list_of(5);
+        list.click(1);
+        list.shift_click(3);
+        assert_eq!(list.context_target(2), [1, 2, 3]);
+        assert_eq!(list.selection(), [1, 2, 3]);
+        assert_eq!(list.focus(), Some(2));
+        // Outside it, only that row.
+        assert_eq!(list.context_target(4), [4]);
+        assert_eq!(list.selection(), [4]);
+        assert_eq!(list.context_target(9), [4]);
+    }
+
+    #[test]
+    fn removing_a_row_shifts_the_selection() {
+        let mut list = list_of(6);
+        list.click(1);
+        list.ctrl_click(3);
+        list.ctrl_click(5);
+        // 0 1 2 3 4 5, with 1 3 5 selected, the anchor and focus on 5.
+        assert_eq!(list.remove(2).map(|e| e.name), Some("2.png".to_owned()));
+        assert_eq!(list.selection(), [1, 2, 4]);
+        assert_eq!(list.focus(), Some(4));
+        assert_eq!(list.entries()[2].name, "3.png");
+        // A Shift-click still ranges from the anchor, now at 4.
+        list.shift_click(3);
+        assert_eq!(list.selection(), [3, 4]);
+        assert!(list.remove(9).is_none());
+        assert_eq!(list.len(), 5);
+    }
+
+    #[test]
+    fn removing_the_selection_leaves_the_next_row_selected() {
+        let mut list = list_of(5);
+        list.click(1);
+        list.shift_click(2);
+        // Removed as Remove does: one row at a time, by file.
+        list.remove(1);
+        assert_eq!(list.selection(), [1]);
+        list.remove(1);
+        assert_eq!(list.entries()[1].name, "3.png");
+        assert_eq!(list.selection(), [1]);
+        assert_eq!(list.focus(), Some(1));
+        // Removing a row outside the selection leaves it be.
+        list.remove(0);
+        assert_eq!(list.selection(), [0]);
+        assert_eq!(list.entries()[0].name, "3.png");
+        // The last row going takes the focus to the one before.
+        list.click(1);
+        list.remove(1);
+        assert_eq!(list.selection(), [0]);
+        list.remove(0);
         assert!(list.is_empty());
+        assert_eq!(list.selected(), None);
+        assert_eq!(list.focus(), None);
         list.step(-1);
         assert_eq!(list.selected(), None);
+    }
+
+    #[test]
+    fn clearing_forgets_the_selection() {
+        let mut list = list_of(3);
+        list.select_all();
+        list.clear();
+        assert!(list.selection().is_empty());
+        assert_eq!(list.focus(), None);
+        list.shift_click(0);
+        assert!(list.selection().is_empty());
+    }
+
+    #[test]
+    fn several_selected_rows_say_how_many() {
+        assert_eq!(selected_line(0), None);
+        assert_eq!(selected_line(1), None);
+        assert_eq!(selected_line(3).as_deref(), Some("3 selected"));
     }
 
     #[test]
@@ -1257,7 +1581,7 @@ mod tests {
                 held_row("c.png", &["c.jpg"], Some("Pictures")),
                 moved,
             ],
-            selected: None,
+            ..Default::default()
         };
         assert_eq!(
             list.held(),
@@ -1312,7 +1636,7 @@ mod tests {
                 held_row("b.mp3", &["held/a merged.mp3"], None),
                 held_row("c.png", &["held/c.jpg"], None),
             ],
-            selected: None,
+            ..Default::default()
         };
         assert_eq!(list.held_count(), 2);
         assert_eq!(
@@ -1341,7 +1665,7 @@ mod tests {
                 held_row("d.mp3", &["held/m.mp3"], None),
                 held_row("e.png", &["held/e.jpg"], None),
             ],
-            selected: None,
+            ..Default::default()
         };
         let out = Path::new(r"C:\Out");
         let moved = vec![

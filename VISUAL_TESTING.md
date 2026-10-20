@@ -26,6 +26,7 @@ window between them as well.
 - [ ] Copy reads, in order: "Drop files here", "Or add them with the button below, or Ctrl+O.", an **Add files** button, the key hint, the privacy line, and last, muted, "Fire raw files into finished ones."
 - [ ] **Add files** and Ctrl+O open the Windows Open dialog with multi-select. Picked files are listed as a drop would list them. The next time, it opens in the folder files were last added from.
 - [ ] Copying files in File Explorer and pressing Ctrl+V in Kiln lists them. A copied folder is reported as skipped, as a dropped one is. With no files on the clipboard, the footer reads "There are no files to paste."
+- [ ] In the empty window, a status such as "There are no files to paste." or "Skipped 1 item that isn't a file." shows as one muted line under the **Add files** button. The group doesn't move when it appears.
 - [ ] Dragging files over the window fades in a celadon edge and a faint wash in about 120 ms, and leaving fades them out.
 - [ ] Dragging something that isn't a file (text from a browser) shows the "no drop" cursor and no highlight.
 
@@ -36,8 +37,12 @@ window between them as well.
 - [ ] Rows show the name in bone, then the folder, size and number of conversions in stone.
 - [ ] A file with no conversions says "No conversions for this type".
 - [ ] Dropping the same file twice reports it as already in the list. Dropping a folder reports it as skipped.
-- [ ] Hover tints a row; the selected row has the 18% celadon fill, clipped to the panel's rounded corners.
-- [ ] Up, Down, Home and End move the selection. Delete removes it. Escape clears it.
+- [ ] Hover tints a row; every selected row has the 18% celadon fill, clipped to the panel's rounded corners.
+- [ ] Up, Down, Home and End move the selection to one row. With Shift they extend it from where it started. Delete removes it. Escape clears it.
+- [ ] A click selects one row, Ctrl-click adds or takes away a row, Shift-click selects a range, and Ctrl+A selects every row.
+- [ ] With more than one row selected, the footer reads "3 selected" in place of the idle hint. A batch summary or "Working on…" line still shows instead.
+- [ ] Enter, Delete, Ctrl+S and the right-click menu act on every selected row. Removing several rows asks once, counting all of them. Ctrl+S on several held rows asks for one folder.
+- [ ] Right-clicking a row outside the selection selects only that row first. Right-clicking a selected row keeps the selection. With two or more PDFs selected, Tools… offers Merge.
 - [ ] With more rows than fit, the wheel scrolls and a thin thumb appears on the right.
 - [ ] "Clear" shows a soft inner shadow while pressed and empties the list on release.
 - [ ] Dropping files on the app's icon in Explorer opens Kiln with them listed.
