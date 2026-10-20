@@ -359,6 +359,33 @@ pub fn leave_next(held: usize, exporting: bool) -> Next {
     }
 }
 
+/// What a leave held up by exports may do now that a message is handled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Due {
+    Nothing,
+    /// Its exports are all done: go ahead with it.
+    Resume,
+    /// Close was asked for once every export is saved, and they are.
+    Close,
+}
+
+/// `ready` says a leave's exports are all done, `close` that Kiln is to
+/// close once saved, `exporting` that an export still runs. While a dialog
+/// is open, nothing goes ahead: a prompt, a folder picker or a closed
+/// window under it would pull the ground from under that dialog. It goes
+/// ahead once the dialog is closed.
+pub fn leave_due(modal: bool, ready: bool, close: bool, exporting: bool) -> Due {
+    if modal {
+        Due::Nothing
+    } else if ready {
+        Due::Resume
+    } else if close && !exporting {
+        Due::Close
+    } else {
+        Due::Nothing
+    }
+}
+
 /// After Stop on a leave prompt that counted `asked` held results, with
 /// the rows' jobs stopped and `held` results there now: a job that
 /// finished while the prompt was open left a result nobody was asked
@@ -2229,6 +2256,21 @@ mod tests {
         // closing now would cut it off and lose what it hasn't moved.
         assert_eq!(leave_next(0, true), Next::Wait);
         assert_eq!(leave_next(0, false), Next::Proceed);
+    }
+
+    #[test]
+    fn a_leave_waits_for_any_dialog_to_close() {
+        // An export finishing under the Save dialog or a picker doesn't
+        // prompt or close on top of it.
+        assert_eq!(leave_due(true, true, true, false), Due::Nothing);
+        assert_eq!(leave_due(true, false, true, false), Due::Nothing);
+        // With the dialog closed, the leave goes ahead first; a close
+        // waits for the last export.
+        assert_eq!(leave_due(false, true, false, false), Due::Resume);
+        assert_eq!(leave_due(false, true, true, false), Due::Resume);
+        assert_eq!(leave_due(false, false, true, false), Due::Close);
+        assert_eq!(leave_due(false, false, true, true), Due::Nothing);
+        assert_eq!(leave_due(false, false, false, false), Due::Nothing);
     }
 
     #[test]

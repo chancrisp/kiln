@@ -46,8 +46,8 @@ use crate::layout::{
     SheetLayout, TextScroll, ROW_HEIGHT,
 };
 use crate::model::{
-    self, batch_summary, leave_prompt, status_line, FileList, FocusButton, JobState, Leave, Next,
-    PromptButton, Tone,
+    self, batch_summary, leave_prompt, status_line, Due, FileList, FocusButton, JobState, Leave,
+    Next, PromptButton, Tone,
 };
 use crate::quality::{self as q, Value};
 use crate::settings::{self, Engine, Settings};
@@ -1173,6 +1173,27 @@ impl App {
         }
     }
 
+    /// Handle the job events already posted to this window, now rather
+    /// than after whatever runs next. Nothing is dispatched: only Kiln's
+    /// own job messages are taken off the queue.
+    fn take_job_news(&mut self) {
+        let mut msg = MSG::default();
+        while unsafe {
+            PeekMessageW(
+                &mut msg,
+                Some(self.hwnd),
+                WM_KILN_JOB,
+                WM_KILN_JOB,
+                PM_REMOVE,
+            )
+        }
+        .as_bool()
+        {
+            let ev = unsafe { Box::from_raw(msg.lParam.0 as *mut JobEvent) };
+            self.on_job(*ev);
+        }
+    }
+
     /// The held files exports are moving now.
     fn saving_files(&self) -> HashSet<PathBuf> {
         self.exports
@@ -1279,8 +1300,9 @@ impl App {
             PromptButton::Stop(_) => {
                 // Stop first, so nothing more finishes, then look again: a
                 // job that finished while the prompt was open left a result
-                // the prompt never mentioned.
+                // the prompt never mentioned. Its news may still be queued.
                 self.stop_jobs(&rows);
+                self.take_job_news();
                 let now = self.held_by(&rows);
                 match model::after_stop(held, now.len()) {
                     Next::AskAgain => self.leave_after(verb, rows, then, true),
@@ -1709,16 +1731,39 @@ impl App {
             // Something wasn't saved: the leave is off, and the footer and
             // the row say what.
             self.leaving = None;
-        } else if waited && self.leaving.as_ref().is_some_and(|l| l.waits.is_empty()) {
-            if let Some(l) = self.leaving.take() {
-                self.resume_leave(l);
-            }
         }
-        if self.close_when_saved && self.exports.is_empty() {
-            // Close as asked; anything still at stake asks first.
-            self.close_when_saved = false;
-            unsafe {
-                let _ = PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+        // A leave or close this lets go ahead does so in `run_due`, once no
+        // dialog is open.
+    }
+
+    /// Go ahead with a leave whose exports are done, or close as asked
+    /// once everything is saved, unless a dialog is open: then it waits
+    /// for the dialog to close. Runs after every message.
+    fn run_due(&mut self) {
+        // A resumed leave may make a close due too, as one step did before.
+        for _ in 0..2 {
+            let ready = self.leaving.as_ref().is_some_and(|l| l.waits.is_empty());
+            let due = model::leave_due(
+                system::modal_open(),
+                ready,
+                self.close_when_saved,
+                !self.exports.is_empty(),
+            );
+            match due {
+                Due::Nothing => return,
+                Due::Resume => {
+                    if let Some(l) = self.leaving.take() {
+                        self.resume_leave(l);
+                    }
+                }
+                Due::Close => {
+                    // Close as asked; anything still at stake asks first.
+                    self.close_when_saved = false;
+                    unsafe {
+                        let _ = PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+                    }
+                    return;
+                }
             }
         }
     }
@@ -5042,6 +5087,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
 /// After each message, tell UI Automation each status set, at once, then
 /// bring its tree up to date, even while minimised, when nothing paints.
 fn after(app: &mut App, msg: u32, wparam: WPARAM) {
+    app.run_due();
     // Files that arrived under a panel or a dialog join the list once it's
     // back in view.
     if !app.queued.is_empty() && !app.adds_wait() {
