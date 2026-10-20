@@ -130,7 +130,7 @@ fn move_with(src: &Path, dest_dir: &Path, force_copy: bool) -> Result<PathBuf, S
     if let Err(e) = copy_onto(src, &dest) {
         return Err(failed(e));
     }
-    if let Err(e) = std::fs::remove_file(src) {
+    if let Err(e) = remove(src) {
         return Err(format!(
             "{} was copied, but the original couldn't be removed: {e}",
             name.to_string_lossy()
@@ -157,13 +157,43 @@ fn copy_onto(src: &Path, dest: &Path) -> io::Result<()> {
         .unwrap_or_else(|| Err(io::Error::other("there's no free name in that folder")))?;
     let copied = (|| {
         std::fs::copy(src, &tmp)?;
+        // A read-only copy can't be opened to flush it: let it be written
+        // for that moment, then make it read-only again.
+        let readonly = std::fs::metadata(&tmp)?.permissions().readonly();
+        set_readonly(&tmp, false)?;
         OpenOptions::new().write(true).open(&tmp)?.sync_all()?;
+        set_readonly(&tmp, readonly)?;
         std::fs::rename(&tmp, dest)
     })();
     if copied.is_err() {
-        let _ = std::fs::remove_file(&tmp);
+        let _ = remove(&tmp);
     }
     copied
+}
+
+/// Make `path` read-only, or writable again.
+#[allow(clippy::permissions_set_readonly_false)] // Windows: the read-only attribute only.
+fn set_readonly(path: &Path, readonly: bool) -> io::Result<()> {
+    let mut perms = std::fs::metadata(path)?.permissions();
+    if perms.readonly() != readonly {
+        perms.set_readonly(readonly);
+        std::fs::set_permissions(path, perms)?;
+    }
+    Ok(())
+}
+
+/// Remove `path`, read-only or not, as Explorer does when it moves it.
+fn remove(path: &Path) -> io::Result<()> {
+    std::fs::remove_file(path).or_else(|e| {
+        if e.kind() != io::ErrorKind::PermissionDenied {
+            return Err(e);
+        }
+        let was = std::fs::metadata(path)?.permissions().readonly();
+        set_readonly(path, false)?;
+        std::fs::remove_file(path).inspect_err(|_| {
+            let _ = set_readonly(path, was);
+        })
+    })
 }
 
 /// The `n`th temp name for a copy to `dest`: named after it, so a copy cut
@@ -348,6 +378,21 @@ mod tests {
         // No temp file is left, and theirs is untouched.
         assert_eq!(names(b.path()), ["clip (1).mp4", "clip.mp4"]);
         assert_eq!(std::fs::read(b.path().join("clip.mp4")).unwrap(), b"theirs");
+    }
+
+    #[test]
+    fn a_read_only_file_moves_across_drives_and_stays_read_only() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let src = a.path().join("deed.pdf");
+        std::fs::write(&src, b"signed").unwrap();
+        set_readonly(&src, true).unwrap();
+        let dest = move_with(&src, b.path(), true).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"signed");
+        assert!(std::fs::metadata(&dest).unwrap().permissions().readonly());
+        assert!(!src.exists());
+        assert_eq!(names(b.path()), ["deed.pdf"]);
+        // Let the temp folders go.
+        set_readonly(&dest, false).unwrap();
     }
 
     #[test]
