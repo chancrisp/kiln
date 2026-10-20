@@ -10,8 +10,9 @@ use std::fs::{self, File};
 use std::io::BufReader;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::Mutex;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -51,6 +52,10 @@ const BAR_SCAN_SECONDS: f64 = 3.0;
 const MAX_PDF_BYTES: u64 = 200_000_000;
 /// The pages of a PDF looked at for text.
 const TEXT_PAGES: u32 = 3;
+/// How long a PDF helper may keep the one helper slot. One still working
+/// after this is left to finish on its own, its result thrown away, and
+/// the next PDF may start a helper of its own.
+const HELPER_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// What `inspect` found in one file.
 #[derive(Debug, Clone, PartialEq)]
@@ -328,9 +333,10 @@ fn pdf_facts(path: &Path, cancel: &CancelToken, facts: &mut Facts) {
     if facts.bytes > MAX_PDF_BYTES || cancel.is_cancelled() {
         return;
     }
-    // A helper that was cut off may still be working; while it is, the
-    // next PDF gets no PDF facts, so cut-off work never piles up.
-    let Some(busy) = PdfHelper::claim() else {
+    // A helper that was cut off may still be working; while it is, up to
+    // `HELPER_TIMEOUT`, the next PDF gets no PDF facts, so cut-off work
+    // never piles up.
+    let Some(busy) = PDF_HELPER.claim(HELPER_TIMEOUT) else {
         return;
     };
     enum Found {
@@ -384,24 +390,52 @@ fn pdf_facts(path: &Path, cancel: &CancelToken, facts: &mut Facts) {
     facts.pdf = Some(PdfFacts { pages, has_text });
 }
 
-/// Set while a PDF helper thread is running.
-static PDF_HELPER: AtomicBool = AtomicBool::new(false);
+/// The slot PDF helper threads take turns in.
+static PDF_HELPER: HelperSlot = HelperSlot::new();
 
-/// The one PDF helper allowed at a time. Dropping it frees the slot.
-struct PdfHelper;
+/// Room for one helper at a time: which claim holds it, and since when.
+struct HelperSlot {
+    held: Mutex<Option<(u64, Instant)>>,
+    next: AtomicU64,
+}
 
-impl PdfHelper {
-    fn claim() -> Option<PdfHelper> {
-        PDF_HELPER
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-            .then_some(PdfHelper)
+impl HelperSlot {
+    const fn new() -> Self {
+        Self {
+            held: Mutex::new(None),
+            next: AtomicU64::new(0),
+        }
     }
+
+    fn held(&self) -> std::sync::MutexGuard<'_, Option<(u64, Instant)>> {
+        self.held.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The slot, when it is free or its holder has had it for `timeout`.
+    fn claim(&'static self, timeout: Duration) -> Option<PdfHelper> {
+        let mut held = self.held();
+        if held.is_some_and(|(_, since)| since.elapsed() < timeout) {
+            return None;
+        }
+        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        *held = Some((id, Instant::now()));
+        Some(PdfHelper { slot: self, id })
+    }
+}
+
+/// A claim on a `HelperSlot`. Dropping it frees the slot, unless the
+/// claim ran out of time and another has taken the slot since.
+struct PdfHelper {
+    slot: &'static HelperSlot,
+    id: u64,
 }
 
 impl Drop for PdfHelper {
     fn drop(&mut self) {
-        PDF_HELPER.store(false, Ordering::Release);
+        let mut held = self.slot.held();
+        if held.is_some_and(|(id, _)| id == self.id) {
+            *held = None;
+        }
     }
 }
 
@@ -730,13 +764,39 @@ mod tests {
 
     #[test]
     fn one_pdf_helper_at_a_time() {
-        let first = PdfHelper::claim();
+        let first = PDF_HELPER.claim(HELPER_TIMEOUT);
         // Another test may hold it; either way, a second claim fails.
-        assert!(PdfHelper::claim().is_none());
+        assert!(PDF_HELPER.claim(HELPER_TIMEOUT).is_none());
         if first.is_some() {
             drop(first);
-            assert!(PdfHelper::claim().is_some());
+            assert!(PDF_HELPER.claim(HELPER_TIMEOUT).is_some());
         }
+    }
+
+    #[test]
+    fn a_stuck_pdf_helper_lets_go_after_the_timeout() {
+        static SLOT: HelperSlot = HelperSlot::new();
+        let timeout = Duration::from_millis(200);
+        // A slow helper: it holds the slot until told to finish.
+        let stuck = SLOT.claim(timeout).unwrap();
+        let (finish, told) = mpsc::channel::<()>();
+        let (finished, done) = mpsc::channel();
+        assert!(helper(move || {
+            let _ = told.recv();
+            drop(stuck);
+            let _ = finished.send(());
+        }));
+        assert!(SLOT.claim(timeout).is_none());
+        thread::sleep(timeout + POLL);
+        let next = SLOT
+            .claim(timeout)
+            .expect("free once the timeout has passed");
+        // The stuck helper finishing late doesn't free the slot it lost.
+        finish.send(()).unwrap();
+        done.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(SLOT.claim(timeout).is_none());
+        drop(next);
+        assert!(SLOT.claim(timeout).is_some());
     }
 
     #[test]
