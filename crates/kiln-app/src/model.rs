@@ -605,6 +605,8 @@ pub struct FileList {
     anchor: Option<usize>,
     /// The row keyboard actions start from. It can be unselected.
     focus: Option<usize>,
+    /// Whether the focus shows its ring: after a key, not after a click.
+    focus_visible: bool,
 }
 
 impl FileList {
@@ -642,6 +644,23 @@ impl FileList {
 
     pub fn focus(&self) -> Option<usize> {
         self.focus
+    }
+
+    /// The focus, while its ring should show. Like focus-visible on the
+    /// web: a key shows it, and stays shown when Escape clears the
+    /// selection; a click on the list hides it until the next key.
+    pub fn visible_focus(&self) -> Option<usize> {
+        self.focus.filter(|_| self.focus_visible)
+    }
+
+    /// A key moved through or acted on the list: the focus ring shows.
+    pub fn keyboard_used(&mut self) {
+        self.focus_visible = true;
+    }
+
+    /// The pointer clicked in the list: the focus ring hides.
+    pub fn pointer_used(&mut self) {
+        self.focus_visible = false;
     }
 
     /// A plain click: only row `i` is selected.
@@ -1220,6 +1239,35 @@ mod tests {
         let mut empty = FileList::default();
         empty.extend(1);
         assert_eq!(empty.focus(), None);
+    }
+
+    #[test]
+    fn the_focus_ring_shows_after_keys_and_hides_after_clicks() {
+        let mut list = list_of(5);
+        assert_eq!(list.visible_focus(), None, "nothing before any input");
+        // A click focuses the row but shows no ring.
+        list.pointer_used();
+        list.click(2);
+        assert_eq!(list.focus(), Some(2));
+        assert_eq!(list.visible_focus(), None);
+        // An arrow shows it.
+        list.keyboard_used();
+        list.step(1);
+        assert_eq!(list.visible_focus(), Some(3));
+        // Another click hides it again.
+        list.pointer_used();
+        list.ctrl_click(1);
+        assert_eq!(list.visible_focus(), None);
+        // Escape after a click shows it on the kept focus, with nothing
+        // selected.
+        list.keyboard_used();
+        list.clear_selection();
+        assert!(list.selection().is_empty());
+        assert_eq!(list.visible_focus(), Some(1));
+        // And Escape again keeps it showing.
+        list.keyboard_used();
+        list.clear_selection();
+        assert_eq!(list.visible_focus(), Some(1));
     }
 
     #[test]

@@ -1787,6 +1787,7 @@ impl App {
                 // Right-clicking a row outside the selection selects only
                 // it first, and one inside keeps the selection. An empty
                 // part of the list clears it, as File Explorer does.
+                self.files.pointer_used();
                 match self.hit_row(x, y).0 {
                     Some(i) => (self.files.context_target(i), Some(i)),
                     None => {
@@ -2734,7 +2735,7 @@ impl App {
             hover: None,
             // Focus starts on the first tab, so the keyboard has a place
             // to start and the ring shows where it is.
-            focus: Some(0),
+            focus: Some(layout::SETTINGS_FIRST_FOCUS),
             output_line,
             engine_lines,
             engine_missing,
@@ -3357,6 +3358,8 @@ impl App {
             self.add_pressed = true;
             unsafe { SetCapture(self.hwnd) };
         } else {
+            // A click in the list hides the focus ring until a key.
+            self.files.pointer_used();
             let (row, cancel, link) = self.hit_row(x, y);
             match row {
                 Some(i) if ctrl => self.files.ctrl_click(i),
@@ -3442,6 +3445,14 @@ impl App {
             }
             self.animate();
             return true;
+        }
+        // Keys that move through or act on the list show its focus ring.
+        if matches!(
+            key,
+            VK_UP | VK_DOWN | VK_HOME | VK_END | VK_DELETE | VK_BACK | VK_ESCAPE
+        ) || (key == VK_A && ctrl)
+        {
+            self.files.keyboard_used();
         }
         match key {
             // Shift with an arrow, Home or End extends the selection.
@@ -3617,7 +3628,7 @@ impl App {
         };
         let view = View {
             palette: &self.palette,
-            focus: self.files.focus(),
+            focus: self.files.visible_focus(),
             entries: self.files.entries(),
             notes: &self.notes,
             saving: &saving,
@@ -4293,6 +4304,11 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
         }
         WM_SIZE => {
             app.renderer.resize();
+            // Minimised, the client area is empty: keep the zoom and the
+            // scroll for when the window comes back.
+            if wparam.0 == SIZE_MINIMIZED as usize {
+                return Some(LRESULT(0));
+            }
             app.rezoom();
             app.clamp_scroll();
             app.invalidate();

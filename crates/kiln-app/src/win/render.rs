@@ -1012,7 +1012,9 @@ impl Draw<'_> {
             let hot = hovered && v.hover_link;
             let c = if hot {
                 p.text
-            } else if selected || hovered {
+            } else if (selected || hovered) && !p.high_contrast {
+                // A step brighter on the wash; a contrast theme has no wash,
+                // so its link keeps the hot-light colour.
                 p.muted_on_wash
             } else {
                 p.link
@@ -1196,6 +1198,12 @@ impl Draw<'_> {
             p.accent
         };
         self.fill(b, shape::RADIUS_CONTROL, fill, 1.0);
+        // A contrast theme has no in-between fill to hover to: a 2 DIP
+        // line in the highlight's text colour, just inside, shows it.
+        if hover && p.high_contrast {
+            let inner = b.inset(2.0);
+            self.border(&inner, shape::RADIUS_CONTROL - 2.0, p.on_accent, 1.0, 2.0);
+        }
         if pressed {
             self.press_shadow(b, p);
         }
@@ -1793,8 +1801,13 @@ impl Draw<'_> {
             if sv.pressed == Some(k) {
                 self.press_shadow(&r, p);
             }
-            // The chosen tab's label sits on the marker's wash.
-            let c = if t == l.tab { p.text } else { p.text_muted };
+            // The chosen tab's label sits on the marker's wash, and a
+            // hovered one on the line fill: both take full text.
+            let c = if t == l.tab || sv.hover == Some(k) {
+                p.text
+            } else {
+                p.text_muted
+            };
             self.label(t.label(), &self.text.body_center, &r, c, 1.0);
         }
         let segs: Vec<(bool, Rect)> = tabs.iter().map(|&(_, _, r)| (false, r)).collect();

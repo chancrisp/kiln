@@ -247,6 +247,7 @@ pub fn contrast_report(p: &Palette) -> Vec<ContrastPair> {
         ("Outer-ring group icon (muted)", muted, s, NON_TEXT),
         ("Settings row labels (muted)", muted, s, TEXT),
         ("Unselected tab label (muted)", muted, s, TEXT),
+        ("Tab label, hovered", p.text, p.line, TEXT),
         ("Selected tab or segment label", p.text, wash, TEXT),
         ("Button label (Clear, Close, Choose)", p.text, s, TEXT),
         ("Button label, hovered", p.text, p.line, TEXT),

@@ -667,6 +667,10 @@ pub struct SettingsShape {
     pub engine_missing: [bool; 4],
 }
 
+/// The control Settings opens with the keyboard focus on: its first tab,
+/// General, whose ring then shows.
+pub const SETTINGS_FIRST_FOCUS: usize = 0;
+
 pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
     let p = PANEL_PADDING;
     let ph = p + 32.0 + 8.0 + SETTINGS_ROWS as f32 * SETTINGS_ROW + p + BUTTON_HEIGHT + p;
@@ -1186,10 +1190,9 @@ mod tests {
         assert_eq!(text_zoom(f32::NAN, (2000.0, 2000.0)), 1.0);
     }
 
-    /// Every target in every view of the smallest window at Text size
+    /// Every target in every view of a `client`-DIP window at Text size
     /// `scale`, laid out in units, must stand apart from its neighbours.
-    fn assert_nothing_overlaps(scale: f32) {
-        let client = min_window(scale);
+    fn assert_nothing_overlaps(scale: f32, client: (f32, f32)) {
         let zoom = text_zoom(scale, client);
         let (w, h) = (client.0 / zoom, client.1 / zoom);
         assert!(w >= MIN_WINDOW.0 - 1e-3 && h >= MIN_WINDOW.1 - 1e-3);
@@ -1305,12 +1308,56 @@ mod tests {
             .collect();
         rects.push(("result".into(), sh.result));
         all_apart(&rects);
+
+        // The wheel, plain and with More's ring out, pointed at from each
+        // corner: it stays whole and EDGE_GAP inside the window.
+        use crate::wheel::{place, EDGE_GAP, R_MORE_OUTER, R_OUTER};
+        for extent in [R_OUTER, R_MORE_OUTER] {
+            for (x, y) in [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)] {
+                let ((cx, cy), s) = place(x, y, w, h, extent);
+                let r = extent * s;
+                assert!(s > 0.0 && s <= 1.0, "wheel scale {s} at {scale}");
+                for (c, side) in [(cx, w), (cy, h)] {
+                    assert!(c - r >= EDGE_GAP - 0.01, "wheel {extent} at {scale}");
+                    assert!(c + r <= side - EDGE_GAP + 0.01, "wheel {extent} at {scale}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn settings_opens_with_focus_on_its_first_tab() {
+        // Settings opens on General, and the focus index must name its
+        // tab on every page and shape, so the ring draws on a tab.
+        for tab in SettingsTab::ALL {
+            for engine_custom in [[false; 4], [true; 4]] {
+                let shape = SettingsShape {
+                    tab,
+                    output_custom: engine_custom[0],
+                    engine_custom,
+                    engine_missing: engine_custom,
+                };
+                let st = settings(720.0, 480.0, shape);
+                assert_eq!(
+                    st.controls[SETTINGS_FIRST_FOCUS].0,
+                    Control::Tab(SettingsTab::General),
+                    "{tab:?}"
+                );
+            }
+        }
     }
 
     #[test]
     fn nothing_overlaps_in_the_smallest_window_at_any_text_size() {
-        assert_nothing_overlaps(1.0);
-        assert_nothing_overlaps(MAX_TEXT_SCALE);
+        assert_nothing_overlaps(1.0, min_window(1.0));
+        assert_nothing_overlaps(MAX_TEXT_SCALE, min_window(MAX_TEXT_SCALE));
+        // A screen too small for the grown minimum: the zoom gives way and
+        // the units come out above MIN_WINDOW and not round.
+        let small = (1366.0, 700.0);
+        let zoom = text_zoom(MAX_TEXT_SCALE, small);
+        assert!(zoom < MAX_TEXT_SCALE);
+        assert!(small.0 / zoom > MIN_WINDOW.0 || small.1 / zoom > MIN_WINDOW.1);
+        assert_nothing_overlaps(MAX_TEXT_SCALE, small);
     }
 
     #[test]

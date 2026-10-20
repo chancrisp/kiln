@@ -89,7 +89,7 @@ test enforces this.
   - Rows are 56 px tall, controls 32 px, and the header 56 px.
 - Corners are 6 px on controls and 12 px on panels. The wheel is circular.
 - Borders are 1 px in kiln-ash and drawn inside their shape, so neighbours never double up. A segmented control has one outer border and hairline dividers.
-- The keyboard focus ring is a 1.5 px strong-celadon line drawn 3 px outside the control. In the list it sits 2 px inside the focused row, and stays after Escape clears the selection.
+- The keyboard focus ring is a 1.5 px strong-celadon line drawn 3 px outside the control. In the list it sits 2 px inside the focused row. It shows after keyboard input, stays when Escape clears the selection, and hides after a click in the list until the next key.
 - A selected row has the celadon wash and a 1 px strong-celadon edge on its left.
 - Layout is in DIPs, and Direct2D scales it. The layout tests check the grid at several window sizes.
 - Windows' Text size zooms the whole layout, type and all, from 1.0 to 2.25. The smallest window grows with it. On a screen too small for the zoomed window, the zoom gives way so nothing overlaps.
