@@ -51,12 +51,25 @@ fn the_open_with_list_matches_the_registry() {
         .map(str::to_string)
         .collect();
 
-    let problems: Vec<String> = [
+    let mut problems: Vec<String> = [
         compare("SupportedTypes", &supported, &want),
         compare("OpenWithProgids", &progids, &want),
     ]
     .into_iter()
     .flatten()
     .collect();
+
+    // Each type lists only Kiln.Convert, and every value is per machine.
+    for (i, line) in text.lines().enumerate() {
+        let n = i + 1;
+        if line.contains(r"\OpenWithProgids") && !line.contains(r#"Name="Kiln.Convert""#) {
+            problems.push(format!(
+                "line {n}: an OpenWithProgids value not named Kiln.Convert"
+            ));
+        }
+        if line.contains("<RegistryValue") && !line.contains(r#"Root="HKLM""#) {
+            problems.push(format!("line {n}: a RegistryValue outside HKLM"));
+        }
+    }
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }

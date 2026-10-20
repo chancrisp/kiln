@@ -4,6 +4,9 @@
 
   A per-machine install into Program Files\Kiln, with a Start menu
   shortcut and the folder added to PATH so `kiln` works in a terminal.
+  It also offers Kiln in Explorer's Open with, for every account on the PC,
+  and adds a Send to shortcut for the installing account. Nothing claims a
+  file type: no extension's default value is touched.
   The UpgradeCode never changes: it is how newer versions find and
   replace older ones.
 -->
@@ -54,10 +57,48 @@
       <Component>
         <File Source="$(StageDir)\README.md" KeyPath="yes" />
       </Component>
+
+      <!--
+        Open with. The file types that list Kiln.Convert under
+        OpenWithProgids are in open-with-types.wxs (OpenWithTypes).
+        MultiSelectModel stays unset, so Explorer starts one Kiln per file
+        and the running window gathers them.
+      -->
+      <Component Id="OpenWith">
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\kiln-app.exe"
+                       Name="FriendlyAppName" Type="string" Value="Kiln" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\kiln-app.exe\shell\open\command"
+                       Type="string" Value='"[INSTALLFOLDER]kiln-app.exe" "%1"' />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Kiln.Convert"
+                       Type="string" Value="Kiln" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Kiln.Convert\DefaultIcon"
+                       Type="string" Value='"[INSTALLFOLDER]kiln-app.exe",0' />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Kiln.Convert\shell\open\command"
+                       Type="string" Value='"[INSTALLFOLDER]kiln-app.exe" "%1"' />
+      </Component>
     </ComponentGroup>
+
+    <!--
+      Send to, for the account that installs Kiln. A per-user item in a
+      per-machine package needs an HKCU key path (ICE38, ICE43, ICE57).
+    -->
+    <StandardDirectory Id="SendToFolder">
+      <Component Id="SendTo">
+        <Shortcut Id="SendToShortcut"
+                  Name="Kiln"
+                  Description="Convert files on this PC"
+                  Target="[INSTALLFOLDER]kiln-app.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="KilnIcon" />
+        <RegistryValue Root="HKCU" Key="Software\Kiln" Name="SendTo"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
 
     <Feature Id="Main">
       <ComponentGroupRef Id="KilnFiles" />
+      <ComponentGroupRef Id="OpenWithTypes" />
+      <ComponentRef Id="SendTo" />
     </Feature>
   </Package>
 </Wix>

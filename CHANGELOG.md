@@ -49,4 +49,5 @@ The first version.
   - The convert and Tools wheels mark the suggestion with a small celadon dot, on More and in the ring when it sits there. Opened from the keyboard, a wheel starts on the suggestion, and the footer gives the reason.
   - **Settings > General** gains **Suggestions**, On or Off, and **Forget picks**. `settings.toml` gains `suggestions = true`.
 - Packaging: an MSI installer, a portable ZIP and optional code signing.
+- The installer adds Kiln to Explorer's Open with and Send to.
 - CI on windows-latest.

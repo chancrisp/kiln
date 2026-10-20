@@ -74,7 +74,7 @@ Write-Host "Wrote $zip"
 
 if (-not $SkipMsi) {
     $msi = Join-Path $dist "Kiln-$version-x64.msi"
-    wix build packaging\kiln.wxs -arch x64 -d "Version=$version" -d "StageDir=$stage" -o $msi
+    wix build packaging\kiln.wxs packaging\open-with-types.wxs -arch x64 -d "Version=$version" -d "StageDir=$stage" -o $msi
     if ($LASTEXITCODE -ne 0) { throw "wix build failed." }
     Sign-Files @($msi)
     Write-Host "Wrote $msi"

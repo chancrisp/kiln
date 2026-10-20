@@ -1,3 +1,38 @@
 #define RT_MANIFEST 24
 1 ICON "kiln.ico"
 1 RT_MANIFEST "kiln.exe.manifest"
+
+// The version resource. Explorer's Open with list shows FileDescription,
+// so without it Kiln would appear there as "kiln-app.exe". build.rs passes
+// the crate version as CARGO_PKG_VERSION_MAJOR, _MINOR and _PATCH.
+#define KILN_STR2(x) #x
+#define KILN_STR(x) KILN_STR2(x)
+#define KILN_DOTTED2(a, b, c) KILN_STR2(a.b.c)
+#define KILN_DOTTED(a, b, c) KILN_DOTTED2(a, b, c)
+#define KILN_VERSION_STR KILN_DOTTED(CARGO_PKG_VERSION_MAJOR, CARGO_PKG_VERSION_MINOR, CARGO_PKG_VERSION_PATCH)
+
+1 VERSIONINFO
+FILEVERSION CARGO_PKG_VERSION_MAJOR, CARGO_PKG_VERSION_MINOR, CARGO_PKG_VERSION_PATCH, 0
+PRODUCTVERSION CARGO_PKG_VERSION_MAJOR, CARGO_PKG_VERSION_MINOR, CARGO_PKG_VERSION_PATCH, 0
+FILEFLAGSMASK 0x3fL
+FILEFLAGS 0x0L
+FILEOS 0x40004L
+FILETYPE 0x1L
+FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "FileDescription", "Kiln"
+            VALUE "FileVersion", KILN_VERSION_STR
+            VALUE "OriginalFilename", "kiln-app.exe"
+            VALUE "ProductName", "Kiln"
+            VALUE "ProductVersion", KILN_VERSION_STR
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
