@@ -7,6 +7,7 @@ mod support;
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use image::{Rgb, RgbImage};
@@ -179,13 +180,39 @@ fn image_estimates_land_within_2x() {
     }
 }
 
+/// Only one PDF is read at a time, so tests that read one take turns.
+static PDF: Mutex<()> = Mutex::new(());
+
+fn one_pdf_at_a_time() -> MutexGuard<'static, ()> {
+    PDF.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[test]
 fn a_pdf_with_text() {
+    let _turn = one_pdf_at_a_time();
     assert_eq!(f("sample.pdf").pdf.unwrap().has_text, Some(true));
 }
 
 #[test]
+fn a_huge_pdf_is_not_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("huge.pdf");
+    let file = fs::File::create(&path).unwrap();
+    file.set_len(200_000_001).unwrap();
+    drop(file);
+    let t = Instant::now();
+    let p = inspect_at(&path);
+    assert!(t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
+    assert_eq!(
+        (p.kind, p.bytes, p.pdf),
+        (Kind::Document, 200_000_001, None)
+    );
+    fs::remove_file(&path).unwrap();
+}
+
+#[test]
 fn a_scanned_pdf() {
+    let _turn = one_pdf_at_a_time();
     assert_eq!(
         f("scan.pdf").pdf.unwrap(),
         PdfFacts {

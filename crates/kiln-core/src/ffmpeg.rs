@@ -342,8 +342,22 @@ pub(crate) fn analyse(
     filter: &str,
     max_seconds: Option<f64>,
 ) -> Result<String> {
+    analyse_with(opts, ctx, input, &[], filter_flag, filter, max_seconds)
+}
+
+/// `analyse` with `input_args` before the input, such as `-threads 1`.
+pub(crate) fn analyse_with(
+    opts: &Options,
+    ctx: &mut Context<'_>,
+    input: &Path,
+    input_args: &[&str],
+    filter_flag: &str,
+    filter: &str,
+    max_seconds: Option<f64>,
+) -> Result<String> {
     let mut cmd = Command::new(process::program(opts.engines.ffmpeg.as_deref(), "ffmpeg"));
     cmd.args(["-hide_banner", "-nostdin", "-nostats", "-loglevel", "info"])
+        .args(input_args)
         .args(["-protocol_whitelist", "file", "-i"])
         .arg(file_url(input));
     if let Some(t) = max_seconds {

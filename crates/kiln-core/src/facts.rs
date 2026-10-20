@@ -10,8 +10,8 @@ use std::fs::{self, File};
 use std::io::BufReader;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
-use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -39,16 +39,17 @@ const GRAPHIC_COLOURS: usize = 64;
 /// neighbour is a graphic.
 const GRAPHIC_FLAT: f32 = 0.5;
 
-/// How long one FFmpeg or FFprobe run, or one PDF read, may take.
+/// How long one FFmpeg or FFprobe run, or one step of a PDF read, may
+/// take.
 const LIMIT: Duration = Duration::from_secs(2);
 /// How often a wait looks at the caller's cancel token and the clock.
 const POLL: Duration = Duration::from_millis(25);
 /// Seconds of video the black-bar detector reads.
 const BAR_SCAN_SECONDS: f64 = 3.0;
-/// PDFs larger than this skip the text check.
+/// PDFs larger than this aren't read: they get type and size only.
 const MAX_PDF_BYTES: u64 = 200_000_000;
 /// The pages of a PDF looked at for text.
-const TEXT_PAGES: usize = 3;
+const TEXT_PAGES: u32 = 3;
 
 /// What `inspect` found in one file.
 #[derive(Debug, Clone, PartialEq)]
@@ -214,6 +215,7 @@ fn probe(path: &Path, opts: &Options, cancel: &CancelToken) -> Option<MediaInfo>
         progress: &mut |_| {},
         cancel: &deadline.token,
     };
+    let _low = crate::process::low_priority();
     let info = crate::ffmpeg::probe_media(opts, path, &mut ctx).ok()?;
     (info.duration.is_some() || info.width.is_some()).then_some(info)
 }
@@ -230,10 +232,13 @@ fn bars(path: &Path, frame: (u32, u32), opts: &Options, cancel: &CancelToken) ->
         progress: &mut |_| {},
         cancel: &deadline.token,
     };
-    let log = crate::ffmpeg::analyse(
+    let _low = crate::process::low_priority();
+    // One decoding thread: this is background work.
+    let log = crate::ffmpeg::analyse_with(
         opts,
         &mut ctx,
         path,
+        &["-threads", "1"],
         "-vf",
         "cropdetect=limit=24:round=2:reset=0",
         Some(BAR_SCAN_SECONDS),
@@ -244,56 +249,119 @@ fn bars(path: &Path, frame: (u32, u32), opts: &Options, cancel: &CancelToken) ->
     )
 }
 
-/// A PDF's page count and whether its first pages hold text. Each read
-/// is cut off after `LIMIT`: a PDF that can't be loaded in time gets no
-/// PDF facts, and one whose text can't be checked gets `has_text: None`.
+/// A PDF's page count and whether its first pages hold text. A PDF over
+/// `MAX_PDF_BYTES` isn't read at all. One helper thread loads the PDF and
+/// then reads its first `TEXT_PAGES` pages; each step is waited on for
+/// `LIMIT`. A PDF that can't be loaded in time gets no PDF facts, and one
+/// whose text can't be checked in time gets `has_text: None`.
 fn pdf_facts(path: &Path, cancel: &CancelToken, facts: &mut Facts) {
-    let owned = path.to_path_buf();
-    let loaded = within(cancel, move || {
-        let bytes = fs::read(&owned).ok()?;
-        let doc = lopdf::Document::load_mem(&bytes).ok()?;
-        let pages = u32::try_from(doc.get_pages().len()).unwrap_or(u32::MAX);
-        Some((Arc::new(bytes), pages, doc.is_encrypted()))
-    });
-    let Some((bytes, pages, encrypted)) = loaded.flatten() else {
+    if facts.bytes > MAX_PDF_BYTES || cancel.is_cancelled() {
+        return;
+    }
+    // A helper that was cut off may still be working; while it is, the
+    // next PDF gets no PDF facts, so cut-off work never piles up.
+    let Some(busy) = PdfHelper::claim() else {
         return;
     };
-    let has_text = if encrypted || facts.bytes > MAX_PDF_BYTES {
+    enum Found {
+        Loaded { pages: u32, encrypted: bool },
+        Text(Option<bool>),
+    }
+    let (tx, rx) = mpsc::channel();
+    let owned = path.to_path_buf();
+    // `busy` is let go before the last word is sent, so the next PDF never
+    // finds the slot taken by a helper that has finished. A panic lets it
+    // go too.
+    let started = helper(move || {
+        let loaded = fs::read(&owned)
+            .ok()
+            .and_then(|bytes| lopdf::Document::load_mem(&bytes).ok());
+        let Some(doc) = loaded else {
+            drop(busy);
+            return;
+        };
+        let pages = u32::try_from(doc.get_pages().len()).unwrap_or(u32::MAX);
+        let encrypted = doc.is_encrypted();
+        if encrypted {
+            drop(doc);
+            drop(busy);
+            let _ = tx.send(Found::Loaded { pages, encrypted });
+            return;
+        }
+        // Nobody waiting any more: stop here.
+        if tx.send(Found::Loaded { pages, encrypted }).is_err() {
+            return;
+        }
+        let text = crate::pdf::text_in_first(&doc, TEXT_PAGES).ok();
+        drop(doc);
+        drop(busy);
+        let _ = tx.send(Found::Text(text));
+    });
+    if !started {
+        return;
+    }
+    let Some(Found::Loaded { pages, encrypted }) = wait(&rx, cancel) else {
+        return;
+    };
+    let has_text = if encrypted {
         None
     } else {
-        within(cancel, move || {
-            crate::pdf::text_in_first(&bytes, TEXT_PAGES).ok()
-        })
-        .flatten()
+        match wait(&rx, cancel) {
+            Some(Found::Text(t)) => t,
+            _ => None,
+        }
     };
     facts.pdf = Some(PdfFacts { pages, has_text });
 }
 
-/// Run `work` on its own thread and wait for it until `LIMIT` has passed
-/// or `cancel` is set. `None` when it ran out of time, was cancelled or
-/// panicked. A thread that is cut off is left to finish on its own.
-fn within<T: Send + 'static>(
-    cancel: &CancelToken,
-    work: impl FnOnce() -> T + Send + 'static,
-) -> Option<T> {
-    if cancel.is_cancelled() {
-        return None;
+/// Set while a PDF helper thread is running.
+static PDF_HELPER: AtomicBool = AtomicBool::new(false);
+
+/// The one PDF helper allowed at a time. Dropping it frees the slot.
+struct PdfHelper;
+
+impl PdfHelper {
+    fn claim() -> Option<PdfHelper> {
+        PDF_HELPER
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+            .then_some(PdfHelper)
     }
-    let (tx, rx) = mpsc::channel();
+}
+
+impl Drop for PdfHelper {
+    fn drop(&mut self) {
+        PDF_HELPER.store(false, Ordering::Release);
+    }
+}
+
+/// Run `work` on a helper thread of its own, below normal priority like
+/// the inspect thread. `false` when the thread couldn't be started.
+fn helper(work: impl FnOnce() + Send + 'static) -> bool {
     thread::Builder::new()
         .name("kiln-inspect".to_owned())
         .spawn(move || {
-            let _ = tx.send(work());
+            crate::process::lower_thread_priority();
+            work();
         })
-        .ok()?;
+        .is_ok()
+}
+
+/// The next thing a helper sends on `rx`, waiting until `LIMIT` has passed
+/// or `cancel` is set. `None` when it ran out of time, was cancelled, or
+/// the helper stopped without sending.
+fn wait<T>(rx: &Receiver<T>, cancel: &CancelToken) -> Option<T> {
     let start = Instant::now();
     loop {
+        if cancel.is_cancelled() {
+            return None;
+        }
         match rx.recv_timeout(POLL) {
             Ok(found) => return Some(found),
             Err(RecvTimeoutError::Disconnected) => return None,
             Err(RecvTimeoutError::Timeout) => {}
         }
-        if cancel.is_cancelled() || start.elapsed() >= LIMIT {
+        if start.elapsed() >= LIMIT {
             return None;
         }
     }
@@ -537,10 +605,25 @@ mod tests {
 
     #[test]
     fn slow_work_is_cut_off_at_the_limit() {
+        let (tx, rx) = mpsc::channel();
+        assert!(helper(move || {
+            thread::sleep(LIMIT * 3);
+            let _ = tx.send(());
+        }));
         let t = Instant::now();
-        let got = within(&CancelToken::new(), || thread::sleep(LIMIT * 3));
-        assert!(got.is_none());
+        assert!(wait(&rx, &CancelToken::new()).is_none());
         assert!(t.elapsed() >= LIMIT && t.elapsed() < LIMIT * 2);
+    }
+
+    #[test]
+    fn one_pdf_helper_at_a_time() {
+        let first = PdfHelper::claim();
+        // Another test may hold it; either way, a second claim fails.
+        assert!(PdfHelper::claim().is_none());
+        if first.is_some() {
+            drop(first);
+            assert!(PdfHelper::claim().is_some());
+        }
     }
 
     #[test]

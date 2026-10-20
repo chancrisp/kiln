@@ -110,14 +110,28 @@ fn extract_text(input: &Path) -> Result<String> {
     Ok(text)
 }
 
-/// Whether any of the first `pages` pages of the PDF in `bytes` draws
-/// text, so a scan can be told from a document.
-pub(crate) fn text_in_first(bytes: &[u8], pages: usize) -> Result<bool> {
+/// Whether any of the first `pages` pages of `doc` draws text, so a scan
+/// can be told from a document. Only those pages are read; reading stops
+/// at the first page that can't be, as pdf-extract's own page loop does.
+pub(crate) fn text_in_first(doc: &Document, pages: u32) -> Result<bool> {
     // pdf-extract panics on some malformed files, as above.
-    let all = std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem_by_pages(bytes))
-        .map_err(|_| failed("the PDF's text couldn't be read."))?
-        .map_err(|e| failed(load_reason(&e.to_string())))?;
-    Ok(all.iter().take(pages).any(|p| !p.trim().is_empty()))
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        for n in 1..=pages {
+            let mut text = String::new();
+            let read = {
+                let mut out = pdf_extract::PlainTextOutput::new(&mut text);
+                pdf_extract::output_doc_page(doc, &mut out, n)
+            };
+            if read.is_err() {
+                break;
+            }
+            if !text.trim().is_empty() {
+                return true;
+            }
+        }
+        false
+    }))
+    .map_err(|_| failed("the PDF's text couldn't be read."))
 }
 
 /// Pages joined by a blank line, with trailing spaces gone and runs of

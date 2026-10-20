@@ -1,6 +1,7 @@
 //! Running external engines. Arguments are always passed one by one to
 //! `std::process::Command`; nothing is ever assembled into a shell string.
 
+use std::cell::Cell;
 use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -48,6 +49,28 @@ pub(crate) fn sibling(configured: Option<&Path>, name: &str) -> PathBuf {
     }
 }
 
+thread_local! {
+    /// Whether engines started from this thread run below normal priority.
+    static LOW_PRIORITY: Cell<bool> = const { Cell::new(false) };
+}
+
+/// While the returned guard lives, `run` on this thread starts engines in
+/// the below-normal priority class, so looking inside files never slows a
+/// conversion. Only inspecting opts in; conversions run at normal
+/// priority.
+pub(crate) fn low_priority() -> LowPriority {
+    LowPriority(LOW_PRIORITY.with(|l| l.replace(true)))
+}
+
+/// Restores the priority `run` used before `low_priority` was called.
+pub(crate) struct LowPriority(bool);
+
+impl Drop for LowPriority {
+    fn drop(&mut self) {
+        LOW_PRIORITY.with(|l| l.set(self.0));
+    }
+}
+
 /// Run `cmd` to completion, feeding each stdout line to `on_line`, and
 /// return its stderr.
 ///
@@ -63,7 +86,7 @@ pub(crate) fn run(
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    hide_console(&mut cmd);
+    hide_console(&mut cmd, LOW_PRIORITY.with(Cell::get));
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -253,15 +276,36 @@ impl ProcessTree {
     }
 }
 
+/// No console window, and the below-normal priority class when `low`.
 #[cfg(windows)]
-fn hide_console(cmd: &mut Command) {
+fn hide_console(cmd: &mut Command, low: bool) {
     use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    use windows_sys::Win32::System::Threading::{BELOW_NORMAL_PRIORITY_CLASS, CREATE_NO_WINDOW};
+    let mut flags = CREATE_NO_WINDOW;
+    if low {
+        flags |= BELOW_NORMAL_PRIORITY_CLASS;
+    }
+    cmd.creation_flags(flags);
 }
 
 #[cfg(not(windows))]
-fn hide_console(_cmd: &mut Command) {}
+fn hide_console(_cmd: &mut Command, _low: bool) {}
+
+/// Lower the calling thread's priority to below normal.
+#[cfg(windows)]
+pub(crate) fn lower_thread_priority() {
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+    };
+    // SAFETY: GetCurrentThread returns a pseudo-handle that needs no
+    // closing, and the call only changes this thread's priority.
+    unsafe {
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    }
+}
+
+#[cfg(not(windows))]
+pub(crate) fn lower_thread_priority() {}
 
 #[cfg(test)]
 mod tests {
@@ -278,6 +322,35 @@ mod tests {
     }
 
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn low_priority_engines_start_below_normal() {
+        let class = || {
+            let mut cmd = Command::new("powershell.exe");
+            cmd.args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "(Get-Process -Id $PID).PriorityClass",
+            ]);
+            let mut out = String::new();
+            run("PowerShell", cmd, &CancelToken::new(), |l| {
+                out.push_str(l.trim())
+            })
+            .unwrap();
+            out
+        };
+        {
+            let _low = low_priority();
+            {
+                let _again = low_priority();
+            }
+            // A nested guard leaves it low.
+            assert_eq!(class(), "BelowNormal");
+        }
+        assert_eq!(class(), "Normal");
+    }
 
     #[test]
     fn sibling_sits_next_to_a_configured_engine() {
