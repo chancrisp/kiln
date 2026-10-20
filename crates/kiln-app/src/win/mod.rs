@@ -1775,19 +1775,21 @@ impl App {
     /// nothing else is lit, or what the lit format is.
     fn wheel_hint(&self) -> Option<String> {
         let w = self.wheel.as_ref().filter(|w| w.is_open())?;
-        if let Some(s) = &w.suggestion {
-            let marks = w.marks();
-            if wheel::shows_suggestion(w.hover, &marks) {
-                // The label as the wheel shows it: the item itself, which
-                // is the last mark (its outer slot when it is in More).
-                if let Some(item) = marks.last().and_then(|&m| w.wheel.item(m)) {
-                    return Some(wheel::suggestion_footer(&item.label, &s.reason));
-                }
-            }
-        }
-        // A lit convert target says what it is, in place of the hint on how
-        // to reach its options.
-        wheel::lit_footer(w.hover.and_then(|spot| w.wheel.item(spot)))
+        let marks = w.marks();
+        // The suggestion's line, while it shows. The label is the item as
+        // the wheel shows it: the last mark (its outer slot when it is in
+        // More).
+        let suggestion = w
+            .suggestion
+            .as_ref()
+            .filter(|_| wheel::shows_suggestion(w.hover, &marks))
+            .and_then(|s| {
+                let item = marks.last().and_then(|&m| w.wheel.item(m))?;
+                Some(wheel::suggestion_footer(&item.label, &s.reason))
+            });
+        // A lit convert target says what it is, ahead of the suggestion if
+        // it is the suggested one.
+        wheel::wheel_footer(w.hover.and_then(|spot| w.wheel.item(spot)), suggestion)
     }
 
     /// Advance the animations: start a pulsed job, drop a faded wheel or
@@ -3006,6 +3008,9 @@ impl App {
             if w.is_open() {
                 match wheel::hit(&w.wheel, x, y, w.more_open()) {
                     Some(spot) => self.choose(spot),
+                    // A group's heading on the outer ring is a label, not
+                    // a way out: a stray click on it leaves the wheel open.
+                    None if wheel::on_outer_band(&w.wheel, x, y, w.more_open()) => {}
                     None => self.close_wheel(),
                 }
             }

@@ -61,9 +61,9 @@ const DOT_GAP: f32 = 6.0;
 pub struct SheetView<'a> {
     pub layout: &'a SheetLayout,
     pub title: &'a str,
-    /// What the source is.
     /// What the target format is: "MOV: QuickTime video from Apple".
     pub target: &'a str,
+    /// What the source is.
     pub context: &'a str,
     /// The result's size and an estimate.
     pub result: &'a str,

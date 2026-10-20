@@ -103,7 +103,7 @@ test enforces this.
   - The tools that fit them. Merge needs two or more files of one type.
 - **More.** The convert wheel holds at most eight targets, the ones people reach for first. When there are more, the ninth segment is **More** (three dots).
   - Pointing at More pours an outer ring from behind the dish over 160 ms, scaling from 66% with opacity. Pointing at another inner segment draws it back over 120 ms.
-  - The ring runs from 144 to 208 DIPs. Its targets are grouped by kind, each group led by a heading: the kind's icon in muted stone with its name under it in muted caption text (Images, Video, Audio, Documents, Sheets, Slides, Subtitles). A heading takes two and a half slots, a code one, with a hairline divider only where a group starts. Codes are monospace, without icons.
+  - The ring runs from 144 to 208 DIPs. Its targets are grouped by kind, each group led by a heading: the kind's icon in muted stone with its name under it in muted caption text (Images, Video, Audio, Documents, Sheets, Slides, Subtitles). A heading takes two and a half slots, a code one, with a hairline divider only where a group starts. A click on a heading does nothing, and the wheel stays open. Codes are monospace, without icons.
   - The 8 DIP groove between the dish and the ring is solid ground, so nothing behind shows through.
   - The centre reads `MP4 → AVI` while a target is lit, so the pair is always spelled out.
 - **Names.** While a convert target is lit, in the wheel or the More ring, the footer says what it is in place of the generic hint: `WEBP: a small image for the web`, `WV: WavPack, lossless audio`. The code is upper-cased and the description comes from `describe_format` in kiln-core: lower case after the colon unless it opens with a proper name, no full stop, at most 40 characters. With nothing lit, the footer goes back to what it said. `wheel::target_label` composes the line, and the options sheet reuses it.
@@ -112,7 +112,7 @@ test enforces this.
   - When the suggestion is in More, the More segment and the suggestion's slot in the outer ring both get the dot. In the ring, where codes have no icon, the dot sits 6 px above the code.
   - When facts arrive while the wheel is open, the dot fades in over 160 ms. Nothing moves or pulses.
   - Opened from the keyboard, the wheel starts on the suggestion. When the suggestion is in More, it starts on More, and Enter opens the ring with the suggestion lit.
-  - While nothing is lit, or while the suggested segment is lit, the footer reads "Suggested: JPG. " followed by the reason, as in "Suggested: JPG. A photo. JPG keeps the look at about 2 MB."
+  - While nothing is lit, the footer reads "Suggested: JPG. " followed by the reason, as in "Suggested: JPG. A photo. JPG keeps the look at about 2 MB." While the suggested target itself is lit, its name comes first: "JPG: a photo that opens anywhere · Suggested: JPG. A photo. JPG keeps the look at about 2 MB." A line too long for the footer ends in "…". With More lit and the suggestion inside it, the footer keeps the suggestion alone, since More is not a target.
   - The Tools wheel marks Compress, Merge or Crop the same way.
 
 ## The options sheet

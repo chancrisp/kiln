@@ -329,26 +329,71 @@ pub const HEADING_ICON: f32 = 18.0;
 pub const HEADING_LINE: f32 = 14.0;
 /// Space between a heading's icon and its name.
 pub const HEADING_GAP: f32 = 2.0;
-/// Most the name's text can be, per character, at the caption size. The
-/// layout keeps clear of the neighbours by this much, so the real text,
-/// which is narrower, never touches them.
-pub const HEADING_CHAR: f32 = 6.5;
+
+/// The width a heading's name needs, in DIPs: DirectWrite's measure of the
+/// text at the caption size (12 DIPs) in Segoe UI and in Segoe UI Variable
+/// Text, which agree, plus about 2 DIPs of headroom so the caption's
+/// ellipsis trimming never bites.
+///
+/// | name      | measured | here |
+/// |-----------|----------|------|
+/// | Images    | 38.1     | 40   |
+/// | Audio     | 31.5     | 34   |
+/// | Video     | 30.7     | 33   |
+/// | Documents | 60.3     | 62   |
+/// | Sheets    | 34.9     | 37   |
+/// | Slides    | 30.6     | 33   |
+/// | Subtitles | 45.5     | 48   |
+///
+/// A name not in the table gets 7 DIPs a character.
+pub fn heading_width(name: &str) -> f32 {
+    match name {
+        "Images" => 40.0,
+        "Audio" => 34.0,
+        "Video" => 33.0,
+        "Documents" => 62.0,
+        "Sheets" => 37.0,
+        "Slides" => 33.0,
+        "Subtitles" => 48.0,
+        _ => name.chars().count() as f32 * 7.0,
+    }
+}
 
 /// A box in wheel space: left, top, width, height.
 pub type Box4 = (f32, f32, f32, f32);
 
+/// Whether a box in wheel space lies wholly inside the outer band, with a
+/// DIP to spare. The band's inner edge curves into the box, so that bound
+/// uses the box's nearest point to the centre, not just its corners; the
+/// outer bound uses the farthest corner.
+pub fn box_in_band(b: Box4) -> bool {
+    let (x, y, w, h) = b;
+    let near = (x.max(0.0).max(-(x + w))).hypot(y.max(0.0).max(-(y + h)));
+    let far = [(x, y), (x + w, y), (x, y + h), (x + w, y + h)]
+        .into_iter()
+        .map(|(px, py)| px.hypot(py))
+        .fold(0.0, f32::max);
+    near >= R_MORE_INNER + 1.0 && far <= R_MORE_OUTER - 1.0
+}
+
 /// Where a heading draws, relative to the wheel's centre: the icon's box
-/// and the name's, stacked and centred on the slot. The name is as wide as
-/// its text can get. Beside the ring's left and right the name is nearly as
-/// wide as the band, so the stack slides along the slot's middle line to
-/// keep every corner inside the band.
+/// and the name's, stacked and centred on the slot. The name's box is as
+/// wide as its measured text. Beside the ring's left and right the name is
+/// nearly as wide as the band, so the stack shifts a little, as little as
+/// it can, to keep each box inside the band and its own slot.
 pub fn heading_boxes(slot: &OuterSlot) -> Option<(Box4, Box4)> {
     let name = slot.heading?;
     let mid = (slot.a0 + slot.a1) / 2.0;
-    let w = name.chars().count() as f32 * HEADING_CHAR;
+    let w = heading_width(name);
     let tall = HEADING_ICON + HEADING_GAP + HEADING_LINE;
-    let at = |r: f32| -> (Box4, Box4) {
-        let (x, y) = (r * mid.cos(), r * mid.sin());
+    // The stack centred `dr` along the slot's middle line and `dt` across
+    // it from the middle of the band.
+    let at = |dr: f32, dt: f32| -> (Box4, Box4) {
+        let r = (R_MORE_INNER + R_MORE_OUTER) / 2.0 + dr;
+        let (x, y) = (
+            r * mid.cos() - dt * mid.sin(),
+            r * mid.sin() + dt * mid.cos(),
+        );
         let top = y - tall / 2.0;
         (
             (x - HEADING_ICON / 2.0, top, HEADING_ICON, HEADING_ICON),
@@ -360,25 +405,31 @@ pub fn heading_boxes(slot: &OuterSlot) -> Option<(Box4, Box4)> {
             ),
         )
     };
-    let in_band = |b: Box4| {
+    let in_wedge = |b: Box4| {
         let (x, y, bw, bh) = b;
         [(x, y), (x + bw, y), (x, y + bh), (x + bw, y + bh)]
             .into_iter()
-            .all(|(px, py)| {
-                let r = (px * px + py * py).sqrt();
-                (R_MORE_INNER + 1.0..=R_MORE_OUTER - 1.0).contains(&r)
-            })
+            .all(|(px, py)| (py.atan2(px) - slot.a0).rem_euclid(TAU) < slot.a1 - slot.a0)
     };
-    let centre = (R_MORE_INNER + R_MORE_OUTER) / 2.0;
-    for nudge in 0..=12 {
-        for sign in [1.0, -1.0] {
-            let boxes = at(centre + sign * nudge as f32);
-            if in_band(boxes.0) && in_band(boxes.1) {
-                return Some(boxes);
+    let fits = |(icon, name): (Box4, Box4)| {
+        [icon, name]
+            .into_iter()
+            .all(|b| box_in_band(b) && in_wedge(b))
+    };
+    // The smallest move that fits, trying rings of 1 DIP steps outward.
+    for k in 0..=48_i32 {
+        for dr in -k..=k {
+            for dt in -k..=k {
+                if dr.abs().max(dt.abs()) == k {
+                    let boxes = at(dr as f32, dt as f32);
+                    if fits(boxes) {
+                        return Some(boxes);
+                    }
+                }
             }
         }
     }
-    Some(at(centre))
+    Some(at(0.0, 0.0))
 }
 
 /// "PNG" when every file shares a type, "MIXED" otherwise.
@@ -448,6 +499,18 @@ pub fn label_point(i: usize, n: usize) -> (f32, f32) {
 fn slot_at(from_top: f32, n: usize) -> usize {
     let span = TAU / n as f32;
     ((from_top + span / 2.0) / span).floor() as usize % n
+}
+
+/// Whether a point (window DIPs) is on the outer band that More opened,
+/// heading or format, as against the inner ring or empty space.
+pub fn on_outer_band(w: &Wheel, x: f32, y: f32, more_open: bool) -> bool {
+    if !more_open || w.more.is_empty() {
+        return false;
+    }
+    let s = w.scale.max(0.01);
+    let (dx, dy) = ((x - w.center.0) / s, (y - w.center.1) / s);
+    let d = dx.hypot(dy);
+    d > (R_OUTER + R_MORE_INNER) / 2.0 && d <= R_MORE_OUTER + REACH
 }
 
 /// What is under a point (window DIPs). The centre selects nothing, and
@@ -527,6 +590,21 @@ pub fn lit_footer(item: Option<&Item>) -> Option<String> {
     match &item?.action {
         Action::Convert(ext) => Some(target_label(ext)),
         _ => None,
+    }
+}
+
+/// The footer on an open wheel, from what is lit and the suggestion line
+/// (`Some` only while the suggestion shows, see `shows_suggestion`).
+/// - A lit convert target says what it is: "JPG: a photo that opens
+///   anywhere". When that target is also the suggested one, the suggestion
+///   follows after a dot.
+/// - With nothing lit, or More lit, the suggestion stands alone.
+/// - Otherwise `None`, and the footer says what it did before.
+pub fn wheel_footer(lit: Option<&Item>, suggestion: Option<String>) -> Option<String> {
+    match (lit_footer(lit), suggestion) {
+        (Some(what), Some(why)) => Some(format!("{what} · {why}")),
+        (Some(what), None) => Some(what),
+        (None, why) => why,
     }
 }
 
@@ -927,14 +1005,13 @@ mod tests {
     /// outer ring.
     fn box_in_slot(b: Box4, slot: &OuterSlot) -> bool {
         let (x, y, w, h) = b;
-        [(x, y), (x + w, y), (x, y + h), (x + w, y + h)]
-            .into_iter()
-            .all(|(px, py)| {
-                let r = (px * px + py * py).sqrt();
-                let rel = (py.atan2(px) - slot.a0).rem_euclid(TAU);
-                (R_MORE_INNER + 1.0..=R_MORE_OUTER - 1.0).contains(&r)
-                    && rel <= slot.a1 - slot.a0 - 0.01
-            })
+        box_in_band(b)
+            && [(x, y), (x + w, y), (x, y + h), (x + w, y + h)]
+                .into_iter()
+                .all(|(px, py)| {
+                    let rel = (py.atan2(px) - slot.a0).rem_euclid(TAU);
+                    rel <= slot.a1 - slot.a0 - 0.01
+                })
     }
 
     #[test]
@@ -1015,6 +1092,143 @@ mod tests {
                 assert_eq!(got, slot.item.map(Spot::Outer));
             }
         }
+    }
+
+    #[test]
+    fn heading_names_fit_their_measured_width() {
+        // Measured with DirectWrite at 12 DIPs; see `heading_width`.
+        for (name, measured) in [
+            ("Images", 38.1),
+            ("Audio", 31.5),
+            ("Video", 30.7),
+            ("Documents", 60.3),
+            ("Sheets", 34.9),
+            ("Slides", 30.6),
+            ("Subtitles", 45.5),
+        ] {
+            let w = heading_width(name);
+            assert!(w >= measured + 1.5 && w <= measured + 3.0, "{name}: {w}");
+        }
+        for kind in [
+            Kind::Image,
+            Kind::Audio,
+            Kind::Video,
+            Kind::Document,
+            Kind::Spreadsheet,
+            Kind::Presentation,
+            Kind::Subtitle,
+        ] {
+            let name = kind_label(kind);
+            let guess = name.chars().count() as f32 * 7.0;
+            assert_ne!(heading_width(name), guess, "{name} is not in the table");
+        }
+    }
+
+    #[test]
+    fn a_click_on_a_heading_is_on_the_outer_band_but_hits_nothing() {
+        let w = Wheel {
+            center: (300.0, 300.0),
+            ..with_more()
+        };
+        let slots = outer_slots(&w.more);
+        let head = slots.iter().find(|s| s.item.is_none()).unwrap();
+        let (x, y) = outer_point(head);
+        let at = (300.0 + x, 300.0 + y);
+        assert_eq!(hit(&w, at.0, at.1, true), None);
+        assert!(on_outer_band(&w, at.0, at.1, true));
+        // Closed, the band isn't there; the inner ring and the empty
+        // space beyond are not the band either.
+        assert!(!on_outer_band(&w, at.0, at.1, false));
+        assert!(!on_outer_band(&w, 300.0, 300.0, true));
+        assert!(!on_outer_band(&w, 300.0 + R_INNER + 10.0, 300.0, true));
+        let far = 300.0 + R_MORE_OUTER + REACH + 5.0;
+        assert!(!on_outer_band(&w, far, 300.0, true));
+        // A wheel without More has no band at all.
+        let plain = Wheel {
+            center: (300.0, 300.0),
+            ..wheel(4)
+        };
+        assert!(!on_outer_band(&plain, 300.0 + 150.0, 300.0, true));
+    }
+
+    #[test]
+    fn the_band_check_sees_a_box_dipping_toward_the_centre() {
+        // Every corner is outside the inner edge, but the middle of the
+        // bottom edge is not.
+        let dipping = (-60.0, -150.0, 120.0, 5.5);
+        let (x, y, w, h) = dipping;
+        for (px, py) in [(x, y), (x + w, y), (x, y + h), (x + w, y + h)] {
+            assert!(f32::hypot(px, py) >= R_MORE_INNER + 1.0);
+        }
+        assert!(!box_in_band(dipping));
+        // A box inside the band is in; one over either edge is out.
+        assert!(box_in_band((-30.0, -176.0, 60.0, 14.0)));
+        assert!(!box_in_band((-30.0, -R_MORE_INNER, 60.0, 10.0)));
+        assert!(!box_in_band((-30.0, -R_MORE_OUTER, 60.0, 10.0)));
+    }
+
+    fn jpg_item() -> Item {
+        real(WheelKind::Convert, "a.png")
+            .items
+            .into_iter()
+            .find(|i| i.label == "JPG")
+            .unwrap()
+    }
+
+    #[test]
+    fn the_footer_with_nothing_lit_is_the_suggestion_or_the_old_hint() {
+        let why = suggestion_footer("JPG", "A photo. JPG keeps the look at about 2 MB.");
+        assert_eq!(wheel_footer(None, Some(why.clone())), Some(why));
+        assert_eq!(wheel_footer(None, None), None);
+    }
+
+    #[test]
+    fn the_suggested_target_names_itself_then_gives_the_reason() {
+        let why = suggestion_footer("JPG", "A photo. JPG keeps the look at about 2 MB.");
+        assert_eq!(
+            wheel_footer(Some(&jpg_item()), Some(why)).as_deref(),
+            Some(
+                "JPG: a photo that opens anywhere \u{b7} Suggested: JPG. \
+                 A photo. JPG keeps the look at about 2 MB."
+            )
+        );
+    }
+
+    #[test]
+    fn another_target_gives_only_its_name() {
+        let w = real(WheelKind::Convert, "a.png");
+        let webp = w.items.iter().find(|i| i.label == "WEBP").unwrap();
+        // The suggestion doesn't show while an unmarked spot is lit.
+        assert_eq!(
+            wheel_footer(Some(webp), None).as_deref(),
+            Some("WEBP: a small image for the web")
+        );
+    }
+
+    #[test]
+    fn more_lit_with_the_suggestion_in_more_keeps_the_suggestion() {
+        // More has no item of its own, so only the suggestion is left.
+        let why = suggestion_footer("QOI", "Fast.");
+        assert_eq!(
+            wheel_footer(None, Some(why.clone())).as_deref(),
+            Some(why.as_str())
+        );
+        // The suggested target itself, lit in the ring, names itself first.
+        let w = real(WheelKind::Convert, "a.png");
+        let qoi = w.more.iter().find(|i| i.label == "QOI").unwrap();
+        assert_eq!(
+            wheel_footer(Some(qoi), Some(why)).as_deref(),
+            Some("QOI: a fast, lossless image \u{b7} Suggested: QOI. Fast.")
+        );
+    }
+
+    #[test]
+    fn a_lit_tool_gives_the_suggestion_or_nothing() {
+        let tools = real(WheelKind::Tools, "a.mp4");
+        let tool = tools.items.first();
+        assert_eq!(wheel_footer(tool, None), None);
+        let why = suggestion_footer("Compress", "Big file.");
+        assert_eq!(wheel_footer(tool, Some(why.clone())), Some(why));
     }
 
     #[test]

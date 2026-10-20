@@ -19,7 +19,7 @@ pub fn describe_format(ext: &str) -> Option<&'static str> {
         "gif" => "a simple image that can loop",
         "tiff" | "tif" => "a lossless image for print and scans",
         "ico" => "an icon image for apps and sites",
-        "tga" => "a raw image used in games",
+        "tga" => "an image used by games and 3D tools",
         "qoi" => "a fast, lossless image",
         "ppm" | "pnm" | "pgm" | "pbm" | "pam" => "a plain, uncompressed image",
         "svg" => "a drawing that scales to any size",
@@ -59,7 +59,7 @@ pub fn describe_format(ext: &str) -> Option<&'static str> {
         "wmv" => "Microsoft Windows Media video",
         "flv" => "video from the Flash era",
         "mpg" | "mpeg" | "vob" => "video from the DVD era",
-        "ts" | "mts" | "m2ts" => "video from broadcasts and streams",
+        "ts" | "mts" | "m2ts" => "video from TV, camcorders and Blu-ray",
         "3gp" => "small video from old phones",
         "ogv" => "open, free video",
         // Subtitles
@@ -70,7 +70,7 @@ pub fn describe_format(ext: &str) -> Option<&'static str> {
         "md" | "markdown" => "Markdown, plain text with formatting",
         "html" | "htm" => "a web page",
         "docx" => "a Microsoft Word document",
-        "odt" => "an OpenDocument text document",
+        "odt" => "a LibreOffice text document",
         "epub" => "an e-book that reflows on any screen",
         "rst" => "a reStructuredText document",
         "tex" => "a LaTeX document",
@@ -95,13 +95,13 @@ pub fn describe_format(ext: &str) -> Option<&'static str> {
         // Spreadsheets
         "xlsx" => "a Microsoft Excel spreadsheet",
         "xls" => "an older Microsoft Excel spreadsheet",
-        "ods" => "an OpenDocument spreadsheet",
+        "ods" => "a LibreOffice spreadsheet",
         "csv" => "a table as plain text",
         "numbers" => "an Apple Numbers spreadsheet",
         // Presentations
         "pptx" => "a Microsoft PowerPoint presentation",
         "ppt" => "an older PowerPoint presentation",
-        "odp" => "an OpenDocument presentation",
+        "odp" => "a LibreOffice presentation",
         "key" => "an Apple Keynote presentation",
         _ => return None,
     })
@@ -113,14 +113,7 @@ mod tests {
     use crate::registry::Registry;
 
     /// Proper names a description may open with, in their own case.
-    const PROPER: &[&str] = &[
-        "WavPack",
-        "Microsoft",
-        "QuickTime",
-        "Markdown",
-        "Adobe's",
-        "reStructuredText",
-    ];
+    const PROPER: &[&str] = &["WavPack", "Microsoft", "QuickTime", "Markdown", "Adobe's"];
 
     #[test]
     fn the_spec_examples_read_verbatim() {
