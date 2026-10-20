@@ -471,6 +471,10 @@ struct App {
     /// What adding files last said, and when, so the footer's idle hint
     /// can take its place once it has been read.
     added: Option<(String, Instant)>,
+    /// The last status that reported something going wrong or not
+    /// happening. While the status still says it, it stands over the
+    /// selection count.
+    alert: Option<String>,
 }
 
 impl App {
@@ -583,6 +587,10 @@ impl App {
             });
         }
         self.status = status_line(self.files.len(), r.added, r.duplicates, r.skipped);
+        // An add that added nothing says why, whatever is selected.
+        if r.added == 0 {
+            self.alert = Some(self.status.clone());
+        }
         // Only the plain "Added 2 files." gives way to the idle hint; a line
         // about duplicates or skipped items stays until something replaces
         // it.
@@ -606,6 +614,18 @@ impl App {
             self.scroll_to_selection();
         }
         self.animate();
+    }
+
+    /// Say `text` in the footer as something that went wrong or didn't
+    /// happen, which the selection count doesn't hide.
+    fn alert(&mut self, text: String) {
+        self.alert = Some(text.clone());
+        self.status = text;
+    }
+
+    /// Whether the status is an alert that still stands.
+    fn alerting(&self) -> bool {
+        self.alert.as_deref() == Some(self.status.as_str())
     }
 
     /// Wake in `wait` to show the idle hint, with a little slack, as a
@@ -643,7 +663,7 @@ impl App {
     fn paste(&mut self) {
         let files = system::clipboard_files(self.hwnd);
         if files.is_empty() {
-            self.status = ways_in::NOTHING_TO_PASTE.to_owned();
+            self.alert(ways_in::NOTHING_TO_PASTE.to_owned());
             self.invalidate();
         } else {
             self.add(files);
@@ -1028,13 +1048,19 @@ impl App {
             }
             return;
         };
-        let start = self.export_start(&source);
-        let name = one.file_name().unwrap_or_default().to_string_lossy();
-        let ext = one.extension().unwrap_or_default().to_string_lossy();
+        self.save_one(&source, one);
+    }
+
+    /// Export one held result, `file` of the row for `source`, with the
+    /// Save dialog.
+    fn save_one(&mut self, source: &Path, file: &Path) {
+        let start = self.export_start(source);
+        let name = file.file_name().unwrap_or_default().to_string_lossy();
+        let ext = file.extension().unwrap_or_default().to_string_lossy();
         let Some(dest) = system::save_as(self.hwnd, "Export", &start, &name, &ext) else {
             return;
         };
-        let held = self.still_held(&source, std::slice::from_ref(one));
+        let held = self.still_held(source, &[file.to_path_buf()]);
         if !held.is_empty() {
             self.export(held, Dest::As(dest), false);
         }
@@ -1092,6 +1118,13 @@ impl App {
         }
         self.check_gone();
         let held = self.held_of(sources);
+        // Rows that share one result, such as a merge's, save it by name.
+        if let [one] = held.as_slice() {
+            if let Some(source) = self.source_of(one) {
+                self.save_one(&source, one);
+            }
+            return;
+        }
         if held.is_empty() {
             return;
         }
@@ -1253,6 +1286,9 @@ impl App {
         } else {
             status_line(self.files.len(), 0, 0, 0)
         };
+        if all && !failed.is_empty() {
+            self.alert = Some(self.status.clone());
+        }
         self.held_changed();
         self.invalidate();
         failed.is_empty()
@@ -1264,7 +1300,7 @@ impl App {
             return;
         };
         if system::show_in_folder(folder, files).is_err() {
-            self.status = format!("Couldn't open {}.", folder.display());
+            self.alert(format!("Couldn't open {}.", folder.display()));
             self.invalidate();
         }
     }
@@ -1303,7 +1339,7 @@ impl App {
         };
         if !system::open_file(self.hwnd, &file) {
             let name = file.file_name().unwrap_or_default().to_string_lossy();
-            self.status = format!("Couldn't open {name}.");
+            self.alert(format!("Couldn't open {name}."));
             self.check_gone();
             self.invalidate();
         }
@@ -2094,7 +2130,7 @@ impl App {
         // Picks can't change the engines, so the cached search stands.
         // Not over a settings.toml that couldn't be read: see Store.
         if let Err(e) = self.settings_store.save_picks(&self.settings) {
-            self.status = e;
+            self.alert(e);
         }
         // Suggestions follow favourites only: no new favourite, nothing to
         // work out again.
@@ -2174,6 +2210,9 @@ impl App {
                         let summary =
                             batch_summary(&b.action, b.files, b.ok, b.failed, b.cancelled);
                         self.status = model::with_export_hint(summary, b.held);
+                        if b.failed > 0 {
+                            self.alert = Some(self.status.clone());
+                        }
                         self.batches.remove(&job.batch);
                     }
                 }
@@ -2196,23 +2235,26 @@ impl App {
         match a {
             FileAction::CopyPath => {
                 let text = actions::clipboard_text(&paths);
-                self.status = match system::set_clipboard(self.hwnd, &text) {
-                    Ok(()) => actions::copied_summary(paths.len()),
-                    Err(e) => format!("Couldn't copy the path: {}", e.message()),
-                };
+                match system::set_clipboard(self.hwnd, &text) {
+                    Ok(()) => self.status = actions::copied_summary(paths.len()),
+                    Err(e) => self.alert(format!("Couldn't copy the path: {}", e.message())),
+                }
             }
             FileAction::OpenTerminal => {
                 let Some(folder) = actions::terminal_folder(&paths) else {
                     return;
                 };
-                self.status = match actions::terminal_command(&folder).spawn() {
-                    Ok(_) => format!("Opened Terminal in {}.", actions::folder_name(&folder)),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                        "Windows Terminal isn't installed. Get it from the Microsoft Store."
-                            .to_owned()
+                match actions::terminal_command(&folder).spawn() {
+                    Ok(_) => {
+                        self.status =
+                            format!("Opened Terminal in {}.", actions::folder_name(&folder));
                     }
-                    Err(e) => format!("Couldn't open Terminal: {e}"),
-                };
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => self.alert(
+                        "Windows Terminal isn't installed. Get it from the Microsoft Store."
+                            .to_owned(),
+                    ),
+                    Err(e) => self.alert(format!("Couldn't open Terminal: {e}")),
+                }
             }
             FileAction::Move => self.move_files(paths),
         }
@@ -2226,7 +2268,7 @@ impl App {
                 .is_some_and(|i| matches!(self.files.entries()[i].job, JobState::Running { .. }))
         });
         if busy {
-            self.status = "Kiln can't move a file while a job is using it.".to_owned();
+            self.alert("Kiln can't move a file while a job is using it.".to_owned());
             return;
         }
         let title = if paths.len() == 1 {
@@ -2303,6 +2345,9 @@ impl App {
             }
         }
         self.status = actions::moved_summary(ok, failed, &m.dest);
+        if failed > 0 {
+            self.alert = Some(self.status.clone());
+        }
         self.held_changed();
         self.animate();
     }
@@ -2315,7 +2360,7 @@ impl App {
         self.settings = s;
         self.engines.forget();
         if let Some(e) = err {
-            self.status = format!("{e}. Using the defaults.");
+            self.alert(format!("{e}. Using the defaults."));
             log(&self.status);
         }
         self.apply_theme();
@@ -2326,7 +2371,7 @@ impl App {
         // The engines may be others now.
         self.engines.forget();
         if let Err(e) = self.settings_store.save(&self.settings) {
-            self.status = e;
+            self.alert(e);
         }
     }
 
@@ -2937,9 +2982,9 @@ impl App {
             // Ctrl+S exports the selected rows, Ctrl+Shift+S everything.
             VK_S if ctrl && shift => self.export_everything(),
             VK_S if ctrl => self.export_rows(&self.files.selection()),
-            // Space follows the selected row's link.
+            // Space follows the selected row's link, with one row selected.
             VK_SPACE => {
-                if let Some(i) = self.files.selected() {
+                if let [i] = self.files.selection()[..] {
                     self.follow_link(i);
                 }
             }
@@ -3057,13 +3102,15 @@ impl App {
         let running = self.burning() || !self.exports.is_empty();
         // Once the status has nothing more to say, a warning that stands
         // comes first, then the hint on what to do next.
-        // While several rows are selected, their count comes before both.
-        let count = model::selected_line(self.files.selected_rows().len());
         let status =
             match ways_in::idle_hint(self.files.len(), running, &self.status, &plain, added) {
-                Some(hint) => ways_in::quiet_line(count.as_deref(), self.sticky, hint),
+                Some(hint) => self.sticky.unwrap_or(hint),
                 None => model::footer_status(&self.status, &plain, self.sticky),
             };
+        // While several rows are selected, their count stands over all of
+        // that, unless something is running or went wrong.
+        let count = model::selected_line(self.files.selected_rows().len());
+        let status = ways_in::footer_line(status, count.as_deref(), running, self.alerting());
         // The empty window has no footer: what the status says, past the
         // plain "0 files.", sits under its Add files button.
         let empty_status = match self.status.as_str() {
@@ -3358,6 +3405,7 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         add_pressed: false,
         last_add: None,
         added: None,
+        alert: None,
     });
     let app = Box::into_raw(app);
     unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, app as isize) };
@@ -3640,9 +3688,13 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
                 let _ = SetFocus(Some(hwnd));
             }
             let (x, y) = app.dips(lo(lparam), hi(lparam));
-            // A link acted on the first click; a second would open it twice.
-            if !app.open_held_at(x, y) && !app.on_link(x, y) {
-                app.mouse_down(x, y, wparam.0 as u32);
+            let keys = wparam.0 as u32;
+            // With Ctrl or Shift it's a second selection click, not an open.
+            // Unmodified, a link acted on the first click; a second would
+            // open it twice.
+            let modified = keys & (MK_SHIFT_FLAG | MK_CONTROL_FLAG) != 0;
+            if modified || (!app.open_held_at(x, y) && !app.on_link(x, y)) {
+                app.mouse_down(x, y, keys);
             }
             Some(LRESULT(0))
         }

@@ -40,7 +40,8 @@ window between them as well.
 - [ ] Hover tints a row; every selected row has the 18% celadon fill, clipped to the panel's rounded corners.
 - [ ] Up, Down, Home and End move the selection to one row. With Shift they extend it from where it started. Delete removes it. Escape clears it.
 - [ ] A click selects one row, Ctrl-click adds or takes away a row, Shift-click selects a range, and Ctrl+A selects every row.
-- [ ] With more than one row selected, the footer reads "3 selected" in place of the idle hint. A batch summary or "Working on…" line still shows instead.
+- [ ] With more than one row selected, the footer reads "3 selected", over the idle hint and over a finished batch's or export's summary, which comes back when one row or none is selected. "Working on…", "Saving…" and lines about something that went wrong still show instead.
+- [ ] Space follows a row's link only with one row selected. Ctrl or Shift with a double-click on a held row selects, and doesn't open the result.
 - [ ] Enter, Delete, Ctrl+S and the right-click menu act on every selected row. Removing several rows asks once, counting all of them. Ctrl+S on several held rows asks for one folder.
 - [ ] Right-clicking a row outside the selection selects only that row first. Right-clicking a selected row keeps the selection. With two or more PDFs selected, Tools… offers Merge.
 - [ ] With more rows than fit, the wheel scrolls and a thin thumb appears on the right.

@@ -194,15 +194,21 @@ pub fn idle_hint(
     (listed > 0 && !running && quiet).then_some(IDLE_HINT)
 }
 
-/// What the footer says once its status has nothing more to say: how
-/// many rows are selected while several are (`selected`), else a warning
-/// that stands (`sticky`), else the idle hint.
-pub fn quiet_line<'a>(
+/// What the footer says, given the `line` it would say otherwise: while
+/// several rows are selected, their count (`selected`), unless a job or
+/// export is `running` or the line is an `alert`, something that went
+/// wrong or didn't happen. A summary gives way to the count and comes
+/// back once the selection is one row or none.
+pub fn footer_line<'a>(
+    line: &'a str,
     selected: Option<&'a str>,
-    sticky: Option<&'a str>,
-    hint: &'a str,
+    running: bool,
+    alert: bool,
 ) -> &'a str {
-    selected.or(sticky).unwrap_or(hint)
+    match selected {
+        Some(count) if !running && !alert => count,
+        _ => line,
+    }
 }
 
 /// The empty window's lines, top to bottom, with the Add files button
@@ -408,14 +414,27 @@ mod tests {
     }
 
     #[test]
-    fn a_selection_count_comes_before_the_warning_and_the_hint() {
-        let warn = "Kiln couldn't make its holding folder.";
+    fn a_selection_count_stands_over_all_but_work_and_trouble() {
+        let count = Some("3 selected");
+        let done = "Converted 3 files to JPG. Export to keep them.";
+        // Summaries, the hint and the standing warning give way.
+        for line in [done, "Saved 3 files.", IDLE_HINT, crate::model::NO_HOLDING] {
+            assert_eq!(footer_line(line, count, false, false), "3 selected");
+            // And come back with one row selected or none.
+            assert_eq!(footer_line(line, None, false, false), line);
+        }
+        // Work under way and lines about trouble stand.
         assert_eq!(
-            quiet_line(Some("3 selected"), Some(warn), IDLE_HINT),
-            "3 selected"
+            footer_line("Working on 3 files.", count, true, false),
+            "Working on 3 files."
         );
-        assert_eq!(quiet_line(None, Some(warn), IDLE_HINT), warn);
-        assert_eq!(quiet_line(None, None, IDLE_HINT), IDLE_HINT);
+        assert_eq!(footer_line("Saving…", count, true, false), "Saving…");
+        let failed = "Saved 2 of 3. 1 couldn't be saved.";
+        assert_eq!(footer_line(failed, count, false, true), failed);
+        assert_eq!(
+            footer_line(NOTHING_TO_PASTE, count, false, true),
+            NOTHING_TO_PASTE
+        );
     }
 
     #[test]

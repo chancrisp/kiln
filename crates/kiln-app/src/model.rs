@@ -1186,6 +1186,30 @@ mod tests {
     }
 
     #[test]
+    fn removing_the_anchor_row_moves_the_anchor_to_the_next() {
+        let mut list = list_of(5);
+        list.click(1);
+        list.shift_click(3);
+        list.remove(1);
+        // Rows 0 2 3 4 now; the old 2 and 3 stay selected, at 1 and 2.
+        assert_eq!(list.selection(), [1, 2]);
+        assert_eq!(list.anchor, Some(1));
+        assert_eq!(list.entries()[1].name, "2.png");
+        list.shift_click(2);
+        assert_eq!(list.selection(), [1, 2]);
+        list.shift_click(3);
+        assert_eq!(list.selection(), [1, 2, 3]);
+        // With four rows, the old last row is past the end: nothing changes.
+        let mut four = list_of(4);
+        four.click(1);
+        four.shift_click(3);
+        four.remove(1);
+        four.shift_click(3);
+        assert_eq!(four.selection(), [1, 2]);
+        assert_eq!(four.anchor, Some(1));
+    }
+
+    #[test]
     fn removing_the_selection_leaves_the_next_row_selected() {
         let mut list = list_of(5);
         list.click(1);
