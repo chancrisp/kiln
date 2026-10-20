@@ -44,17 +44,25 @@ pub fn details_title(engine: Option<&str>) -> String {
     format!("What {} said", engine.unwrap_or("Kiln"))
 }
 
-/// The details dialog's Copy button, which reads "Copied" for a moment
-/// after a copy. `since` is how long ago the last copy was.
-pub fn copy_label(since: Option<std::time::Duration>) -> &'static str {
-    match since {
-        Some(d) if d < COPIED_FOR => "Copied",
+/// The details dialog's Copy button. For a moment after a copy it says
+/// how that went: "Copied", or "Couldn't copy". `last` is whether the last
+/// copy worked, and how long ago it was.
+pub fn copy_label(last: Option<(bool, std::time::Duration)>) -> &'static str {
+    match last {
+        Some((true, d)) if d < COPIED_FOR => "Copied",
+        Some((false, d)) if d < COPIED_FOR => "Couldn't copy",
         _ => "Copy",
     }
 }
 
-/// How long the Copy button says "Copied".
+/// How long the Copy button says how a copy went.
 pub const COPIED_FOR: std::time::Duration = std::time::Duration::from_millis(1200);
+
+/// `text` on one line, its runs of spaces and line breaks folded to one
+/// space.
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
 
 /// Text for the clipboard, with Windows line ends.
 pub fn clipboard_lines(text: &str) -> String {
@@ -385,10 +393,7 @@ impl Entry {
                 };
                 (format!("Ready: {first}{more}"), Tone::Result)
             }
-            JobState::Failed { message, .. } => (
-                message.split_whitespace().collect::<Vec<_>>().join(" "),
-                Tone::Crack,
-            ),
+            JobState::Failed { message, .. } => (one_line(message), Tone::Crack),
             JobState::Cancelled => ("Cancelled.".to_owned(), Tone::Muted),
         }
     }
@@ -429,14 +434,22 @@ impl Entry {
     }
 
     /// What Show details opens on a failed row: the dialog's title and
-    /// text. That's the engine's output when there is some, else the
-    /// whole sentence when the row had to cut it short (`cut`).
+    /// text. That's the row's whole sentence, then the engine's output
+    /// when there is some. Without output there's more to show only when
+    /// the row had to cut the sentence short (`cut`).
     pub fn details(&self, cut: bool) -> Option<(String, String)> {
         match &self.job {
             JobState::Failed {
-                details, engine, ..
-            } if !details.trim().is_empty() => Some((details_title(*engine), details.clone())),
-            JobState::Failed { message, .. } if cut => Some((details_title(None), message.clone())),
+                message,
+                details,
+                engine,
+            } if !details.trim().is_empty() => Some((
+                details_title(*engine),
+                format!("{}\n\n{}", one_line(message), details.trim()),
+            )),
+            JobState::Failed { message, .. } if cut => {
+                Some((details_title(None), one_line(message)))
+            }
             _ => None,
         }
     }
@@ -1692,7 +1705,10 @@ mod tests {
         assert_eq!(failed.link(false), Some("Show details"));
         assert_eq!(
             failed.details(false),
-            Some(("What FFmpeg said".to_owned(), "engine output".to_owned()))
+            Some((
+                "What FFmpeg said".to_owned(),
+                "FFmpeg couldn't convert the file.\n\nengine output".to_owned()
+            ))
         );
         failed.job = JobState::Failed {
             message: "There's no plain border to crop.".into(),
@@ -1736,9 +1752,20 @@ mod tests {
     fn copy_says_copied_for_a_moment() {
         use std::time::Duration;
         assert_eq!(copy_label(None), "Copy");
-        assert_eq!(copy_label(Some(Duration::ZERO)), "Copied");
-        assert_eq!(copy_label(Some(Duration::from_millis(1199))), "Copied");
-        assert_eq!(copy_label(Some(Duration::from_millis(1200))), "Copy");
+        assert_eq!(copy_label(Some((true, Duration::ZERO))), "Copied");
+        assert_eq!(
+            copy_label(Some((true, Duration::from_millis(1199)))),
+            "Copied"
+        );
+        assert_eq!(
+            copy_label(Some((true, Duration::from_millis(1200)))),
+            "Copy"
+        );
+        assert_eq!(copy_label(Some((false, Duration::ZERO))), "Couldn't copy");
+        assert_eq!(
+            copy_label(Some((false, Duration::from_millis(1200)))),
+            "Copy"
+        );
         assert_eq!(clipboard_lines("a\nb\r\nc"), "a\r\nb\r\nc");
     }
 

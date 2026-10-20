@@ -354,6 +354,9 @@ struct SettingsUi {
     engine_lines: [(String, bool); 4],
     /// Engines Kiln can't find, which get a Get it link.
     engine_missing: [bool; 4],
+    /// A sentence the panel says in its note line, over the update
+    /// check's, such as that a download page didn't open.
+    note: Option<String>,
 }
 
 /// The text beside a settings chooser, and whether it's muted.
@@ -371,8 +374,9 @@ struct DetailsUi {
     hover: Option<DialogButton>,
     /// The button the pointer went down on; it acts on release.
     pressed: Option<DialogButton>,
-    /// When the text was last copied, for the button's "Copied".
-    copied: Option<Instant>,
+    /// Whether the last copy worked and when it was, for the button's
+    /// "Copied" or "Couldn't copy".
+    last_copy: Option<(bool, Instant)>,
 }
 
 struct RowTimes {
@@ -2462,6 +2466,7 @@ impl App {
             output_line,
             engine_lines,
             engine_missing,
+            note: None,
         });
         self.settings_hover = false;
         self.invalidate();
@@ -2470,6 +2475,10 @@ impl App {
     /// The one network call, and only on request. Once a newer version
     /// is known the same button opens its page instead.
     fn check_updates(&mut self) {
+        // The update check's own note takes the line back.
+        if let Some(ui) = &mut self.settings_ui {
+            ui.note = None;
+        }
         match self.update {
             UpdateState::Checking => {}
             UpdateState::Available(_) => updates::open_releases_page(),
@@ -2544,8 +2553,12 @@ impl App {
             // Only the engine's fixed official page. Kiln still never
             // downloads anything itself.
             Control::EngineGet(e) => {
-                if !system::open_download_page(hwnd, e) {
-                    self.alert(format!("Couldn't open {}'s download page.", e.label()));
+                // Said in the panel's own note line, not the footer
+                // behind it.
+                let opened = system::open_download_page(hwnd, e);
+                if let Some(ui) = &mut self.settings_ui {
+                    ui.note =
+                        (!opened).then(|| format!("Couldn't open {}'s download page.", e.label()));
                 }
                 self.invalidate();
                 return;
@@ -2704,7 +2717,7 @@ impl App {
                 focus: DialogButton::Copy,
                 hover: None,
                 pressed: None,
-                copied: None,
+                last_copy: None,
             });
             self.invalidate();
         }
@@ -2733,7 +2746,8 @@ impl App {
     }
 
     /// Press a details dialog button: Copy puts all of the text on the
-    /// clipboard and says "Copied" for a moment; Close closes.
+    /// clipboard and says "Copied", or "Couldn't copy", for a moment;
+    /// Close closes.
     fn press_details(&mut self, b: DialogButton) {
         match b {
             DialogButton::Close => self.details = None,
@@ -2745,17 +2759,15 @@ impl App {
                 else {
                     return;
                 };
-                match system::set_clipboard(self.hwnd, &text) {
-                    Ok(()) => {
-                        if let Some(d) = &mut self.details {
-                            d.copied = Some(Instant::now());
-                        }
-                        let ms = model::COPIED_FOR.as_millis() as u32 + 20;
-                        unsafe {
-                            SetTimer(Some(self.hwnd), COPIED_TIMER, ms, None);
-                        }
-                    }
-                    Err(e) => self.alert(format!("Couldn't copy the text: {}", e.message())),
+                // The button itself says how it went, in front of the
+                // scrim, without Windows' own error text.
+                let worked = system::set_clipboard(self.hwnd, &text).is_ok();
+                if let Some(d) = &mut self.details {
+                    d.last_copy = Some((worked, Instant::now()));
+                }
+                let ms = model::COPIED_FOR.as_millis() as u32 + 20;
+                unsafe {
+                    SetTimer(Some(self.hwnd), COPIED_TIMER, ms, None);
                 }
             }
         }
@@ -3287,7 +3299,7 @@ impl App {
                 title: &d.title,
                 text: &d.text,
                 scroll: d.scroll,
-                copy_label: model::copy_label(d.copied.map(|t| t.elapsed())),
+                copy_label: model::copy_label(d.last_copy.map(|(ok, t)| (ok, t.elapsed()))),
                 focus: d.focus,
                 hover: d.hover,
                 pressed: d.pressed,
@@ -3322,7 +3334,12 @@ impl App {
                 engines: ui.engine_lines.each_ref().map(|(s, m)| (s.as_str(), *m)),
                 hover: ui.hover,
                 pressed: self.settings_pressed,
-                update: (update_note.0.as_str(), update_note.1),
+                update: ui
+                    .note
+                    .as_deref()
+                    .map_or((update_note.0.as_str(), update_note.1), |note| {
+                        (note, false)
+                    }),
                 update_button: self.update.button(),
                 focus: ui.focus,
             }),
@@ -3860,12 +3877,9 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
         WM_MOUSEWHEEL => {
             let raw = ((wparam.0 >> 16) & 0xFFFF) as i16 as i32;
             if app.details.is_some() {
-                // A precise touchpad sends less than a notch: still move.
-                let notches = match raw / WHEEL_DELTA as i32 {
-                    0 => raw.signum(),
-                    n => n,
-                };
-                app.scroll_details(TextScroll::Wheel(notches));
+                // In proportion, as the list scrolls: a precise touchpad
+                // sends many small steps of less than a notch.
+                app.scroll_details(TextScroll::Wheel(raw as f32 / WHEEL_DELTA as f32));
             } else if app.wheel.is_none() && app.sheet.is_none() {
                 let delta = raw as f32 / WHEEL_DELTA as f32;
                 app.scroll -= delta * ROW_HEIGHT;

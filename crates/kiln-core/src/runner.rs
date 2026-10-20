@@ -4,7 +4,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::panic::{self, AssertUnwindSafe};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -13,7 +13,7 @@ use std::thread::{self, JoinHandle};
 use crate::converter::{CancelToken, Options, Progress};
 use crate::error::Error;
 use crate::job::Kiln;
-use crate::plain;
+use crate::plain::{self, FailedJob};
 use crate::tools::Tool;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -41,31 +41,31 @@ pub struct JobError {
 }
 
 impl JobError {
-    /// What `e` tells the user, for a job that read `source` files and
-    /// wrote `target` ones (extensions). An engine failure Kiln recognises
-    /// becomes a plain sentence with a next step; the engine's own words
-    /// go to the details.
-    pub fn new(e: Error, source: &str, target: &str) -> Self {
+    /// What `e` tells the user, for a job `doing` something. An engine
+    /// failure Kiln recognises becomes a plain sentence with a next step;
+    /// the engine's own words go to the details.
+    pub(crate) fn new(e: Error, doing: &Doing) -> Self {
         let (message, details, engine) = match &e {
             Error::EngineFailed {
                 engine,
                 summary,
                 details,
             } => {
-                let raw = format!(
-                    "{summary}
-{details}"
-                );
+                let raw = format!("{summary}\n{details}");
                 let shown = if details.trim().is_empty() {
                     summary.clone()
                 } else {
                     details.clone()
                 };
-                (
-                    plain::plain_failure_for(engine, source, target, &raw),
-                    shown,
-                    Some(*engine),
-                )
+                let paths: Vec<&Path> = doing.paths.iter().map(PathBuf::as_path).collect();
+                let job = FailedJob {
+                    engine,
+                    verb: doing.verb,
+                    source: &doing.source,
+                    target: &doing.target,
+                    paths: &paths,
+                };
+                (plain::plain_failure_for(&job, &raw), shown, Some(*engine))
             }
             Error::EngineMissing { engine } => (plain::missing_engine(engine), String::new(), None),
             _ => (e.to_string(), String::new(), None),
@@ -82,23 +82,57 @@ impl JobError {
 
 impl From<Error> for JobError {
     fn from(e: Error) -> Self {
-        JobError::new(e, "", "")
+        JobError::new(e, &Doing::default())
+    }
+}
+
+/// What a job was doing, for its error sentence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Doing {
+    /// "convert", or a tool's id.
+    verb: &'static str,
+    /// The extensions it read and was writing.
+    source: String,
+    target: String,
+    /// The files it read, and the result a conversion was writing, whose
+    /// names are kept out of the matching.
+    paths: Vec<PathBuf>,
+}
+
+impl Default for Doing {
+    fn default() -> Self {
+        Doing {
+            verb: "convert",
+            source: String::new(),
+            target: String::new(),
+            paths: vec![],
+        }
     }
 }
 
 impl JobKind {
-    /// The extensions a job reads and writes, for its error sentences.
-    fn exts(&self) -> (String, String) {
+    /// What the job does, for its error sentences.
+    fn doing(&self) -> Doing {
         let ext = |p: &PathBuf| {
             p.extension()
                 .map(|e| e.to_string_lossy().into_owned())
                 .unwrap_or_default()
         };
         match self {
-            JobKind::Convert { input, target } => (ext(input), target.clone()),
-            JobKind::Tool { inputs, .. } => {
+            JobKind::Convert { input, target } => Doing {
+                verb: "convert",
+                source: ext(input),
+                target: target.clone(),
+                paths: vec![input.clone(), input.with_extension(target)],
+            },
+            JobKind::Tool { tool, inputs } => {
                 let source = inputs.first().map(ext).unwrap_or_default();
-                (source.clone(), source)
+                Doing {
+                    verb: tool.id(),
+                    source: source.clone(),
+                    target: source,
+                    paths: inputs.clone(),
+                }
             }
         }
     }
@@ -218,8 +252,8 @@ fn work(
             Err(JobError::from(Error::Cancelled))
         } else {
             let mut progress = |p: Progress| on_event(JobEvent::Progress(id, p));
-            let (source, target) = job.kind.exts();
-            caught(&job.cancel, (&source, &target), || match &job.kind {
+            let doing = job.kind.doing();
+            caught(&job.cancel, &doing, || match &job.kind {
                 JobKind::Convert { input, target } => {
                     kiln.convert_outputs(input, target, &job.options, &mut progress, &job.cancel)
                 }
@@ -238,11 +272,11 @@ fn work(
 /// had already cancelled when it panicked is cancelled, not failed.
 fn caught(
     cancel: &CancelToken,
-    (source, target): (&str, &str),
+    doing: &Doing,
     f: impl FnOnce() -> crate::Result<Vec<PathBuf>>,
 ) -> Result<Vec<PathBuf>, JobError> {
     panic::catch_unwind(AssertUnwindSafe(f))
-        .map(|r| r.map_err(|e| JobError::new(e, source, target)))
+        .map(|r| r.map_err(|e| JobError::new(e, doing)))
         .unwrap_or_else(|p| {
             Err(if cancel.is_cancelled() {
                 JobError::from(Error::Cancelled)
@@ -272,11 +306,21 @@ fn panicked(payload: Box<dyn Any + Send>) -> JobError {
 mod tests {
     use super::*;
 
-    const NO_EXT: (&str, &str) = ("", "");
+    fn none() -> Doing {
+        Doing::default()
+    }
+
+    fn failed(engine: &'static str, summary: &str, details: &str) -> Error {
+        Error::EngineFailed {
+            engine,
+            summary: summary.into(),
+            details: details.into(),
+        }
+    }
 
     #[test]
     fn a_panicking_job_is_a_failed_job() {
-        let e = caught(&CancelToken::new(), NO_EXT, || {
+        let e = caught(&CancelToken::new(), &none(), || {
             panic!("handles() checked the type")
         })
         .unwrap_err();
@@ -284,20 +328,20 @@ mod tests {
         assert_eq!(e.details, "handles() checked the type");
         assert!(!e.cancelled);
         let n = 3;
-        let e = caught(&CancelToken::new(), NO_EXT, || panic!("{n} went wrong")).unwrap_err();
+        let e = caught(&CancelToken::new(), &none(), || panic!("{n} went wrong")).unwrap_err();
         assert_eq!(e.details, "3 went wrong");
         assert_eq!(
-            caught(&CancelToken::new(), NO_EXT, || Ok(vec![])),
+            caught(&CancelToken::new(), &none(), || Ok(vec![])),
             Ok(vec![])
         );
-        let e = caught(&CancelToken::new(), NO_EXT, || Err(Error::Cancelled)).unwrap_err();
+        let e = caught(&CancelToken::new(), &none(), || Err(Error::Cancelled)).unwrap_err();
         assert!(e.cancelled);
     }
 
     #[test]
     fn a_job_that_panics_after_a_cancel_is_cancelled() {
         let cancel = CancelToken::new();
-        let e = caught(&cancel, NO_EXT, || {
+        let e = caught(&cancel, &none(), || {
             cancel.cancel();
             panic!("the engine went down while stopping")
         })
@@ -308,42 +352,60 @@ mod tests {
 
     #[test]
     fn an_engine_failure_becomes_a_plain_sentence() {
+        let gif = JobKind::Convert {
+            input: r"C:\clips\take.mp4".into(),
+            target: "gif".into(),
+        }
+        .doing();
         let e = JobError::new(
-            Error::EngineFailed {
-                engine: "FFmpeg",
-                summary: "Error opening input: Invalid data found when processing input".into(),
-                details: "ffmpeg version 7
-Error opening input: Invalid data found when processing input"
-                    .into(),
-            },
-            "mp4",
-            "gif",
+            failed(
+                "FFmpeg",
+                "Error opening input: Invalid data found when processing input",
+                "ffmpeg version 7\nError opening input: Invalid data found when processing input",
+            ),
+            &gif,
         );
         assert_eq!(
             e.message,
-            "This file looks damaged, or isn't really a MP4. Try opening it in another app."
+            "This file looks damaged, or isn't really an MP4. Try opening it in another app."
         );
         assert!(e.details.starts_with("ffmpeg version 7"));
         assert_eq!(e.engine, Some("FFmpeg"));
 
         // Kiln's own PDF failures have only a summary: it becomes the
         // details.
-        let e = JobError::new(
-            Error::EngineFailed {
-                engine: "Kiln",
-                summary: "the PDF has no pages.".into(),
-                details: String::new(),
-            },
-            "pdf",
-            "png",
-        );
+        let e = JobError::new(failed("Kiln", "the PDF has no pages.", ""), &gif);
         assert_eq!(e.message, "Kiln couldn't convert the file.");
         assert_eq!(e.details, "the PDF has no pages.");
     }
 
     #[test]
+    fn a_tool_says_what_it_couldnt_do() {
+        let trim = JobKind::Tool {
+            tool: Tool::Trim,
+            inputs: vec![r"C:\a\talk.wav".into()],
+        }
+        .doing();
+        let e = JobError::new(failed("FFmpeg", "Conversion failed!", ""), &trim);
+        assert_eq!(e.message, "FFmpeg couldn't trim the file.");
+    }
+
+    #[test]
+    fn a_files_name_is_kept_out_of_the_matching() {
+        let mp3 = JobKind::Convert {
+            input: r"C:\Encrypted\Password reset.mp4".into(),
+            target: "mp3".into(),
+        }
+        .doing();
+        let raw = "Input #0, mov from 'C:\\Encrypted\\Password reset.mp4':\n\
+                   Output #0 to 'C:\\held\\1\\Password reset.mp3':\nConversion failed!";
+        let e = JobError::new(failed("LibreOffice", "Conversion failed!", raw), &mp3);
+        assert_eq!(e.message, "LibreOffice couldn't convert the file.");
+    }
+
+    #[test]
     fn a_missing_engine_says_where_to_look() {
-        let e = JobError::new(Error::EngineMissing { engine: "Pandoc" }, "md", "docx");
+        let e = JobError::new(Error::EngineMissing { engine: "Pandoc" }, &none());
         assert_eq!(
             e.message,
             "Needs Pandoc, which isn't installed. Settings > Engines says where to get it."
@@ -353,16 +415,29 @@ Error opening input: Invalid data found when processing input"
     }
 
     #[test]
-    fn a_job_names_what_it_reads_and_writes() {
+    fn a_job_says_what_it_does() {
         let convert = JobKind::Convert {
             input: "a/clip.MOV".into(),
             target: "mp4".into(),
         };
-        assert_eq!(convert.exts(), ("MOV".to_owned(), "mp4".to_owned()));
+        let d = convert.doing();
+        assert_eq!(
+            (d.verb, d.source.as_str(), d.target.as_str()),
+            ("convert", "MOV", "mp4")
+        );
+        assert_eq!(
+            d.paths,
+            [PathBuf::from("a/clip.MOV"), PathBuf::from("a/clip.mp4")]
+        );
         let tool = JobKind::Tool {
             tool: Tool::Merge,
             inputs: vec!["a.pdf".into(), "b.pdf".into()],
         };
-        assert_eq!(tool.exts(), ("pdf".to_owned(), "pdf".to_owned()));
+        let d = tool.doing();
+        assert_eq!(
+            (d.verb, d.source.as_str(), d.target.as_str()),
+            ("merge", "pdf", "pdf")
+        );
+        assert_eq!(d.paths.len(), 2);
     }
 }

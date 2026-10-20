@@ -129,7 +129,7 @@ test enforces this.
 - One panel with three tabs: **General**, **Quality** and **Engines**. The tabs are a segmented control. The chosen tab's fill slides to it over 160 ms, and the page crossfades over 120 ms. Every page keeps the panel's height, so switching never moves it.
 - Every stepper and segmented group has its own label. When two share a line, the second sits in its own labelled column.
 - Changes save straight away. There is no Apply button.
-- On **Engines**, each engine's name has a muted line under it saying what it's for, as in "E-books.". A missing engine gets a **Get it** link that opens its official download page in the browser. Kiln itself never downloads anything.
+- On **Engines**, each engine's name has a muted line under it saying what it's for, as in "E-books.". A missing engine gets a **Get it** link that opens its official download page in the browser; if the browser can't open, the panel's note line says so. Kiln itself never downloads anything.
 
 ## The file list
 
@@ -142,8 +142,8 @@ test enforces this.
 - **Progress** is a 2 px line along the bottom of the job row, filled with celadon. Its leading edge glows slightly brighter, like a glaze taking heat. This is the only gradient in Kiln. While a job runs, the glow breathes slowly over 2.4 s, like coals. When the engine can't report progress, the whole line holds a low glow that breathes the same way. There are no spinners.
 - **Success:** the row settles and `Ready:` with the output name appears in bone, fading in over 200 ms, as in `Ready: photo.jpg`. There's no sound or confetti. The result waits inside Kiln until it's exported.
 - **Export:** a held row has an "Export" link where a failed row has "Show details", and Ctrl+S does the same. Once exported, the line reads `Saved to <folder>.`, and clicking it shows the file in Explorer. The footer's **Export all (3)** sits beside Clear while anything is held. A failed export is one line in brick: `Couldn't save to D:\Locked. Pick another folder.`
-- **Failure:** the row shows one plain sentence in brick, with a next step where Kiln recognises the failure: "This file looks damaged, or isn't really a MP4. Try opening it in another app." Otherwise it reads "FFmpeg couldn't convert the file.". A line too long for the row ends in "…".
-- **Show details** appears when the engine said something or the line was cut short. It opens a dialog titled "What FFmpeg said" ("What Kiln said" for Kiln's own words). The text scrolls with the wheel, the arrows, Page Up, Page Down, Home and End. **Copy** copies all of it and reads "Copied" for 1.2 s. Focus starts on Copy, and Escape or Enter closes the dialog.
+- **Failure:** the row shows one plain sentence in brick, with a next step where Kiln recognises the failure: "This file looks damaged, or isn't really an MP4. Try opening it in another app." Otherwise it says what the engine couldn't do, such as "FFmpeg couldn't convert the file." or, for a tool, "FFmpeg couldn't trim the file." The file's own name never picks the sentence. A line too long for the row ends in "…".
+- **Show details** appears when the engine said something or the line was cut short. It opens a dialog titled "What FFmpeg said" ("What Kiln said" for Kiln's own words), with the row's whole sentence first and then the engine's output. The text scrolls with the wheel or touchpad, the arrows, Page Up, Page Down, Home and End. **Copy** copies all of it and reads "Copied" for 1.2 s, or "Couldn't copy" if the clipboard refused. Focus starts on Copy, and Escape or Enter closes the dialog.
 
 ## Voice
 

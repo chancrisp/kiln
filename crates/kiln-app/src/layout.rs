@@ -318,9 +318,9 @@ pub fn dialog(w: f32, h: f32) -> Dialog {
         BUTTON_HEIGHT,
     );
     let copy = Rect::new(
-        close.x - 8.0 - BUTTON_WIDTH,
+        close.x - 8.0 - COPY_WIDTH,
         close.y,
-        BUTTON_WIDTH,
+        COPY_WIDTH,
         BUTTON_HEIGHT,
     );
     let body = Rect::new(
@@ -365,11 +365,14 @@ impl Dialog {
     }
 }
 
+/// The details dialog's Copy button, wide enough for "Couldn't copy".
+pub const COPY_WIDTH: f32 = 104.0;
+
 /// A line of the details dialog's text, for the arrow keys and the wheel.
 pub const DETAILS_LINE: f32 = 16.0;
 
-/// How the keyboard moves through the details dialog's text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// How the keyboard and the wheel move through the details dialog's text.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TextScroll {
     LineUp,
     LineDown,
@@ -377,8 +380,9 @@ pub enum TextScroll {
     PageDown,
     Home,
     End,
-    /// Wheel notches: positive scrolls back towards the top.
-    Wheel(i32),
+    /// Wheel notches, fractions too as a touchpad sends them: positive
+    /// scrolls back towards the top.
+    Wheel(f32),
 }
 
 /// A scroll offset kept between the top and where the last line meets
@@ -390,6 +394,9 @@ pub fn clamp_text_scroll(scroll: f32, content_h: f32, view_h: f32) -> f32 {
 /// The scroll offset after `by`, clamped. A page keeps one line of the
 /// last page in view; a wheel notch is three lines.
 pub fn scroll_text(by: TextScroll, scroll: f32, content_h: f32, view_h: f32) -> f32 {
+    // An offset left over from a smaller window first comes back inside,
+    // so the step moves from where the text is drawn.
+    let scroll = clamp_text_scroll(scroll, content_h, view_h);
     let page = (view_h - DETAILS_LINE).max(DETAILS_LINE);
     let to = match by {
         TextScroll::LineUp => scroll - DETAILS_LINE,
@@ -398,7 +405,7 @@ pub fn scroll_text(by: TextScroll, scroll: f32, content_h: f32, view_h: f32) -> 
         TextScroll::PageDown => scroll + page,
         TextScroll::Home => 0.0,
         TextScroll::End => content_h,
-        TextScroll::Wheel(n) => scroll - n as f32 * 3.0 * DETAILS_LINE,
+        TextScroll::Wheel(n) => scroll - n * 3.0 * DETAILS_LINE,
     };
     clamp_text_scroll(to, content_h, view_h)
 }
@@ -501,8 +508,9 @@ pub const FORGET_BUTTON_WIDTH: f32 = 104.0;
 /// Rows on the fullest page. Every page keeps this height, so switching
 /// pages never moves the panel.
 const SETTINGS_ROWS: usize = 5;
-/// An engine's row: its name and where it is, with what it's for on a
-/// muted line underneath. Four of them fit in the height of five rows.
+/// An engine's row: its name, where it is and its buttons, with what it's
+/// for on a muted line underneath that runs the panel's width. Four of
+/// them fit in the height of five rows.
 pub const ENGINE_ROW: f32 = 48.0;
 /// A missing engine's Get it link, left of Choose.
 pub const GET_IT_WIDTH: f32 = 48.0;
@@ -669,7 +677,9 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
         SettingsTab::Engines => {
             for (k, e) in Engine::ALL.into_iter().enumerate() {
                 let y = title.bottom() + 8.0 + k as f32 * ENGINE_ROW;
-                let ctl = |x: f32, w: f32| Rect::new(x, y + 8.0, w, BUTTON_HEIGHT);
+                // The buttons sit at the top of the row, so the purpose
+                // line can run under them.
+                let ctl = |x: f32, w: f32| Rect::new(x, y, w, BUTTON_HEIGHT);
                 let choose = ctl(right - BUTTON_WIDTH, BUTTON_WIDTH);
                 let mut left = choose.x;
                 if shape.engine_custom[k] {
@@ -685,10 +695,15 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
                 let x = panel.x + p;
                 rows.push(SettingsRow {
                     label: e.label(),
-                    label_rect: Rect::new(x, y + 4.0, SETTINGS_LABEL, 20.0),
-                    value: Some(Rect::new(x0, y + 4.0, (left - 8.0 - x0).max(0.0), 20.0)),
+                    label_rect: Rect::new(x, y + 4.0, SETTINGS_LABEL, 24.0),
+                    value: Some(Rect::new(x0, y + 4.0, (left - 8.0 - x0).max(0.0), 24.0)),
                     hint: Some(e.purpose()),
-                    hint_rect: Some(Rect::new(x, y + 24.0, (left - 8.0 - x).max(0.0), 20.0)),
+                    hint_rect: Some(Rect::new(
+                        x,
+                        y + BUTTON_HEIGHT,
+                        (right - x).max(0.0),
+                        ENGINE_ROW - BUTTON_HEIGHT,
+                    )),
                 });
             }
         }
@@ -943,6 +958,8 @@ mod tests {
             assert!(d.body.bottom() <= d.close.y);
             assert_eq!(d.copy.right() + 8.0, d.close.x);
             assert_eq!(d.copy.y, d.close.y);
+            // "Couldn't copy" is about 80 DIPs in 14 px Segoe UI.
+            assert!(d.copy.w >= 100.0);
             assert!(d.copy.x >= d.panel.x + 16.0);
         }
     }
@@ -965,10 +982,16 @@ mod tests {
         assert_eq!(s(TextScroll::PageDown, 280.0), 300.0);
         assert_eq!(s(TextScroll::End, 0.0), 300.0);
         assert_eq!(s(TextScroll::Home, 250.0), 0.0);
-        assert_eq!(s(TextScroll::Wheel(-1), 0.0), 3.0 * DETAILS_LINE);
-        assert_eq!(s(TextScroll::Wheel(2), 100.0), 100.0 - 6.0 * DETAILS_LINE);
-        assert_eq!(s(TextScroll::Wheel(-100), 0.0), 300.0);
+        assert_eq!(s(TextScroll::Wheel(-1.0), 0.0), 3.0 * DETAILS_LINE);
+        assert_eq!(s(TextScroll::Wheel(2.0), 100.0), 100.0 - 6.0 * DETAILS_LINE);
+        assert_eq!(s(TextScroll::Wheel(-100.0), 0.0), 300.0);
+        // A touchpad's small step moves less than a line.
+        let small = s(TextScroll::Wheel(-0.1), 0.0);
+        assert!(small > 0.0 && small < DETAILS_LINE, "{small}");
         assert_eq!(scroll_text(TextScroll::End, 0.0, 60.0, 100.0), 0.0);
+        // An offset past the end, left by a resize, moves from the end.
+        assert_eq!(s(TextScroll::LineUp, 900.0), 300.0 - DETAILS_LINE);
+        assert_eq!(s(TextScroll::Wheel(1.0), 900.0), 300.0 - 3.0 * DETAILS_LINE);
     }
 
     #[test]
@@ -1088,7 +1111,13 @@ mod tests {
                 let hint = row.hint_rect.unwrap();
                 assert!(hint.bottom() + 16.0 <= close.y, "{} at {w}x{h}", row.label);
                 assert!(hint.y >= row.label_rect.bottom());
-                assert!(hint.w >= 200.0, "{} at {w}x{h}", row.label);
+                // It starts under the name and runs the panel's width.
+                assert_eq!(hint.x, row.label_rect.x);
+                assert_eq!(hint.right(), s.panel.right() - 16.0);
+                assert!(hint.h >= 16.0);
+                // "Word, Excel and PowerPoint files, and PDF output." is
+                // about 290 DIPs in 12 px Segoe UI.
+                assert!(hint.w >= 400.0, "{} at {w}x{h}", row.label);
                 for (c, r) in &s.controls {
                     assert!(apart(&hint, r), "{} hint overlaps {c:?}", row.label);
                 }

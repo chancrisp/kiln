@@ -282,6 +282,14 @@ fn line_cut(text: &Text, r: &Rect, e: &Entry) -> bool {
     let Ok(chip_w) = chip_width(text, e) else {
         return false;
     };
+    line_cut_with(text, r, e, chip_w)
+}
+
+/// `line_cut` for a row whose chip is already measured, `chip_w` wide.
+fn line_cut_with(text: &Text, r: &Rect, e: &Entry, chip_w: f32) -> bool {
+    if !matches!(e.job, JobState::Failed { .. }) {
+        return false;
+    }
     let room = r.right() - 16.0 - row_text_x(r, chip_w);
     text.measure(&e.line().0, &text.caption) > room
 }
@@ -781,7 +789,9 @@ impl Draw<'_> {
         let x = row_text_x(r, chip_w);
         let running = matches!(e.job, JobState::Running { .. });
         let saving = v.saving.contains(&e.path);
-        let link = e.link(line_cut(self.text, r, e)).filter(|_| !saving);
+        let link = e
+            .link(line_cut_with(self.text, r, e, chip_w))
+            .filter(|_| !saving);
         let right = if running {
             layout::row_cancel(r).x - 8.0
         } else if link.is_some() {
