@@ -2,7 +2,7 @@
 //! Terminal. The parts that touch the clipboard and dialogs live in `win`;
 //! this is the logic, testable anywhere.
 
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -141,34 +141,44 @@ fn move_with(src: &Path, dest_dir: &Path, force_copy: bool) -> Result<PathBuf, S
 
 /// Copy `src` to a temp file beside `dest`, flush it, then rename it onto
 /// `dest`. A copy cut short never has `dest`'s name, and no temp file is
-/// left when it fails.
+/// left when it fails. `std::fs::copy` keeps what Explorer keeps: the
+/// modified time, the attributes and the Mark of the Web.
 fn copy_onto(src: &Path, dest: &Path) -> io::Result<()> {
     let dir = dest.parent().unwrap_or_else(|| Path::new("."));
-    let name = dest.file_name().unwrap_or_default().to_string_lossy();
-    let (mut out, tmp) = (0..100)
+    let tmp = (0..100)
         .find_map(|n| {
-            let tmp = match n {
-                0 => dir.join(format!("{name}.kiln-move.tmp")),
-                _ => dir.join(format!("{name}.kiln-move ({n}).tmp")),
-            };
+            let tmp = dir.join(temp_name(dest, n));
             match OpenOptions::new().write(true).create_new(true).open(&tmp) {
-                Ok(f) => Some(Ok((f, tmp))),
+                Ok(_) => Some(Ok(tmp)),
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => None,
                 Err(e) => Some(Err(e)),
             }
         })
         .unwrap_or_else(|| Err(io::Error::other("there's no free name in that folder")))?;
     let copied = (|| {
-        io::copy(&mut File::open(src)?, &mut out)?;
-        out.sync_all()?;
-        // Close before renaming: Windows can't move an open file.
-        drop(out);
+        std::fs::copy(src, &tmp)?;
+        OpenOptions::new().write(true).open(&tmp)?.sync_all()?;
         std::fs::rename(&tmp, dest)
     })();
     if copied.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
     copied
+}
+
+/// The `n`th temp name for a copy to `dest`: named after it, so a copy cut
+/// short reads as what it was, unless that would pass Windows' limit of
+/// 255 characters in a name.
+fn temp_name(dest: &Path, n: u32) -> String {
+    let name = dest.file_name().unwrap_or_default().to_string_lossy();
+    let base = match name.encode_utf16().count() > 230 {
+        true => "kiln-move".to_owned(),
+        false => format!("{name}.kiln-move"),
+    };
+    match n {
+        0 => format!("{base}.tmp"),
+        _ => format!("{base} ({n}).tmp"),
+    }
 }
 
 fn same_dir(a: &Path, b: &Path) -> bool {
@@ -320,10 +330,20 @@ mod tests {
         let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let src = a.path().join("clip.mp4");
         std::fs::write(&src, b"frames").unwrap();
+        let then =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        std::fs::File::options()
+            .write(true)
+            .open(&src)
+            .unwrap()
+            .set_modified(then)
+            .unwrap();
         std::fs::write(b.path().join("clip.mp4"), b"theirs").unwrap();
         let dest = move_with(&src, b.path(), true).unwrap();
         assert_eq!(dest, b.path().join("clip (1).mp4"));
         assert_eq!(std::fs::read(&dest).unwrap(), b"frames");
+        // It keeps its modified time, as Explorer's move does.
+        assert_eq!(std::fs::metadata(&dest).unwrap().modified().unwrap(), then);
         assert!(!src.exists());
         // No temp file is left, and theirs is untouched.
         assert_eq!(names(b.path()), ["clip (1).mp4", "clip.mp4"]);
@@ -337,6 +357,15 @@ mod tests {
         std::fs::write(&dest, b"").unwrap();
         assert!(copy_onto(&dir.path().join("gone.mp4"), &dest).is_err());
         assert_eq!(names(dir.path()), ["clip.mp4"]);
+    }
+
+    #[test]
+    fn temp_names_stay_within_the_name_limit() {
+        let short = Path::new("clip.mp4");
+        assert_eq!(temp_name(short, 0), "clip.mp4.kiln-move.tmp");
+        assert_eq!(temp_name(short, 2), "clip.mp4.kiln-move (2).tmp");
+        let long = format!("{}.mp4", "a".repeat(240));
+        assert_eq!(temp_name(Path::new(&long), 0), "kiln-move.tmp");
     }
 
     #[cfg(windows)]

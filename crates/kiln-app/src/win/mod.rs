@@ -644,6 +644,8 @@ struct App {
     leaving: Option<Leaving>,
     /// Close was asked for while an export ran: close once it's done.
     close_when_saved: bool,
+    /// The window is gone: nothing more goes ahead.
+    destroyed: bool,
     /// What the footer says whenever it has nothing more pressing: why
     /// results are saved next to each file, when there's no holding folder.
     sticky: Option<&'static str>,
@@ -1256,6 +1258,19 @@ impl App {
                 return;
             }
         }
+        // A leave whose exports are done may still be waiting for a dialog
+        // to close. It goes first, from this message's `run_due`; a close
+        // follows it.
+        if self.leaving.is_some() {
+            if matches!(then, Then::Close) {
+                self.close_when_saved = true;
+                self.say("Saving… Kiln will close when it's done.".to_owned());
+            } else {
+                self.say(model::SAVING.to_owned());
+            }
+            self.invalidate();
+            return;
+        }
         let mask = self.mask(&rows);
         let held = self.held_by(&rows).len();
         // A new job on a row only replaces what it holds.
@@ -1293,6 +1308,7 @@ impl App {
             PromptButton::Discard => {
                 // Results that finished while the prompt was open go too:
                 // the user chose to lose what was held.
+                self.take_job_news();
                 let held = self.held_by(&rows);
                 self.discard(&held);
                 self.proceed(then);
@@ -1347,6 +1363,8 @@ impl App {
 
     /// Hold a leave until the exports it has to wait for are done.
     fn wait_for_exports(&mut self, rows: Rows, folder: Option<PathBuf>, then: Then) {
+        // One leave at a time: `leave_after` turns a second one away.
+        debug_assert!(self.leaving.is_none());
         let waits = self.exports_for(&rows, &then);
         if waits.is_empty() {
             return self.proceed(then);
@@ -1392,6 +1410,8 @@ impl App {
                     return;
                 }
                 self.close_when_saved = false;
+                // Nothing goes ahead on a closed window.
+                self.leaving = None;
                 self.runner.cancel_all();
                 unsafe {
                     let _ = DestroyWindow(self.hwnd);
@@ -1740,6 +1760,9 @@ impl App {
     /// once everything is saved, unless a dialog is open: then it waits
     /// for the dialog to close. Runs after every message.
     fn run_due(&mut self) {
+        if self.destroyed {
+            return;
+        }
         // A resumed leave may make a close due too, as one step did before.
         for _ in 0..2 {
             let ready = self.leaving.as_ref().is_some_and(|l| l.waits.is_empty());
@@ -4849,6 +4872,7 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         next_export: 1,
         leaving: None,
         close_when_saved: false,
+        destroyed: false,
         sticky,
         add_hover: false,
         add_pressed: false,
@@ -5504,7 +5528,17 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             app.a11y_do(*req);
             Some(LRESULT(0))
         }
+        // Moving, sizing and the system menu run modal loops of their own.
+        WM_ENTERSIZEMOVE | WM_ENTERMENULOOP => {
+            system::window_loop(true);
+            None
+        }
+        WM_EXITSIZEMOVE | WM_EXITMENULOOP => {
+            system::window_loop(false);
+            None
+        }
         WM_DESTROY => {
+            app.destroyed = true;
             // UI Automation lets go of the tree first.
             app.uia.shutdown(hwnd);
             // Stop the inspect thread with the window, without waiting

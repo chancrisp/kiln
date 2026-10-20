@@ -51,6 +51,18 @@ pub fn modal_open() -> bool {
     MODALS.with(Cell::get) > 0
 }
 
+/// The window's own modal loops, moving or sizing it and its system menu,
+/// count too: they deliver its messages the same way. `open` is the ENTER
+/// message, `!open` the matching EXIT.
+pub fn window_loop(open: bool) {
+    MODALS.with(|m| {
+        m.set(match open {
+            true => m.get() + 1,
+            false => m.get().saturating_sub(1),
+        })
+    });
+}
+
 /// Counts a modal as open for as long as it lives.
 struct Modal;
 
