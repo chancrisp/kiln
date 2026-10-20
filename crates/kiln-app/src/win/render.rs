@@ -26,6 +26,7 @@ use crate::model::{self, Entry, JobState, Tone};
 use crate::quality::{QualityDefaults, Value};
 use crate::settings::{KeyMap, ThemeChoice};
 use crate::theme::{effects, shape, Palette, Rgb};
+use crate::ways_in::EmptyLines;
 use crate::wheel::{self, Action, Spot, Wheel, R_INNER, R_MORE_INNER, R_MORE_OUTER, R_OUTER};
 
 use super::text::Text;
@@ -33,6 +34,8 @@ use super::text::Text;
 /// How the wheel looks this frame.
 pub struct WheelView<'a> {
     pub wheel: &'a Wheel,
+    /// Its name and the key that opens it: "Convert · Shift".
+    pub title: String,
     pub hover: Option<Spot>,
     /// 0 to 1: how far More's outer ring has poured open.
     pub more: f32,
@@ -111,8 +114,12 @@ pub struct View<'a> {
     pub heat: f32,
     pub row_anim: &'a dyn Fn(usize) -> RowAnim,
     pub status: &'a str,
-    /// The empty window's hint, which names the current wheel keys.
-    pub hint: &'a str,
+    /// The empty window's lines; its key hint names the current wheel
+    /// keys.
+    pub empty: &'a EmptyLines,
+    /// The Add files button, in the empty window or the footer.
+    pub add_hover: bool,
+    pub add_pressed: bool,
     pub clear_hover: bool,
     pub clear_pressed: bool,
     pub wheel: Option<WheelView<'a>>,
@@ -577,42 +584,34 @@ impl Draw<'_> {
             shape::BORDER + 0.5 * v.drag,
         );
 
-        // Centred group: vessel, line, tagline, hint, privacy note.
-        let cx = panel.x + panel.w / 2.0;
-        let group_h = 48.0 + 16.0 + 24.0 + 4.0 + 20.0 + 12.0 + 16.0 + 4.0 + 16.0;
-        let mut y = (panel.y + (panel.h - group_h) / 2.0).round();
+        // The centred group: the headline, how else to add files, the
+        // button, the keys to hold, the privacy note and, last, the tagline.
+        let e = layout::empty_state(&panel);
+        let lines = v.empty;
         let vessel = mix(p.text_muted, p.accent, v.drag);
-        self.icon("vessel", cx - 24.0, y, 2.0, vessel, 1.0);
-        y += 48.0 + 16.0;
-        let row = |y: f32, h: f32| Rect::new(panel.x + 16.0, y, panel.w - 32.0, h);
+        self.icon("vessel", e.vessel.x, e.vessel.y, 2.0, vessel, 1.0);
         self.label(
-            "Drop files here",
+            lines.headline,
             &self.text.lead_center,
-            &row(y, 24.0),
+            &e.headline,
             p.text,
             1.0,
         );
-        y += 24.0 + 4.0;
         self.label(
-            "Fire raw files into finished ones.",
+            lines.instruction,
             &self.text.body_center,
-            &row(y, 20.0),
-            p.text_muted,
+            &e.instruction,
+            p.text,
             1.0,
         );
-        y += 20.0 + 12.0;
+        self.primary(lines.button, &e.button, v.add_hover, v.add_pressed, p);
+        for (text, r) in [(lines.keys.as_str(), &e.keys), (lines.privacy, &e.privacy)] {
+            self.label(text, &self.text.caption_center, r, p.text_muted, 1.0);
+        }
         self.label(
-            v.hint,
-            &self.text.caption_center,
-            &row(y, 16.0),
-            p.text_muted,
-            1.0,
-        );
-        y += 16.0 + 4.0;
-        self.label(
-            "Everything converts on this PC. Nothing is uploaded.",
-            &self.text.caption_center,
-            &row(y, 16.0),
+            lines.tagline,
+            &self.text.body_center,
+            &e.tagline,
             p.text_muted,
             1.0,
         );
@@ -883,7 +882,8 @@ impl Draw<'_> {
         let export = v
             .export_all
             .map(|label| (label, layout::export_all_button(&button)));
-        let left = export.map_or(button.x, |(_, b)| b.x);
+        let add = layout::add_files_button(&button, export.is_some());
+        let left = add.x;
         let status = Rect::new(
             footer.x + 4.0,
             footer.y,
@@ -891,6 +891,7 @@ impl Draw<'_> {
             footer.h,
         );
         self.label(v.status, &self.text.caption, &status, p.text_muted, 1.0);
+        self.button(v.empty.button, &add, v.add_hover, v.add_pressed, p);
         if let Some((label, b)) = export {
             self.button(label, &b, v.export_hover, v.export_pressed, p);
         }
@@ -1152,25 +1153,27 @@ impl Draw<'_> {
             }
         }
 
-        // The centre: the wheel's name, and the source type, or where a
-        // conversion goes while one is pointed at: "PNG → JPG".
+        // The centre: the wheel's name over the key that opens it, as
+        // "Convert · Shift" breaks across two lines where it can't fit on
+        // one, then the source type, or where a conversion goes while one
+        // is pointed at: "PNG → JPG".
         self.circle(R_INNER, p.ground, 1.0)?;
         self.ring_edge(R_INNER - 0.5, p.line)?;
-        let title = Rect::new(-R_INNER, -22.0, 2.0 * R_INNER, 28.0);
-        self.label(
-            w.kind.title(),
-            &self.text.display_center,
-            &title,
-            p.text,
-            1.0,
-        );
+        let (name, key) = wv
+            .title
+            .split_once(" · ")
+            .unwrap_or((wv.title.as_str(), ""));
+        let title = Rect::new(-R_INNER, -32.0, 2.0 * R_INNER, 28.0);
+        self.label(name, &self.text.display_center, &title, p.text, 1.0);
+        let key_line = Rect::new(-R_INNER + 8.0, -4.0, 2.0 * R_INNER - 16.0, 16.0);
+        self.label(key, &self.text.caption_center, &key_line, p.text_muted, 1.0);
         let line = match lit.and_then(|s| w.item(s)) {
             Some(item) if matches!(item.action, Action::Convert(_)) => {
                 format!("{} → {}", w.source_code, item.label)
             }
             _ => w.source_code.clone(),
         };
-        let src = Rect::new(-R_INNER + 4.0, 8.0, 2.0 * R_INNER - 8.0, 16.0);
+        let src = Rect::new(-R_INNER + 8.0, 14.0, 2.0 * R_INNER - 16.0, 16.0);
         self.code(&line, &src, p.text_muted, 1.0)?;
         Ok(())
     }

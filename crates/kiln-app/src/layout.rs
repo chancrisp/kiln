@@ -175,6 +175,85 @@ pub fn export_all_button(clear: &Rect) -> Rect {
     )
 }
 
+/// Width of the Add files buttons.
+pub const ADD_FILES_WIDTH: f32 = 88.0;
+
+/// The footer's Add files button: left of Export all while that shows,
+/// else left of Clear.
+pub fn add_files_button(clear: &Rect, export_all: bool) -> Rect {
+    let right = if export_all {
+        export_all_button(clear).x
+    } else {
+        clear.x
+    };
+    Rect::new(
+        right - 8.0 - ADD_FILES_WIDTH,
+        clear.y,
+        ADD_FILES_WIDTH,
+        clear.h,
+    )
+}
+
+/// The empty window's centred group, top to bottom.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EmptyState {
+    /// The vessel icon, drawn at twice its size.
+    pub vessel: Rect,
+    pub headline: Rect,
+    pub instruction: Rect,
+    pub button: Rect,
+    pub keys: Rect,
+    pub privacy: Rect,
+    pub tagline: Rect,
+}
+
+/// The empty window's group, centred in the drop panel.
+pub fn empty_state(panel: &Rect) -> EmptyState {
+    // Each part's height and the gap after it.
+    const PARTS: [(f32, f32); 7] = [
+        (48.0, 16.0),          // vessel
+        (24.0, 4.0),           // headline
+        (20.0, 12.0),          // instruction
+        (BUTTON_HEIGHT, 12.0), // button
+        (16.0, 4.0),           // keys
+        (16.0, 8.0),           // privacy
+        (20.0, 0.0),           // tagline
+    ];
+    let total: f32 = PARTS.iter().map(|(h, gap)| h + gap).sum();
+    let mut y = snap(panel.y + ((panel.h - total) / 2.0).max(0.0));
+    let cx = panel.x + panel.w / 2.0;
+    let line = |y: f32, h: f32| Rect::new(panel.x + 16.0, y, (panel.w - 32.0).max(0.0), h);
+    let mut next = |k: usize| {
+        let top = y;
+        y += PARTS[k].0 + PARTS[k].1;
+        top
+    };
+    let vessel = Rect::new(snap(cx - 24.0), next(0), 48.0, 48.0);
+    let headline = line(next(1), 24.0);
+    let instruction = line(next(2), 20.0);
+    let button = Rect::new(
+        snap(cx - ADD_FILES_EMPTY_WIDTH / 2.0),
+        next(3),
+        ADD_FILES_EMPTY_WIDTH,
+        BUTTON_HEIGHT,
+    );
+    let keys = line(next(4), 16.0);
+    let privacy = line(next(5), 16.0);
+    let tagline = line(next(6), 20.0);
+    EmptyState {
+        vessel,
+        headline,
+        instruction,
+        button,
+        keys,
+        privacy,
+        tagline,
+    }
+}
+
+/// The empty window's Add files button, a little wider than the footer's.
+pub const ADD_FILES_EMPTY_WIDTH: f32 = 112.0;
+
 /// The details dialog: panel, title, body and close button.
 pub struct Dialog {
     pub panel: Rect,
@@ -850,6 +929,52 @@ mod tests {
         let line = row_line(&r);
         assert!(line.x >= r.x + 16.0 && line.right() <= r.right() - 16.0);
         assert!(line.y >= r.y && line.bottom() <= r.bottom());
+    }
+
+    #[test]
+    fn add_files_sits_left_of_the_other_footer_buttons() {
+        for (w, h) in [(480.0, 360.0), (720.0, 480.0)] {
+            let l = layout(w, h, 2);
+            let (footer, clear) = (l.footer.unwrap(), l.clear_button.unwrap());
+            let alone = add_files_button(&clear, false);
+            assert_grid(&alone, "add files");
+            assert_eq!(clear.x - alone.right(), 8.0);
+            assert_eq!((alone.y, alone.h), (clear.y, clear.h));
+            let beside = add_files_button(&clear, true);
+            assert_grid(&beside, "add files");
+            assert_eq!(export_all_button(&clear).x - beside.right(), 8.0);
+            // The status keeps room on the left.
+            assert!(beside.x >= footer.x + 100.0, "{beside:?} at {w}");
+        }
+    }
+
+    #[test]
+    fn the_empty_state_stacks_on_the_grid_and_fits() {
+        for (w, h) in [(480.0, 360.0), (720.0, 480.0), (1024.0, 768.0)] {
+            let panel = layout(w, h, 0).panel;
+            let e = empty_state(&panel);
+            let order = [
+                e.vessel,
+                e.headline,
+                e.instruction,
+                e.button,
+                e.keys,
+                e.privacy,
+                e.tagline,
+            ];
+            for (k, r) in order.iter().enumerate() {
+                assert_grid(r, "empty state part");
+                assert!(r.x >= panel.x && r.right() <= panel.right(), "{k}: {r:?}");
+                assert!(r.y >= panel.y && r.bottom() <= panel.bottom(), "{k}: {r:?}");
+                if k > 0 {
+                    assert!(r.y >= order[k - 1].bottom(), "{k} overlaps the part above");
+                }
+            }
+            // The button sits centred under the instruction.
+            let mid = e.button.x + e.button.w / 2.0;
+            assert!((mid - (panel.x + panel.w / 2.0)).abs() <= GRID);
+            assert_eq!(e.button.h, BUTTON_HEIGHT);
+        }
     }
 
     #[test]

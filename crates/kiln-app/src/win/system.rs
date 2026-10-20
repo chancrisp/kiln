@@ -1,6 +1,6 @@
 //! Small pieces of Windows the app leans on: the clipboard, the app-mode
-//! setting, the folder, program and save pickers, the leave prompt,
-//! Explorer, and the shutdown block reason.
+//! setting, the file, folder, program and save pickers, the leave prompt,
+//! the right-click menu, Explorer, and the shutdown block reason.
 
 use std::path::{Path, PathBuf};
 
@@ -8,11 +8,12 @@ use windows::core::{s, w, Result, BOOL, HRESULT, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{GlobalFree, HANDLE, HWND};
 use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_INPROC_SERVER};
 use windows::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+    CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
+    SetClipboardData,
 };
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
-use windows::Win32::System::Ole::CF_UNICODETEXT;
+use windows::Win32::System::Ole::{CF_HDROP, CF_UNICODETEXT};
 use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
 use windows::Win32::System::Shutdown::{ShutdownBlockReasonCreate, ShutdownBlockReasonDestroy};
 use windows::Win32::UI::Controls::{
@@ -23,11 +24,14 @@ use windows::Win32::UI::Shell::Common::{COMDLG_FILTERSPEC, ITEMIDLIST};
 use windows::Win32::UI::Shell::{
     FileOpenDialog, FileSaveDialog, IFileDialog, IFileOpenDialog, IFileSaveDialog,
     ILCreateFromPathW, ILFree, IShellItem, SHCreateItemFromParsingName, SHOpenFolderAndSelectItems,
-    ShellExecuteW, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_NOREADONLYRETURN,
-    FOS_OVERWRITEPROMPT, FOS_PATHMUSTEXIST, FOS_PICKFOLDERS, SIGDN_FILESYSPATH,
+    ShellExecuteW, FOS_ALLOWMULTISELECT, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM,
+    FOS_NOREADONLYRETURN, FOS_OVERWRITEPROMPT, FOS_PATHMUSTEXIST, FOS_PICKFOLDERS, HDROP,
+    SIGDN_FILESYSPATH,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    MessageBoxW, IDCANCEL, IDOK, MB_ICONWARNING, MB_OKCANCEL, SW_SHOWNORMAL,
+    AppendMenuW, CreatePopupMenu, DestroyMenu, MessageBoxW, TrackPopupMenuEx, IDCANCEL, IDOK,
+    MB_ICONWARNING, MB_OKCANCEL, MF_SEPARATOR, MF_STRING, SW_SHOWNORMAL, TPM_LEFTALIGN,
+    TPM_RETURNCMD, TPM_RIGHTBUTTON, TPM_TOPALIGN,
 };
 
 use crate::model::{Prompt, PromptButton};
@@ -56,6 +60,30 @@ pub fn set_clipboard(hwnd: HWND, text: &str) -> Result<()> {
         })();
         let _ = CloseClipboard();
         result
+    }
+}
+
+/// Whether the clipboard holds files, as File Explorer's Copy leaves them.
+pub fn clipboard_has_files() -> bool {
+    unsafe { IsClipboardFormatAvailable(CF_HDROP.0 as u32).is_ok() }
+}
+
+/// The files on the clipboard, if it holds any.
+pub fn clipboard_files(hwnd: HWND) -> Vec<PathBuf> {
+    if !clipboard_has_files() {
+        return vec![];
+    }
+    unsafe {
+        if OpenClipboard(Some(hwnd)).is_err() {
+            return vec![];
+        }
+        // The clipboard owns the data; it's only read here.
+        let files = match GetClipboardData(CF_HDROP.0 as u32) {
+            Ok(h) if !h.is_invalid() => super::drop::hdrop_paths(HDROP(h.0)),
+            _ => vec![],
+        };
+        let _ = CloseClipboard();
+        files
     }
 }
 
@@ -118,6 +146,68 @@ fn pick(hwnd: HWND, title: &str, folder: bool, start: Option<&Path>) -> Option<P
         dialog.Show(Some(hwnd)).ok()?;
         let item = dialog.GetResult().ok()?;
         item_path(&item)
+    }
+}
+
+/// Ask for files to add, any number at once, starting in `start` when
+/// given; otherwise Windows picks the folder. Empty if the person cancels.
+pub fn pick_files(hwnd: HWND, title: &str, start: Option<&Path>) -> Vec<PathBuf> {
+    let picked = || -> Option<Vec<PathBuf>> {
+        unsafe {
+            let dialog: IFileOpenDialog =
+                CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).ok()?;
+            let opts = dialog.GetOptions().ok()?
+                | FOS_ALLOWMULTISELECT
+                | FOS_FILEMUSTEXIST
+                | FOS_FORCEFILESYSTEM;
+            dialog.SetOptions(opts).ok()?;
+            let title = HSTRING::from(title);
+            dialog.SetTitle(PCWSTR(title.as_ptr())).ok()?;
+            if let Some(start) = start {
+                start_in(&dialog, start);
+            }
+            // Cancelling comes back as an error; either way there's nothing.
+            dialog.Show(Some(hwnd)).ok()?;
+            let items = dialog.GetResults().ok()?;
+            let count = items.GetCount().ok()?;
+            Some(
+                (0..count)
+                    .filter_map(|i| item_path(&items.GetItemAt(i).ok()?))
+                    .collect(),
+            )
+        }
+    };
+    picked().unwrap_or_default()
+}
+
+/// Show a right-click menu at `(x, y)` on the screen. `None` in `items`
+/// is a separator. Returns the index of the item chosen, or `None` when
+/// the menu was dismissed.
+pub fn popup_menu(hwnd: HWND, items: &[Option<String>], x: i32, y: i32) -> Option<usize> {
+    unsafe {
+        let menu = CreatePopupMenu().ok()?;
+        // Kept alive until the menu has closed.
+        let texts: Vec<Option<HSTRING>> = items
+            .iter()
+            .map(|t| t.as_deref().map(HSTRING::from))
+            .collect();
+        for (k, text) in texts.iter().enumerate() {
+            let _ = match text {
+                // Ids start at 1: 0 means nothing was chosen.
+                Some(t) => AppendMenuW(menu, MF_STRING, k + 1, PCWSTR(t.as_ptr())),
+                None => AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()),
+            };
+        }
+        let chosen = TrackPopupMenuEx(
+            menu,
+            (TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN).0,
+            x,
+            y,
+            hwnd,
+            None,
+        );
+        let _ = DestroyMenu(menu);
+        (chosen.0 as usize).checked_sub(1)
     }
 }
 

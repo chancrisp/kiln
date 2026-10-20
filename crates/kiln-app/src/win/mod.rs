@@ -18,7 +18,7 @@ use windows::core::{w, Result, BOOL, HSTRING, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE};
 use windows::Win32::Graphics::Gdi::{
-    CreateSolidBrush, InvalidateRect, ScreenToClient, UpdateWindow, ValidateRect,
+    ClientToScreen, CreateSolidBrush, InvalidateRect, ScreenToClient, UpdateWindow, ValidateRect,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Ole::{
@@ -48,12 +48,16 @@ use crate::quality::{self as q, Value};
 use crate::settings::{self, Engine, Settings};
 use crate::theme::{self, motion, Palette};
 use crate::update::{Reply, UpdateState};
+use crate::ways_in::{self, MenuItem, RowState};
 use crate::wheel::{self, Action, Spot, Wheel, WheelKind};
 use drop::{DragEvent, DropTarget, DRAG_ENTER, DRAG_LEAVE, DRAG_OVER, WM_KILN_DRAG, WM_KILN_DROP};
 use inspect::Inspector;
 use render::{Renderer, RowAnim, SettingsView, SheetView, View, WheelView};
 
 const ANIM_TIMER: usize = 1;
+/// Fires once, when "Added 2 files." has been up long enough for the
+/// footer's idle hint to take its place.
+const HINT_TIMER: usize = 2;
 const FRAME_MS: u32 = 16;
 /// Frame time when only progress lines are glowing: slow enough to stay
 /// cheap, fast enough to look smooth.
@@ -456,6 +460,15 @@ struct App {
     /// What the footer says whenever it has nothing more pressing: why
     /// results are saved next to each file, when there's no holding folder.
     sticky: Option<&'static str>,
+    /// The Add files button, in the empty window or the footer.
+    add_hover: bool,
+    add_pressed: bool,
+    /// The folder files were last added from in this run, where Add files
+    /// opens.
+    last_add: Option<PathBuf>,
+    /// What adding files last said, and when, so the footer's idle hint
+    /// can take its place once it has been read.
+    added: Option<(String, Instant)>,
 }
 
 impl App {
@@ -568,6 +581,15 @@ impl App {
             });
         }
         self.status = status_line(self.files.len(), r.added, r.duplicates, r.skipped);
+        self.added = Some((self.status.clone(), Instant::now()));
+        unsafe {
+            SetTimer(
+                Some(self.hwnd),
+                HINT_TIMER,
+                ways_in::ADDED_FOR.as_millis() as u32,
+                None,
+            );
+        }
         // New rows go on the end of the list.
         let fresh: Vec<PathBuf> = self.files.entries()[self.files.len() - r.added..]
             .iter()
@@ -575,10 +597,49 @@ impl App {
             .collect();
         self.inspect(fresh);
         if r.added > 0 {
+            self.last_add = self.files.entries()[self.files.len() - 1]
+                .path
+                .parent()
+                .map(Path::to_path_buf);
             self.files.select(Some(self.files.len() - 1));
             self.scroll_to_selection();
         }
         self.animate();
+    }
+
+    /// Ask for files with the Windows Open dialog, and add them as a drop
+    /// would.
+    fn add_files(&mut self) {
+        let picked = system::pick_files(
+            self.hwnd,
+            ways_in::ADD_FILES_TITLE,
+            self.last_add.as_deref(),
+        );
+        if !picked.is_empty() {
+            self.add(picked);
+        }
+    }
+
+    /// Add the files copied in File Explorer, as a drop would.
+    fn paste(&mut self) {
+        let files = system::clipboard_files(self.hwnd);
+        if !files.is_empty() {
+            self.add(files);
+        }
+    }
+
+    /// The Add files button: in the middle of the empty window, or in the
+    /// footer left of the other buttons.
+    fn add_button(&self) -> Option<layout::Rect> {
+        let l = self.layout();
+        if self.files.is_empty() {
+            return Some(layout::empty_state(&l.panel).button);
+        }
+        let clear = l.clear_button?;
+        Some(layout::add_files_button(
+            &clear,
+            self.files.held_count() > 0,
+        ))
     }
 
     /// Cancel every job that involves `path`.
@@ -1116,11 +1177,20 @@ impl App {
         let (Some(i), false, false) = self.hit_row(x, y) else {
             return false;
         };
+        self.open_held(i)
+    }
+
+    /// Open a held row's result in its usual app. False if the row holds
+    /// nothing that can be opened now.
+    fn open_held(&mut self, i: usize) -> bool {
         if self.row_saving(i) {
             return false;
         }
-        let Some(file) = self.files.entries()[i]
-            .held()
+        let Some(file) = self
+            .files
+            .entries()
+            .get(i)
+            .and_then(|e| e.held())
             .and_then(|h| h.first())
             .cloned()
         else {
@@ -1326,6 +1396,121 @@ impl App {
         self.open_wheel(kind, paths, at, true);
     }
 
+    // The right-click menu.
+
+    /// The middle of row `i` as it shows now, where a wheel opened from
+    /// the menu pours.
+    fn row_centre(&self, i: usize) -> (f32, f32) {
+        let r = self.layout().rows[i];
+        (r.x + r.w / 2.0, r.y - self.scroll + r.h / 2.0)
+    }
+
+    /// A point in window DIPs, in screen pixels.
+    fn to_screen(&self, x: f32, y: f32) -> (i32, i32) {
+        let k = self.dpi / 96.0;
+        let mut pt = POINT {
+            x: (x * k).round() as i32,
+            y: (y * k).round() as i32,
+        };
+        unsafe {
+            let _ = ClientToScreen(self.hwnd, &mut pt);
+        }
+        (pt.x, pt.y)
+    }
+
+    /// What the menu offers for row `i`.
+    fn row_state(&self, i: usize) -> RowState {
+        self.files.entries()[i].row_state(self.row_saving(i), |p| p.exists())
+    }
+
+    /// The right-click menu. `at` is where it was asked for, in screen
+    /// pixels, or `None` from the keyboard (the Menu key or Shift+F10),
+    /// which opens it at the selected row. A row gets the row menu; an
+    /// empty part of the list gets Add files and Paste.
+    fn context_menu(&mut self, at: Option<(i32, i32)>) {
+        let row = match at {
+            Some((x, y)) => {
+                let (x, y) = self.screen_dips(x, y);
+                if !self.layout().panel.contains(x, y) {
+                    return;
+                }
+                // Right-clicking a row selects it first, and an empty part
+                // of the list clears the selection, as File Explorer does.
+                let (row, _, _) = self.hit_row(x, y);
+                self.files.select(row);
+                row
+            }
+            None => self.files.selected(),
+        };
+        let items = match row {
+            Some(i) => {
+                let paths = vec![self.files.entries()[i].path.clone()];
+                let wheels: Vec<WheelKind> = WheelKind::ALL
+                    .into_iter()
+                    .filter(|&k| !wheel::items_for(k, &self.kiln, &paths).is_empty())
+                    .collect();
+                ways_in::menu_items(&[self.row_state(i)], &wheels)
+            }
+            None => ways_in::list_menu(system::clipboard_has_files()),
+        };
+        let texts: Vec<Option<String>> = items
+            .iter()
+            .map(|&item| (item != MenuItem::Separator).then(|| item.text(&self.settings.keys)))
+            .collect();
+        let (x, y) = match (at, row) {
+            (Some(p), _) => p,
+            // From the keyboard: at the row's bottom left, scrolled into
+            // view, or the list's top left with nothing selected.
+            (None, Some(i)) => {
+                self.scroll_to_selection();
+                let r = self.layout().rows[i];
+                self.to_screen(r.x, r.bottom() - self.scroll)
+            }
+            (None, None) => {
+                let panel = self.layout().panel;
+                self.to_screen(panel.x + 16.0, panel.y + 16.0)
+            }
+        };
+        self.invalidate();
+        // The row by its file: the list can change while the menu is up.
+        let file = row.map(|i| self.files.entries()[i].path.clone());
+        let Some(k) = system::popup_menu(self.hwnd, &texts, x, y) else {
+            return;
+        };
+        let row = match &file {
+            Some(f) => match self.files.index_of(f) {
+                Some(i) => Some(i),
+                None => return,
+            },
+            None => None,
+        };
+        self.menu_chosen(items[k], row, at.is_none());
+    }
+
+    /// Do what the menu item `item` says, for `row`.
+    fn menu_chosen(&mut self, item: MenuItem, row: Option<usize>, keyboard: bool) {
+        match (item, row) {
+            (MenuItem::AddFiles, _) => self.add_files(),
+            (MenuItem::Paste, _) => self.paste(),
+            (MenuItem::Wheel(kind), Some(i)) => {
+                let paths = vec![self.files.entries()[i].path.clone()];
+                let at = self.row_centre(i);
+                self.open_wheel(kind, paths, at, keyboard);
+            }
+            (MenuItem::Export, Some(i)) => self.export_row(i),
+            (MenuItem::Open, Some(i)) => {
+                self.open_held(i);
+            }
+            (MenuItem::ShowInFolder, Some(i)) => self.show_saved(i),
+            (MenuItem::Remove, Some(i)) => {
+                self.files.select(Some(i));
+                self.remove_selected();
+            }
+            _ => {}
+        }
+        self.invalidate();
+    }
+
     fn close_wheel(&mut self) {
         if let Some(w) = &mut self.wheel {
             if w.closing.is_none() {
@@ -1436,10 +1621,11 @@ impl App {
         }
     }
 
-    fn wheel_view(w: Option<&WheelUi>) -> Option<WheelView<'_>> {
+    fn wheel_view<'a>(w: Option<&'a WheelUi>, keys: &settings::KeyMap) -> Option<WheelView<'a>> {
         let w = w?;
         Some(WheelView {
             wheel: &w.wheel,
+            title: ways_in::wheel_title(w.wheel.kind, keys),
             hover: w.hover,
             more: w.more.value().clamp(0.0, 1.0),
             open: eased(w.opened, OPEN_MS),
@@ -2364,6 +2550,11 @@ impl App {
             self.export_hover = export;
             self.invalidate();
         }
+        let add = self.add_button().is_some_and(|b| b.contains(x, y));
+        if add != self.add_hover {
+            self.add_hover = add;
+            self.invalidate();
+        }
         let gear = l.settings_button.contains(x, y);
         if gear != self.settings_hover {
             self.settings_hover = gear;
@@ -2390,6 +2581,7 @@ impl App {
     fn mouse_up(&mut self, x: f32, y: f32) {
         let clear = std::mem::take(&mut self.clear_pressed);
         let export = std::mem::take(&mut self.export_pressed);
+        let add = std::mem::take(&mut self.add_pressed);
         let setting = self.settings_pressed.take();
         let close = std::mem::take(&mut self.dialog_close_pressed);
         let sheet = self.sheet.as_mut().and_then(|s| s.pressed.take());
@@ -2404,8 +2596,11 @@ impl App {
             self.invalidate();
             return;
         }
-        if !clear && !export && setting.is_none() && !close {
+        if !clear && !export && !add && setting.is_none() && !close {
             return;
+        }
+        if add && self.add_button().is_some_and(|b| b.contains(x, y)) {
+            self.add_files();
         }
         if export && self.export_button().is_some_and(|b| b.contains(x, y)) {
             self.export_everything();
@@ -2481,6 +2676,9 @@ impl App {
             unsafe { SetCapture(self.hwnd) };
         } else if self.export_button().is_some_and(|b| b.contains(x, y)) {
             self.export_pressed = true;
+            unsafe { SetCapture(self.hwnd) };
+        } else if self.add_button().is_some_and(|b| b.contains(x, y)) {
+            self.add_pressed = true;
             unsafe { SetCapture(self.hwnd) };
         } else {
             let (row, cancel, link) = self.hit_row(x, y);
@@ -2574,6 +2772,8 @@ impl App {
                 self.open_wheel_for_selection(kind);
             }
             VK_OEM_COMMA if ctrl => self.open_settings(),
+            VK_O if ctrl => self.add_files(),
+            VK_V if ctrl => self.paste(),
             // Ctrl+S exports the selected row, Ctrl+Shift+S everything.
             VK_S if ctrl && shift => self.export_everything(),
             VK_S if ctrl => {
@@ -2655,7 +2855,7 @@ impl App {
                 facts: 1.0,
             })
         };
-        let hint = self.settings.keys.hint();
+        let empty = ways_in::empty_lines(&self.settings);
         let update_note = self.update.note();
         let wheel_hint = self.wheel_hint();
         let sheet_layout = self.sheet_layout();
@@ -2693,7 +2893,19 @@ impl App {
         let export_all = (held > 0).then(|| model::export_all_label(held));
         let saving = self.saving_rows();
         let plain = status_line(self.files.len(), 0, 0, 0);
-        let status = model::footer_status(&self.status, &plain, self.sticky);
+        let added = self
+            .added
+            .as_ref()
+            .filter(|(said, _)| *said == self.status)
+            .map(|(_, at)| at.elapsed());
+        let running = self.burning() || !self.exports.is_empty();
+        // Once the status has nothing more to say, a warning that stands
+        // comes first, then the hint on what to do next.
+        let status =
+            match ways_in::idle_hint(self.files.len(), running, &self.status, &plain, added) {
+                Some(hint) => self.sticky.unwrap_or(hint),
+                None => model::footer_status(&self.status, &plain, self.sticky),
+            };
         let view = View {
             palette: self.palette,
             entries: self.files.entries(),
@@ -2711,11 +2923,13 @@ impl App {
             heat: heat_now(),
             row_anim: &anim,
             status: wheel_hint.as_deref().unwrap_or(status),
-            hint: &hint,
+            empty: &empty,
+            add_hover: self.add_hover,
+            add_pressed: self.add_pressed,
             clear_hover: self.clear_hover,
             clear_pressed: self.clear_pressed,
             dialog_close_pressed: self.dialog_close_pressed,
-            wheel: Self::wheel_view(self.wheel.as_ref()),
+            wheel: Self::wheel_view(self.wheel.as_ref(), &self.settings.keys),
             details: self.details.as_deref(),
             dialog_close_hover: self.dialog_close_hover,
             settings_hover: self.settings_hover,
@@ -2975,6 +3189,10 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         leaving: None,
         close_when_saved: false,
         sticky,
+        add_hover: false,
+        add_pressed: false,
+        last_add: None,
+        added: None,
     });
     let app = Box::into_raw(app);
     unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, app as isize) };
@@ -3178,6 +3396,14 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             };
             Some(LRESULT(0))
         }
+        // "Added 2 files." has been read: the idle hint can show.
+        WM_TIMER if wparam.0 == HINT_TIMER => {
+            unsafe {
+                let _ = KillTimer(Some(hwnd), HINT_TIMER);
+            }
+            app.invalidate();
+            Some(LRESULT(0))
+        }
         WM_TIMER if wparam.0 == ANIM_TIMER => {
             app.tick();
             if !app.animating() {
@@ -3223,6 +3449,8 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             app.clear_pressed = false;
             app.export_hover = false;
             app.export_pressed = false;
+            app.add_hover = false;
+            app.add_pressed = false;
             app.invalidate();
             Some(LRESULT(0))
         }
@@ -3261,8 +3489,7 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             }
             Some(LRESULT(0))
         }
-        // The Apps key, Shift+F10 or a right click: the convert wheel for
-        // the selected file.
+        // The Apps key, Shift+F10 or a right click: the right-click menu.
         // On an open wheel, the options for the format under the pointer.
         WM_CONTEXTMENU => {
             if app.wheel.as_ref().is_some_and(|w| w.is_open()) {
@@ -3283,17 +3510,8 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             {
                 return Some(LRESULT(0));
             }
-            if lparam.0 == -1 {
-                app.open_wheel_for_selection(WheelKind::Convert);
-            } else {
-                let at = app.screen_dips(lo(lparam), hi(lparam));
-                let (row, _, _) = app.hit_row(at.0, at.1);
-                if let Some(i) = row {
-                    app.files.select(Some(i));
-                    let paths = vec![app.files.entries()[i].path.clone()];
-                    app.open_wheel(WheelKind::Convert, paths, at, false);
-                }
-            }
+            let at = (lparam.0 != -1).then(|| (lo(lparam), hi(lparam)));
+            app.context_menu(at);
             Some(LRESULT(0))
         }
         WM_KEYDOWN => app.key(VIRTUAL_KEY(wparam.0 as u16)).then_some(LRESULT(0)),

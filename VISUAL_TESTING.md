@@ -23,7 +23,9 @@ window between them as well.
 ## Empty state
 
 - [ ] The drop panel fills the body with 16 px padding on every side.
-- [ ] Copy reads "Drop files here", "Fire raw files into finished ones." and the privacy line.
+- [ ] Copy reads, in order: "Drop files here", "Or add them with the button below, or Ctrl+O.", an **Add files** button, the key hint, the privacy line, and last, muted, "Fire raw files into finished ones."
+- [ ] **Add files** and Ctrl+O open the Windows Open dialog with multi-select. Picked files are listed as a drop would list them. The next time, it opens in the folder files were last added from.
+- [ ] Copying files in File Explorer and pressing Ctrl+V in Kiln lists them. A copied folder is reported as skipped, as a dropped one is.
 - [ ] Dragging files over the window fades in a celadon edge and a faint wash in about 120 ms, and leaving fades them out.
 - [ ] Dragging something that isn't a file (text from a browser) shows the "no drop" cursor and no highlight.
 
@@ -41,17 +43,21 @@ window between them as well.
 - [ ] Dropping files on the app's icon in Explorer opens Kiln with them listed.
 - [ ] With Kiln already open, dropping more files on the icon adds them to that window and brings it forward. No second window opens.
 - [ ] The empty list's hint names the current wheel keys, and changes when they're reassigned in Settings. It isn't cut off at the smallest window size.
+- [ ] With files listed, the footer has an **Add files** button left of Export all and Clear, the same height and corners as Clear.
+- [ ] "Added 2 files." stays two seconds, then the footer reads "Right-click a file, or select it and press Enter, to convert it." while nothing is running.
+- [ ] Right-clicking a row opens a Windows menu: Convert…, Tools… and File actions… with their keys, then Export… and Open on a held row or Show in folder on a saved one, then Remove. Items that don't apply are missing, not greyed.
+- [ ] The Menu key or Shift+F10 opens the same menu at the selected row's bottom left. Right-clicking an empty part of the list offers Add files… and, with files on the clipboard, Paste.
 
 ## Glaze wheel
 
 - [ ] Holding Shift while dragging files over the window pours the convert wheel open at the cursor in about 160 ms. Ctrl opens the tools wheel instead.
 - [ ] The wheel stays fully inside the window near every edge and corner.
-- [ ] The centre shows "Convert" or "Tools" in the serif, with the source type (PNG, or MIXED) muted below it.
+- [ ] The centre shows "Convert" or "Tools" in the serif, the key that opens it ("Shift", "Ctrl") muted below, then the source type (PNG, or MIXED). The key follows Settings.
 - [ ] Hovering a segment fills it with celadon at 18% and draws a fine celadon arc on its outer edge. Icons and labels keep their colour.
 - [ ] A single-item wheel lights the whole ring as one smooth circle.
 - [ ] Letting go of the key mid-drag, or pressing Escape, fades the wheel out over about 120 ms.
 - [ ] Dropping on an item pulses it once, then the job starts and the wheel fades. Dropping on the centre just adds the files.
-- [ ] Enter on a row opens the convert wheel, Ctrl+Enter the tools wheel, and the Apps key or Shift+F10 the convert wheel. Arrows move round it, Enter applies, Escape closes.
+- [ ] Enter on a row opens the convert wheel and Ctrl+Enter the tools wheel. A wheel chosen from the right-click menu opens over the row. Arrows move round it, Enter applies, Escape closes.
 - [ ] Tools offered match the file: Merge appears only for two or more files of one type, Crop never for audio.
 - [ ] Office types use their own icons in the convert wheel: a page for DOC, DOCX, ODT, RTF and PDF, a sheet for XLSX, XLS, ODS and CSV, and a screen on a stand for PPTX, PPT and ODP.
 

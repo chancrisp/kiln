@@ -26,6 +26,7 @@ background, right on your PC.
 - **Offline.** Converting never touches the network. Nothing is uploaded, ever.
 - **Nothing is saved until you export it**, and Kiln never overwrites a file without asking. Results wait inside Kiln until you export them, one at a time or all at once, to a folder you pick. Exporting into a folder never replaces a file there: a taken name becomes `name (1).jpg`.
 - **Small and quick.** A single native executable of about 7.5 MB, drawn with Direct2D. No web view. The window is up in about 215 ms.
+- **Other ways in.** **Add files** or <kbd>Ctrl</kbd>+<kbd>O</kbd> opens the Windows Open dialog, <kbd>Ctrl</kbd>+<kbd>V</kbd> adds files copied in File Explorer, and right-clicking a row opens a menu with every wheel.
 - **Keyboard first.** Arrow keys pick a row, Enter opens the wheel, Escape closes it.
 - **Light and dark.** Follows the Windows app mode and every monitor's DPI.
 - **A command line too.** `kiln convert photo.png jpg` does the same work from a terminal.

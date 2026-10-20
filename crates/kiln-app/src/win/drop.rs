@@ -75,21 +75,29 @@ fn offers_files(data: &IDataObject) -> bool {
 
 /// The file paths in a drag, read from its CF_HDROP payload.
 fn dropped_paths(data: &IDataObject) -> Vec<PathBuf> {
-    let mut out = Vec::new();
     unsafe {
         let Ok(mut medium) = data.GetData(&hdrop_format()) else {
-            return out;
+            return vec![];
         };
-        let hdrop = HDROP(medium.u.hGlobal.0);
-        let count = DragQueryFileW(hdrop, u32::MAX, None);
-        for i in 0..count {
-            let len = DragQueryFileW(hdrop, i, None) as usize;
-            let mut buf = vec![0u16; len + 1];
-            let got = DragQueryFileW(hdrop, i, Some(&mut buf)) as usize;
-            use std::os::windows::ffi::OsStringExt;
-            out.push(PathBuf::from(std::ffi::OsString::from_wide(&buf[..got])));
-        }
+        let out = hdrop_paths(HDROP(medium.u.hGlobal.0));
         ReleaseStgMedium(&mut medium);
+        out
+    }
+}
+
+/// The paths in a CF_HDROP payload, from a drag or the clipboard.
+///
+/// # Safety
+/// `hdrop` must be a valid HDROP for the duration of the call.
+pub unsafe fn hdrop_paths(hdrop: HDROP) -> Vec<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    let mut out = Vec::new();
+    let count = unsafe { DragQueryFileW(hdrop, u32::MAX, None) };
+    for i in 0..count {
+        let len = unsafe { DragQueryFileW(hdrop, i, None) } as usize;
+        let mut buf = vec![0u16; len + 1];
+        let got = unsafe { DragQueryFileW(hdrop, i, Some(&mut buf)) } as usize;
+        out.push(PathBuf::from(std::ffi::OsString::from_wide(&buf[..got])));
     }
     out
 }

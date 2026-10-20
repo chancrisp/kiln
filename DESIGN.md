@@ -93,7 +93,8 @@ test enforces this.
 - **Size.** The outer radius is 136 DIPs and the inner radius 56. The pointer still counts as on an item up to 48 DIPs past the edge. The wheel always stays 8 DIPs inside the window.
 - **Pour.** The wheel opens over 160 ms, scaling from 55% to full size with opacity, like glaze spreading from the pointer.
 - **Items.** Items are segments clockwise from the top. Each shows its icon, then its label. Format codes are in monospace and tool names in UI text.
-- **Centre.** It shows the wheel's name in the serif, with the source type below in muted monospace (PNG, or MIXED).
+- **Centre.** It shows the wheel's name in the serif, the key that opens it below in muted UI text, then the source type in muted monospace (PNG, or MIXED). The title reads `Convert · Shift`, broken across the two lines, and follows the wheel keys.
+- **Other ways in.** Right-clicking a row, the Menu key or Shift+F10 opens a native Windows menu: the wheels that have anything for the row, then Export… and Open or Show in folder, then Remove. Items that don't apply are left out. A wheel chosen there pours over the row.
 - **Hover.** Hovering fills the segment with celadon at 18% and draws a 1.5 px celadon arc on its outer edge. The icon and label keep their colour.
 - **Escape.** Escape, or releasing the key mid-drag, fades the wheel out over 120 ms.
 - **Choosing.** Dropping on an item, clicking it or pressing Enter pulses it once over 180 ms. Then the job starts and the wheel fades.

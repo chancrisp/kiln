@@ -10,6 +10,7 @@ pub mod quality;
 pub mod settings;
 pub mod theme;
 pub mod update;
+pub mod ways_in;
 pub mod wheel;
 
 #[cfg(windows)]

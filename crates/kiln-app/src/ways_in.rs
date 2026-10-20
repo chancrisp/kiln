@@ -1,0 +1,435 @@
+//! The ways into Kiln besides a drop: the right-click menu, the footer's
+//! idle hint, the empty window's lines and the wheel's title. Pure, so the
+//! copy and the rules for what shows can be tested anywhere.
+
+use std::path::Path;
+use std::time::Duration;
+
+use crate::model::Entry;
+use crate::settings::{KeyMap, Settings};
+use crate::wheel::WheelKind;
+
+/// A row as the right-click menu sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowState {
+    /// Nothing to export or show: idle, running, failed or cancelled, or a
+    /// held result that's being saved or has gone.
+    Plain,
+    /// Holds results that can be exported or opened.
+    Held,
+    /// Its results were exported to a folder.
+    Saved,
+}
+
+impl Entry {
+    /// What the right-click menu offers for this row. `saving` says an
+    /// export of it is under way; `exists` whether a path is still on disk.
+    pub fn row_state(&self, saving: bool, exists: impl Fn(&Path) -> bool) -> RowState {
+        if self.held().is_some() {
+            if saving || self.is_gone(exists) {
+                RowState::Plain
+            } else {
+                RowState::Held
+            }
+        } else if self.saved().is_some() && !saving {
+            RowState::Saved
+        } else {
+            RowState::Plain
+        }
+    }
+}
+
+/// One line of a right-click menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuItem {
+    /// Opens that wheel at the row, for the selection.
+    Wheel(WheelKind),
+    Export,
+    Open,
+    ShowInFolder,
+    Remove,
+    AddFiles,
+    Paste,
+    Separator,
+}
+
+impl MenuItem {
+    /// The item's text and its shortcut, apart: ("Tools…", "Ctrl+Enter").
+    /// The shortcut is empty where there isn't one. A wheel's shortcut
+    /// follows the wheel keys: plain Enter always opens Convert, and a
+    /// wheel's own key with Enter opens it.
+    pub fn parts(self, keys: &KeyMap) -> (&'static str, String) {
+        let enter = |w: WheelKind| match w {
+            WheelKind::Convert => "Enter".to_owned(),
+            _ => format!("{}+Enter", keys.key_for(w).name()),
+        };
+        match self {
+            MenuItem::Wheel(w) => (
+                match w {
+                    WheelKind::Convert => "Convert…",
+                    WheelKind::Tools => "Tools…",
+                    WheelKind::Actions => "File actions…",
+                },
+                enter(w),
+            ),
+            MenuItem::Export => ("Export…", "Ctrl+S".to_owned()),
+            MenuItem::Open => ("Open", String::new()),
+            MenuItem::ShowInFolder => ("Show in folder", String::new()),
+            MenuItem::Remove => ("Remove", "Delete".to_owned()),
+            MenuItem::AddFiles => ("Add files…", "Ctrl+O".to_owned()),
+            MenuItem::Paste => ("Paste", "Ctrl+V".to_owned()),
+            MenuItem::Separator => ("", String::new()),
+        }
+    }
+
+    /// The text a Windows menu takes: the label, then a tab and the
+    /// shortcut, which Windows lines up on the right.
+    pub fn text(self, keys: &KeyMap) -> String {
+        match self.parts(keys) {
+            (label, key) if key.is_empty() => label.to_owned(),
+            (label, key) => format!("{label}\t{key}"),
+        }
+    }
+}
+
+/// The menu for the rows `selection` (one state per selected row), given
+/// the wheels that have anything for them. Items that don't apply are
+/// left out, never greyed: the wheels, then Export and Open for a held
+/// result or Show in folder for a saved one, then Remove, with a
+/// separator between groups that are there. Empty without a selection.
+pub fn menu_items(selection: &[RowState], wheels: &[WheelKind]) -> Vec<MenuItem> {
+    if selection.is_empty() {
+        return vec![];
+    }
+    let one = |s: RowState| selection.len() == 1 && selection[0] == s;
+    let open: Vec<MenuItem> = WheelKind::ALL
+        .into_iter()
+        .filter(|w| wheels.contains(w))
+        .map(MenuItem::Wheel)
+        .collect();
+    let mut results = vec![];
+    if selection.contains(&RowState::Held) {
+        results.push(MenuItem::Export);
+    }
+    if one(RowState::Held) {
+        results.push(MenuItem::Open);
+    }
+    if one(RowState::Saved) {
+        results.push(MenuItem::ShowInFolder);
+    }
+    let mut items = vec![];
+    for group in [open, results, vec![MenuItem::Remove]] {
+        if group.is_empty() {
+            continue;
+        }
+        if !items.is_empty() {
+            items.push(MenuItem::Separator);
+        }
+        items.extend(group);
+    }
+    items
+}
+
+/// The menu for an empty part of the list: Add files, and Paste while the
+/// clipboard holds files.
+pub fn list_menu(can_paste: bool) -> Vec<MenuItem> {
+    let mut items = vec![MenuItem::AddFiles];
+    if can_paste {
+        items.push(MenuItem::Paste);
+    }
+    items
+}
+
+/// What the footer says when files are listed and nothing more pressing
+/// is going on.
+pub const IDLE_HINT: &str = "Right-click a file, or select it and press Enter, to convert it.";
+
+/// How long "Added 2 files." stays before the idle hint takes its place.
+pub const ADDED_FOR: Duration = Duration::from_secs(2);
+
+/// The footer's idle hint, when it should take the place of `status`:
+/// `listed` files are listed, nothing is `running`, and the status says
+/// no more than the plain count (`plain`), or is what adding files said
+/// (`added` is how long ago) and has been up for two seconds.
+pub fn idle_hint(
+    listed: usize,
+    running: bool,
+    status: &str,
+    plain: &str,
+    added: Option<Duration>,
+) -> Option<&'static str> {
+    let quiet = status.is_empty() || status == plain || added.is_some_and(|t| t >= ADDED_FOR);
+    (listed > 0 && !running && quiet).then_some(IDLE_HINT)
+}
+
+/// The empty window's lines, top to bottom, with the Add files button
+/// between the instruction and the key hint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmptyLines {
+    pub headline: &'static str,
+    pub instruction: &'static str,
+    pub button: &'static str,
+    /// Which keys to hold while dropping, as they are set now.
+    pub keys: String,
+    pub privacy: &'static str,
+    /// Last, and muted.
+    pub tagline: &'static str,
+}
+
+pub fn empty_lines(settings: &Settings) -> EmptyLines {
+    EmptyLines {
+        headline: "Drop files here",
+        instruction: "Or add them with the button below, or Ctrl+O.",
+        button: ADD_FILES,
+        keys: settings.keys.hint(),
+        privacy: "Everything converts on this PC. Nothing is uploaded.",
+        tagline: "Fire raw files into finished ones.",
+    }
+}
+
+/// The Add files button, in the empty window and the footer.
+pub const ADD_FILES: &str = "Add files";
+
+/// The title of the Open dialog Add files shows.
+pub const ADD_FILES_TITLE: &str = "Add files";
+
+/// The wheel's title with the key that opens it: "Convert · Shift".
+pub fn wheel_title(kind: WheelKind, keys: &KeyMap) -> String {
+    format!("{} · {}", kind.title(), keys.key_for(kind).name())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::actions::FileAction;
+    use crate::model::JobState;
+    use crate::settings::Modifier;
+    use crate::wheel::Action;
+    use std::path::PathBuf;
+
+    use MenuItem::*;
+    use RowState::*;
+    use WheelKind::{Actions, Convert, Tools};
+
+    const ALL: [WheelKind; 3] = [Convert, Tools, Actions];
+
+    #[test]
+    fn a_plain_row_offers_its_wheels_and_remove() {
+        assert_eq!(
+            menu_items(&[Plain], &ALL),
+            [
+                Wheel(Convert),
+                Wheel(Tools),
+                Wheel(Actions),
+                Separator,
+                Remove
+            ]
+        );
+    }
+
+    #[test]
+    fn a_wheel_with_nothing_for_the_row_is_left_out() {
+        assert_eq!(
+            menu_items(&[Plain], &[Actions, Convert]),
+            [Wheel(Convert), Wheel(Actions), Separator, Remove]
+        );
+        assert_eq!(menu_items(&[Plain], &[]), [Remove]);
+    }
+
+    #[test]
+    fn a_held_row_offers_export_and_open() {
+        assert_eq!(
+            menu_items(&[Held], &[Convert, Actions]),
+            [
+                Wheel(Convert),
+                Wheel(Actions),
+                Separator,
+                Export,
+                Open,
+                Separator,
+                Remove
+            ]
+        );
+    }
+
+    #[test]
+    fn a_saved_row_offers_show_in_folder() {
+        assert_eq!(
+            menu_items(&[Saved], &[Actions]),
+            [Wheel(Actions), Separator, ShowInFolder, Separator, Remove]
+        );
+        assert_eq!(menu_items(&[Saved], &[]), [ShowInFolder, Separator, Remove]);
+    }
+
+    #[test]
+    fn several_rows_export_together_but_open_one_at_a_time() {
+        assert_eq!(
+            menu_items(&[Held, Plain], &[Convert]),
+            [Wheel(Convert), Separator, Export, Separator, Remove]
+        );
+        assert_eq!(menu_items(&[Saved, Saved], &[]), [Remove]);
+        assert!(menu_items(&[], &ALL).is_empty());
+    }
+
+    #[test]
+    fn the_empty_list_menu_pastes_only_with_files_to_paste() {
+        assert_eq!(list_menu(true), [AddFiles, Paste]);
+        assert_eq!(list_menu(false), [AddFiles]);
+    }
+
+    #[test]
+    fn menu_text_carries_the_shortcut() {
+        let keys = KeyMap::default();
+        let text: Vec<String> = [
+            Wheel(Convert),
+            Wheel(Tools),
+            Wheel(Actions),
+            Export,
+            Open,
+            ShowInFolder,
+            Remove,
+            AddFiles,
+            Paste,
+        ]
+        .into_iter()
+        .map(|i| i.text(&keys))
+        .collect();
+        assert_eq!(
+            text,
+            [
+                "Convert…\tEnter",
+                "Tools…\tCtrl+Enter",
+                "File actions…\tAlt+Enter",
+                "Export…\tCtrl+S",
+                "Open",
+                "Show in folder",
+                "Remove\tDelete",
+                "Add files…\tCtrl+O",
+                "Paste\tCtrl+V",
+            ]
+        );
+    }
+
+    #[test]
+    fn wheel_shortcuts_follow_the_wheel_keys() {
+        let mut keys = KeyMap::default();
+        keys.assign(Tools, Modifier::Shift);
+        assert_eq!(keys.convert, Modifier::Ctrl);
+        assert_eq!(Wheel(Convert).text(&keys), "Convert…\tEnter");
+        assert_eq!(Wheel(Tools).text(&keys), "Tools…\tShift+Enter");
+        assert_eq!(Wheel(Actions).text(&keys), "File actions…\tAlt+Enter");
+        // The shortcut opens the wheel it names.
+        for w in [Tools, Actions] {
+            let m = keys.key_for(w);
+            let held = (
+                m == Modifier::Shift,
+                m == Modifier::Ctrl,
+                m == Modifier::Alt,
+            );
+            assert_eq!(keys.wheel_for(held.0, held.1, held.2), Some(w));
+        }
+    }
+
+    #[test]
+    fn the_idle_hint_waits_for_added_to_be_read() {
+        let plain = "2 files.";
+        let added = "Added 2 files.";
+        let hint = Some(IDLE_HINT);
+        let ms = Duration::from_millis;
+        assert_eq!(idle_hint(2, false, plain, plain, None), hint);
+        assert_eq!(idle_hint(2, false, "", plain, None), hint);
+        assert_eq!(idle_hint(2, false, added, plain, Some(ms(500))), None);
+        assert_eq!(idle_hint(2, false, added, plain, Some(ms(2000))), hint);
+        // Nothing listed, something running, or a status worth keeping.
+        assert_eq!(idle_hint(0, false, "", "0 files.", None), None);
+        assert_eq!(idle_hint(2, true, plain, plain, None), None);
+        let done = "Converted 2 files to JPG. Export to keep them.";
+        assert_eq!(idle_hint(2, false, done, plain, None), None);
+    }
+
+    #[test]
+    fn the_idle_hint_is_a_calm_sentence() {
+        assert_eq!(
+            IDLE_HINT,
+            "Right-click a file, or select it and press Enter, to convert it."
+        );
+        assert!(IDLE_HINT.ends_with('.') && !IDLE_HINT.contains('!'));
+    }
+
+    #[test]
+    fn the_empty_window_reads_in_order() {
+        let mut settings = Settings::default();
+        let l = empty_lines(&settings);
+        assert_eq!(l.headline, "Drop files here");
+        assert_eq!(
+            l.instruction,
+            "Or add them with the button below, or Ctrl+O."
+        );
+        assert_eq!(l.button, "Add files");
+        assert_eq!(
+            l.keys,
+            "Hold Shift while dropping to convert, Ctrl for tools, or Alt for file actions."
+        );
+        assert_eq!(l.tagline, "Fire raw files into finished ones.");
+        settings.keys.assign(Convert, Modifier::Alt);
+        assert_eq!(
+            empty_lines(&settings).keys,
+            "Hold Alt while dropping to convert, Ctrl for tools, or Shift for file actions."
+        );
+    }
+
+    #[test]
+    fn wheel_titles_name_their_key() {
+        let mut keys = KeyMap::default();
+        assert_eq!(wheel_title(Convert, &keys), "Convert · Shift");
+        assert_eq!(wheel_title(Tools, &keys), "Tools · Ctrl");
+        assert_eq!(wheel_title(Actions, &keys), "Actions · Alt");
+        keys.assign(Actions, Modifier::Shift);
+        assert_eq!(wheel_title(Actions, &keys), "Actions · Shift");
+        assert_eq!(wheel_title(Convert, &keys), "Convert · Alt");
+    }
+
+    fn entry(job: JobState) -> Entry {
+        Entry {
+            path: PathBuf::from(r"C:\in\a.png"),
+            name: "a.png".into(),
+            folder: r"C:\in".into(),
+            code: "PNG".into(),
+            size: 1,
+            targets: vec![],
+            job,
+            facts: None,
+            suggestion: None,
+            facts_at: None,
+        }
+    }
+
+    #[test]
+    fn row_states_follow_the_job() {
+        let out = PathBuf::from(r"C:\held\a.jpg");
+        let held = entry(JobState::Done {
+            action: Action::Convert("jpg".into()),
+            outputs: vec![out.clone()],
+            saved: None,
+        });
+        let there = |_: &Path| true;
+        let gone = |_: &Path| false;
+        assert_eq!(held.row_state(false, there), Held);
+        assert_eq!(held.row_state(true, there), Plain);
+        assert_eq!(held.row_state(false, gone), Plain);
+        let saved = entry(JobState::Done {
+            action: Action::Convert("jpg".into()),
+            outputs: vec![out],
+            saved: Some(PathBuf::from(r"D:\out")),
+        });
+        assert_eq!(saved.row_state(false, there), Saved);
+        // A moved file isn't a result to show.
+        let moved = entry(JobState::Done {
+            action: Action::File(FileAction::Move),
+            outputs: vec![],
+            saved: None,
+        });
+        assert_eq!(moved.row_state(false, there), Plain);
+        assert_eq!(entry(JobState::Idle).row_state(false, there), Plain);
+    }
+}
