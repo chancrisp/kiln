@@ -144,7 +144,9 @@ Success looks like this:
   - the close prompt and Clear prompt
   - the shutdown block reason, by checking that it's registered
 
-  Screenshots go in `docs/screenshots/held/`.
+  Screenshots go in `docs/ux/phase2/shots/`, with the rest of the
+  overhaul's evidence (amended 2026-10-20; first planned for
+  `docs/screenshots/held/`).
 
 ## Out of scope
 

@@ -927,7 +927,7 @@ fn settings(s: &SettingsIn) -> Node {
             Control::EngineGet(e) => Node::new(
                 Id::Setting(c),
                 Role::Hyperlink,
-                format!("Get {}", e.label()),
+                format!("Get it, {}", e.label()),
                 r,
             ),
             Control::Theme(t) => {
@@ -1633,7 +1633,7 @@ mod tests {
         let last = crate::settings::Engine::ALL[3];
         let row = named(&t, Role::Group, last.label());
         named(row, Role::Text, "Not found");
-        named(row, Role::Hyperlink, &format!("Get {}", last.label()));
+        named(row, Role::Hyperlink, &format!("Get it, {}", last.label()));
         assert_eq!(last.label(), "Calibre");
         named(row, Role::Button, "Choose");
         assert_eq!(row.help.as_deref(), Some(last.purpose()));
