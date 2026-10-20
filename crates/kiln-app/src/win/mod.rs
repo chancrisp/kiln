@@ -46,8 +46,8 @@ use crate::layout::{
     SheetLayout, TextScroll, ROW_HEIGHT,
 };
 use crate::model::{
-    self, batch_summary, leave_prompt, status_line, FileList, JobState, Leave, Next, PromptButton,
-    Tone,
+    self, batch_summary, leave_prompt, status_line, FileList, FocusButton, JobState, Leave, Next,
+    PromptButton, Tone,
 };
 use crate::quality::{self as q, Value};
 use crate::settings::{self, Engine, Settings};
@@ -677,6 +677,9 @@ struct App {
     /// A UI Automation client moved the focus: the window takes the
     /// keyboard focus once the message is done.
     take_focus: bool,
+    /// The header or footer button Tab moved the keyboard to. `None` is
+    /// the list. See `focused_button` for whether it's still there.
+    button_focus: Option<FocusButton>,
 }
 
 impl App {
@@ -856,6 +859,37 @@ impl App {
                 settle: 1.0,
                 facts,
             },
+        }
+    }
+
+    /// Where button `b` is now, if it's there.
+    fn focus_button_rect(&self, b: FocusButton) -> Option<layout::Rect> {
+        let l = self.layout();
+        match b {
+            FocusButton::AddFiles => self.add_button(),
+            FocusButton::ExportAll => self.export_button(),
+            FocusButton::Clear => l.clear_button,
+            FocusButton::Help => Some(l.help_button),
+            FocusButton::Settings => Some(l.settings_button),
+        }
+    }
+
+    /// The button the keyboard is on, while it's there and nothing covers
+    /// it. A button that went, such as Export all once everything is
+    /// saved, hands the focus back to the list.
+    fn focused_button(&self) -> Option<FocusButton> {
+        self.button_focus
+            .filter(|&b| self.over().list_live() && self.focus_button_rect(b).is_some())
+    }
+
+    /// Enter or Space on the button the keyboard is on: what a click does.
+    fn press_button(&mut self, b: FocusButton) {
+        match b {
+            FocusButton::AddFiles => self.add_files(true),
+            FocusButton::ExportAll => self.export_everything(),
+            FocusButton::Clear => self.clear(),
+            FocusButton::Help => self.open_help(),
+            FocusButton::Settings => self.open_settings(),
         }
     }
 
@@ -3524,6 +3558,8 @@ impl App {
     /// `keys` (the message's MK_ flags) says.
     fn mouse_down(&mut self, x: f32, y: f32, keys: u32) {
         let (shift, ctrl) = (keys & MK_SHIFT_FLAG != 0, keys & MK_CONTROL_FLAG != 0);
+        // The pointer takes over from the keyboard: no button keeps a ring.
+        self.button_focus = None;
         if self.sheet.is_some() {
             let hit = self.sheet_hit(x, y);
             let inside = self.sheet_layout().is_some_and(|l| l.panel.contains(x, y));
@@ -3698,6 +3734,39 @@ impl App {
             self.animate();
             return true;
         }
+        // Tab and Shift+Tab go round the list and the header and footer
+        // buttons. On a button, Enter or Space presses it, and Escape or an
+        // arrow key goes back to the list.
+        if key == VK_TAB && !ctrl && !alt {
+            self.button_focus = model::tab_stop(
+                self.focused_button(),
+                shift,
+                !self.files.is_empty(),
+                self.export_button().is_some(),
+            );
+            self.files.keyboard_used();
+            self.invalidate();
+            return true;
+        }
+        if let Some(b) = self.focused_button() {
+            match key {
+                VK_RETURN | VK_SPACE => {
+                    self.press_button(b);
+                    self.invalidate();
+                    return true;
+                }
+                VK_ESCAPE | VK_UP | VK_DOWN | VK_LEFT | VK_RIGHT | VK_HOME | VK_END => {
+                    self.button_focus = None;
+                    self.files.keyboard_used();
+                    self.invalidate();
+                    return true;
+                }
+                // Delete acts on the list's selection, so the focus goes
+                // back to it; shortcuts leave it where it is.
+                VK_DELETE | VK_BACK => self.button_focus = None,
+                _ => {}
+            }
+        }
         // Keys that move through or act on the list show its focus ring.
         if matches!(
             key,
@@ -3861,6 +3930,7 @@ impl App {
             rows,
             scroll: self.scroll,
             focus_row: self.files.focus(),
+            focus_button: self.focused_button(),
             status: &status,
             empty: &empty,
             empty_status: &empty_status,
@@ -4014,6 +4084,15 @@ impl App {
             self.take_focus = true;
         }
         let row = |app: &App, path: &Path| app.files.entries().iter().position(|e| e.path == path);
+        if req.verb == Verb::Focus {
+            // A button, or back to the list or one of its rows.
+            self.button_focus = a11y::button_of(&req.id);
+            if self.button_focus.is_some() {
+                self.files.keyboard_used();
+                self.invalidate();
+                return;
+            }
+        }
         match (&req.id, &req.verb) {
             (Id::HelpButton, Verb::Invoke) => self.open_help(),
             (Id::SettingsButton, Verb::Invoke) => self.open_settings(),
@@ -4225,7 +4304,14 @@ impl App {
         let empty_status = self.empty_status();
         let view = View {
             palette: &self.palette,
-            focus: self.files.visible_focus(),
+            // One ring at a time: on a button Tab moved to, or on the list.
+            focus: self
+                .files
+                .visible_focus()
+                .filter(|_| self.focused_button().is_none()),
+            button_ring: self
+                .focused_button()
+                .and_then(|b| self.focus_button_rect(b)),
             entries: self.files.entries(),
             notes: &self.notes,
             saving: &saving,
@@ -4683,6 +4769,7 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         status_sets: Vec::new(),
         teller: a11y::StatusTeller::default(),
         take_focus: false,
+        button_focus: None,
     });
     let app = Box::into_raw(app);
     unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, app as isize) };

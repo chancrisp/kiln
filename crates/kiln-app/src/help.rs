@@ -90,11 +90,15 @@ pub fn help_content(keys: &KeyMap) -> Vec<HelpSection> {
                 line("Escape", "Clear the selection."),
                 line(
                     "Space",
-                    "Export, show details or open the folder, as the file's link says.",
+                    "Export, show details or open the folder, as the file's link says, or stop a running file.",
                 ),
                 line(
                     "Delete or Backspace",
                     "Remove the selected files from the list.",
+                ),
+                line(
+                    "Tab, Shift+Tab",
+                    "Move between the list and the buttons. Enter or Space presses a button.",
                 ),
                 line("Ctrl+,", "Settings."),
                 line("F1", "This help."),
@@ -255,6 +259,7 @@ mod tests {
                 "Escape",
                 "Space",
                 "Delete or Backspace",
+                "Tab, Shift+Tab",
                 "Ctrl+,",
                 "F1"
             ]

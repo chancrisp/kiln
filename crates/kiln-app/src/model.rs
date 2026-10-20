@@ -371,6 +371,49 @@ pub fn after_stop(asked: usize, held: usize) -> Next {
     }
 }
 
+/// A header or footer button the keyboard can be on, besides the list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusButton {
+    AddFiles,
+    ExportAll,
+    Clear,
+    Help,
+    Settings,
+}
+
+/// Where Tab goes from `at`, or Shift+Tab with `back`; `None` is the list.
+/// With files `listed` the order runs from the list through the footer's
+/// Add files, Export all (where `export_all` shows) and Clear, then the
+/// header's Help and Settings, and round to the list. The empty window
+/// has no list: Add files, Help, Settings and round, with `None` before
+/// Add files.
+pub fn tab_stop(
+    at: Option<FocusButton>,
+    back: bool,
+    listed: bool,
+    export_all: bool,
+) -> Option<FocusButton> {
+    use FocusButton::*;
+    let order: Vec<Option<FocusButton>> = if listed {
+        [None, Some(AddFiles)]
+            .into_iter()
+            .chain(export_all.then_some(Some(ExportAll)))
+            .chain([Some(Clear), Some(Help), Some(Settings)])
+            .collect()
+    } else {
+        vec![Some(AddFiles), Some(Help), Some(Settings)]
+    };
+    let n = order.len();
+    match order.iter().position(|&x| x == at) {
+        Some(i) if back => order[(i + n - 1) % n],
+        Some(i) => order[(i + 1) % n],
+        // From somewhere not in the order: the empty window's start, or
+        // a button that has just gone.
+        None if back => order[n - 1],
+        None => order[0],
+    }
+}
+
 /// Where an export dialog opens: the last folder exported to in this run,
 /// else the Start exports in setting, else the source's own folder.
 pub fn export_start(last: Option<&Path>, setting: Option<&Path>, source: &Path) -> PathBuf {
@@ -2301,6 +2344,64 @@ mod tests {
         .map(|b| b.label())
         .collect();
         assert_eq!(labels, ["Export all", "Discard", "Cancel"]);
+    }
+
+    #[test]
+    fn tab_goes_round_the_list_and_the_buttons() {
+        use FocusButton::*;
+        let walk = |back: bool, listed: bool, export_all: bool| {
+            let mut at = tab_stop(None, back, listed, export_all);
+            let mut seen = vec![at];
+            while seen.len() < 8 {
+                at = tab_stop(at, back, listed, export_all);
+                seen.push(at);
+            }
+            seen
+        };
+        // From the list: the footer left to right, then the header.
+        assert_eq!(
+            walk(false, true, true)[..6],
+            [
+                Some(AddFiles),
+                Some(ExportAll),
+                Some(Clear),
+                Some(Help),
+                Some(Settings),
+                None
+            ]
+        );
+        // Export all is only on the path while it shows.
+        assert_eq!(
+            walk(false, true, false)[..5],
+            [
+                Some(AddFiles),
+                Some(Clear),
+                Some(Help),
+                Some(Settings),
+                None
+            ]
+        );
+        // Shift+Tab goes the other way.
+        assert_eq!(
+            walk(true, true, true)[..6],
+            [
+                Some(Settings),
+                Some(Help),
+                Some(Clear),
+                Some(ExportAll),
+                Some(AddFiles),
+                None
+            ]
+        );
+        // The empty window: its Add files, Help and Settings, round.
+        assert_eq!(
+            walk(false, false, false)[..4],
+            [Some(AddFiles), Some(Help), Some(Settings), Some(AddFiles)]
+        );
+        assert_eq!(tab_stop(None, true, false, false), Some(Settings));
+        // A button that's gone starts the path again.
+        assert_eq!(tab_stop(Some(ExportAll), false, true, false), None);
+        assert_eq!(tab_stop(Some(Clear), false, false, false), Some(AddFiles));
     }
 
     #[test]

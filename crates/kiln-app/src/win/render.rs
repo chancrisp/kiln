@@ -114,6 +114,9 @@ pub struct View<'a> {
     /// The row the keyboard is on; it keeps a ring even with nothing
     /// selected.
     pub focus: Option<usize>,
+    /// The header or footer button Tab moved the keyboard to, which takes
+    /// the ring instead.
+    pub button_ring: Option<Rect>,
     pub hover_row: Option<usize>,
     pub hover_cancel: bool,
     pub hover_link: bool,
@@ -543,6 +546,9 @@ impl Renderer {
             } else {
                 d.list(&l, v).and_then(|_| d.footer(&l, v))
             };
+        }
+        if let (Ok(()), Some(r)) = (&result, &v.button_ring) {
+            d.focus_ring(r, p);
         }
         if let (Ok(()), Some(wv)) = (&result, &v.wheel) {
             result = d.wheel(wv, p);

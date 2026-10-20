@@ -14,7 +14,7 @@ use crate::layout::{
     self, Control, DialogButton, Rect, SettingsLayout, SettingsRow, SettingsTab, SheetControl,
     SheetLayout,
 };
-use crate::model::{Entry, JobState};
+use crate::model::{Entry, FocusButton, JobState};
 use crate::quality::{QualityDefaults, Value};
 use crate::settings::{KeyMap, ThemeChoice};
 use crate::ways_in::EmptyLines;
@@ -516,6 +516,9 @@ pub struct Input<'a> {
     pub scroll: f32,
     /// The row the keyboard is on.
     pub focus_row: Option<usize>,
+    /// The header or footer button Tab moved the keyboard to, which has
+    /// the focus instead of the list.
+    pub focus_button: Option<FocusButton>,
     /// What the footer says.
     pub status: &'a str,
     pub empty: &'a EmptyLines,
@@ -549,6 +552,29 @@ pub fn row_name(e: &Entry, instead: Option<&str>) -> String {
     };
     // The row's dots read as pauses.
     format!("{}, {}", e.name, line.replace("  ·  ", ", "))
+}
+
+/// The element for a header or footer button.
+pub fn button_id(b: FocusButton) -> Id {
+    match b {
+        FocusButton::AddFiles => Id::AddFiles,
+        FocusButton::ExportAll => Id::ExportAll,
+        FocusButton::Clear => Id::Clear,
+        FocusButton::Help => Id::HelpButton,
+        FocusButton::Settings => Id::SettingsButton,
+    }
+}
+
+/// The header or footer button an element is, if it's one.
+pub fn button_of(id: &Id) -> Option<FocusButton> {
+    match id {
+        Id::AddFiles => Some(FocusButton::AddFiles),
+        Id::ExportAll => Some(FocusButton::ExportAll),
+        Id::Clear => Some(FocusButton::Clear),
+        Id::HelpButton => Some(FocusButton::Help),
+        Id::SettingsButton => Some(FocusButton::Settings),
+        _ => None,
+    }
 }
 
 /// A wheel item's name: a format's plain description, or the tool or
@@ -611,6 +637,9 @@ fn focus(input: &Input) -> Option<Id> {
     if let Some(wh) = &input.wheel {
         return Some(wh.hover.map_or(Id::Wheel, Id::WheelItem));
     }
+    if let Some(b) = input.focus_button {
+        return Some(button_id(b));
+    }
     if input.rows.is_empty() {
         return None;
     }
@@ -645,8 +674,10 @@ fn union(rects: impl IntoIterator<Item = Rect>) -> Rect {
 fn main(input: &Input) -> Vec<Node> {
     let (w, h) = input.size;
     let l = layout::layout(w, h, input.rows.len());
+    // The header and footer buttons are on the Tab path.
     let mut out = vec![
         Node::new(Id::HelpButton, Role::Button, "Help", l.help_button)
+            .focusable()
             .help(Some(crate::help::HELP_TIP)),
         Node::new(
             Id::SettingsButton,
@@ -654,6 +685,7 @@ fn main(input: &Input) -> Vec<Node> {
             "Settings",
             l.settings_button,
         )
+        .focusable()
         .help(Some(crate::help::SETTINGS_TIP)),
     ];
     let lines = input.empty;
@@ -663,6 +695,7 @@ fn main(input: &Input) -> Vec<Node> {
             text(Id::DropLine(0), lines.instruction, e.instruction),
             Some(
                 Node::new(Id::AddFiles, Role::Button, lines.button, e.button)
+                    .focusable()
                     .help(Some(crate::help::ADD_FILES_TIP)),
             ),
             text(Id::DropLine(1), input.empty_status, e.status),
@@ -712,6 +745,7 @@ fn main(input: &Input) -> Vec<Node> {
     out.extend(status);
     out.push(
         Node::new(Id::AddFiles, Role::Button, lines.button, add)
+            .focusable()
             .help(Some(crate::help::ADD_FILES_TIP)),
     );
     if let Some(label) = input.export_all {
@@ -722,10 +756,11 @@ fn main(input: &Input) -> Vec<Node> {
                 label,
                 layout::export_all_button(&clear),
             )
+            .focusable()
             .help(Some(crate::help::EXPORT_ALL_TIP)),
         );
     }
-    out.push(Node::new(Id::Clear, Role::Button, "Clear", clear));
+    out.push(Node::new(Id::Clear, Role::Button, "Clear", clear).focusable());
     out
 }
 
@@ -1130,6 +1165,7 @@ mod tests {
             rows,
             scroll: 0.0,
             focus_row: None,
+            focus_button: None,
             status: "",
             empty,
             empty_status: "",
@@ -1173,6 +1209,72 @@ mod tests {
             assert!(keys.insert(c.key), "{:?} shares its key", c.id);
             assert_eq!(c.key, c.id.key());
         });
+    }
+
+    #[test]
+    fn tab_reaches_the_header_and_footer_buttons() {
+        let lines = empty_lines(&Settings::default());
+        let es = [entry(
+            "a.png",
+            JobState::Done {
+                action: Action::Convert("jpg".into()),
+                outputs: vec![PathBuf::from("held/a.jpg")],
+                saved: None,
+            },
+        )];
+        let mut i = input(&lines, rows(&es));
+        i.export_all = Some("Export all (1)");
+        i.focus_row = Some(0);
+        let t = tree(&i);
+        for id in [
+            Id::HelpButton,
+            Id::SettingsButton,
+            Id::AddFiles,
+            Id::ExportAll,
+            Id::Clear,
+        ] {
+            let n = t.find(&id).unwrap();
+            assert!(n.states.focusable, "{id:?}");
+            assert!(!n.states.focused, "{id:?}");
+            assert_eq!(button_of(&id).map(button_id), Some(id));
+        }
+        assert_eq!(t.focused().unwrap().id, Id::Row(es[0].path.clone()));
+        // On a button, it has the focus and the row doesn't.
+        for b in [
+            FocusButton::AddFiles,
+            FocusButton::ExportAll,
+            FocusButton::Clear,
+            FocusButton::Help,
+            FocusButton::Settings,
+        ] {
+            i.focus_button = Some(b);
+            let t = tree(&i);
+            let focused: Vec<&Id> = {
+                let mut all = vec![];
+                t.walk(&mut |n| {
+                    if n.states.focused {
+                        all.push(&n.id);
+                    }
+                });
+                all
+            };
+            assert_eq!(focused, [&button_id(b)]);
+        }
+        assert_eq!(button_of(&Id::List), None);
+    }
+
+    #[test]
+    fn the_empty_windows_buttons_take_the_focus() {
+        let lines = empty_lines(&Settings::default());
+        let mut i = input(&lines, vec![]);
+        let t = tree(&i);
+        for id in [Id::AddFiles, Id::HelpButton, Id::SettingsButton] {
+            assert!(t.find(&id).unwrap().states.focusable, "{id:?}");
+        }
+        assert!(t.focused().is_none());
+        i.focus_button = Some(FocusButton::AddFiles);
+        let t = tree(&i);
+        assert_eq!(t.focused().unwrap().id, Id::AddFiles);
     }
 
     #[test]
