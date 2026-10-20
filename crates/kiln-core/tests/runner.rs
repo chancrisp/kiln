@@ -131,9 +131,13 @@ fn failures_carry_a_line_and_the_details() {
     let JobEvent::Finished(_, Err(err)) = events.last().unwrap() else {
         panic!("expected a failure");
     };
-    assert!(err
-        .message
-        .starts_with("FFmpeg couldn't convert the file: "));
+    // A plain sentence with a next step; FFmpeg's own words are in the
+    // details.
+    assert_eq!(
+        err.message,
+        "This file looks damaged, or isn't really a WAV. Try opening it in another app."
+    );
+    assert_eq!(err.engine, Some("FFmpeg"));
     assert!(!err.details.is_empty());
     assert!(!err.cancelled);
 }

@@ -35,6 +35,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::model::{Prompt, PromptButton};
+use crate::settings::Engine;
 
 /// Put `text` on the clipboard.
 pub fn set_clipboard(hwnd: HWND, text: &str) -> Result<()> {
@@ -387,6 +388,15 @@ pub fn open_file(hwnd: HWND, file: &Path) -> bool {
     let path = HSTRING::from(file.as_os_str());
     let r = unsafe { ShellExecuteW(Some(hwnd), w!("open"), &path, None, None, SW_SHOWNORMAL) };
     // Anything above 32 is success.
+    r.0 as isize > 32
+}
+
+/// Open `engine`'s official download page in the browser. It takes the
+/// engine, not an address, so Get it can only ever open one of the four
+/// fixed pages. False if Windows couldn't.
+pub fn open_download_page(hwnd: HWND, engine: Engine) -> bool {
+    let url = HSTRING::from(engine.download_page());
+    let r = unsafe { ShellExecuteW(Some(hwnd), w!("open"), &url, None, None, SW_SHOWNORMAL) };
     r.0 as isize > 32
 }
 

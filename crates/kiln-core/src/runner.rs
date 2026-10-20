@@ -13,6 +13,7 @@ use std::thread::{self, JoinHandle};
 use crate::converter::{CancelToken, Options, Progress};
 use crate::error::Error;
 use crate::job::Kiln;
+use crate::plain;
 use crate::tools::Tool;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -28,25 +29,77 @@ pub enum JobKind {
 /// full output for "Show details".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JobError {
+    /// One plain sentence, whole: the row shows it, cut short if it must.
     pub message: String,
     pub details: String,
+    /// Who wrote `details`: the engine, or `None` for Kiln itself.
+    pub engine: Option<&'static str>,
     pub cancelled: bool,
     /// The file a write ran out of room for, when a full disk is why the
     /// job failed.
     pub no_room: Option<PathBuf>,
 }
 
-impl From<Error> for JobError {
-    fn from(e: Error) -> Self {
-        let details = match &e {
-            Error::EngineFailed { details, .. } => details.clone(),
-            _ => String::new(),
+impl JobError {
+    /// What `e` tells the user, for a job that read `source` files and
+    /// wrote `target` ones (extensions). An engine failure Kiln recognises
+    /// becomes a plain sentence with a next step; the engine's own words
+    /// go to the details.
+    pub fn new(e: Error, source: &str, target: &str) -> Self {
+        let (message, details, engine) = match &e {
+            Error::EngineFailed {
+                engine,
+                summary,
+                details,
+            } => {
+                let raw = format!(
+                    "{summary}
+{details}"
+                );
+                let shown = if details.trim().is_empty() {
+                    summary.clone()
+                } else {
+                    details.clone()
+                };
+                (
+                    plain::plain_failure_for(engine, source, target, &raw),
+                    shown,
+                    Some(*engine),
+                )
+            }
+            Error::EngineMissing { engine } => (plain::missing_engine(engine), String::new(), None),
+            _ => (e.to_string(), String::new(), None),
         };
         JobError {
             cancelled: matches!(e, Error::Cancelled),
             no_room: e.no_room().map(Into::into),
-            message: e.to_string(),
+            message,
             details,
+            engine,
+        }
+    }
+}
+
+impl From<Error> for JobError {
+    fn from(e: Error) -> Self {
+        JobError::new(e, "", "")
+    }
+}
+
+impl JobKind {
+    /// The extensions a job reads and writes, for its error sentences.
+    fn exts(&self) -> (String, String) {
+        let ext = |p: &PathBuf| {
+            p.extension()
+                .map(|e| e.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        match self {
+            JobKind::Convert { input, target } => (ext(input), target.clone()),
+            JobKind::Tool { inputs, .. } => {
+                let source = inputs.first().map(ext).unwrap_or_default();
+                (source.clone(), source)
+            }
         }
     }
 }
@@ -165,7 +218,8 @@ fn work(
             Err(JobError::from(Error::Cancelled))
         } else {
             let mut progress = |p: Progress| on_event(JobEvent::Progress(id, p));
-            caught(&job.cancel, || match &job.kind {
+            let (source, target) = job.kind.exts();
+            caught(&job.cancel, (&source, &target), || match &job.kind {
                 JobKind::Convert { input, target } => {
                     kiln.convert_outputs(input, target, &job.options, &mut progress, &job.cancel)
                 }
@@ -184,10 +238,11 @@ fn work(
 /// had already cancelled when it panicked is cancelled, not failed.
 fn caught(
     cancel: &CancelToken,
+    (source, target): (&str, &str),
     f: impl FnOnce() -> crate::Result<Vec<PathBuf>>,
 ) -> Result<Vec<PathBuf>, JobError> {
     panic::catch_unwind(AssertUnwindSafe(f))
-        .map(|r| r.map_err(JobError::from))
+        .map(|r| r.map_err(|e| JobError::new(e, source, target)))
         .unwrap_or_else(|p| {
             Err(if cancel.is_cancelled() {
                 JobError::from(Error::Cancelled)
@@ -207,6 +262,7 @@ fn panicked(payload: Box<dyn Any + Send>) -> JobError {
     JobError {
         message: PANICKED.to_owned(),
         details,
+        engine: None,
         cancelled: false,
         no_room: None,
     }
@@ -216,29 +272,97 @@ fn panicked(payload: Box<dyn Any + Send>) -> JobError {
 mod tests {
     use super::*;
 
+    const NO_EXT: (&str, &str) = ("", "");
+
     #[test]
     fn a_panicking_job_is_a_failed_job() {
-        let e = caught(&CancelToken::new(), || panic!("handles() checked the type")).unwrap_err();
+        let e = caught(&CancelToken::new(), NO_EXT, || {
+            panic!("handles() checked the type")
+        })
+        .unwrap_err();
         assert_eq!(e.message, PANICKED);
         assert_eq!(e.details, "handles() checked the type");
         assert!(!e.cancelled);
         let n = 3;
-        let e = caught(&CancelToken::new(), || panic!("{n} went wrong")).unwrap_err();
+        let e = caught(&CancelToken::new(), NO_EXT, || panic!("{n} went wrong")).unwrap_err();
         assert_eq!(e.details, "3 went wrong");
-        assert_eq!(caught(&CancelToken::new(), || Ok(vec![])), Ok(vec![]));
-        let e = caught(&CancelToken::new(), || Err(Error::Cancelled)).unwrap_err();
+        assert_eq!(
+            caught(&CancelToken::new(), NO_EXT, || Ok(vec![])),
+            Ok(vec![])
+        );
+        let e = caught(&CancelToken::new(), NO_EXT, || Err(Error::Cancelled)).unwrap_err();
         assert!(e.cancelled);
     }
 
     #[test]
     fn a_job_that_panics_after_a_cancel_is_cancelled() {
         let cancel = CancelToken::new();
-        let e = caught(&cancel, || {
+        let e = caught(&cancel, NO_EXT, || {
             cancel.cancel();
             panic!("the engine went down while stopping")
         })
         .unwrap_err();
         assert!(e.cancelled);
         assert_eq!(e, JobError::from(Error::Cancelled));
+    }
+
+    #[test]
+    fn an_engine_failure_becomes_a_plain_sentence() {
+        let e = JobError::new(
+            Error::EngineFailed {
+                engine: "FFmpeg",
+                summary: "Error opening input: Invalid data found when processing input".into(),
+                details: "ffmpeg version 7
+Error opening input: Invalid data found when processing input"
+                    .into(),
+            },
+            "mp4",
+            "gif",
+        );
+        assert_eq!(
+            e.message,
+            "This file looks damaged, or isn't really a MP4. Try opening it in another app."
+        );
+        assert!(e.details.starts_with("ffmpeg version 7"));
+        assert_eq!(e.engine, Some("FFmpeg"));
+
+        // Kiln's own PDF failures have only a summary: it becomes the
+        // details.
+        let e = JobError::new(
+            Error::EngineFailed {
+                engine: "Kiln",
+                summary: "the PDF has no pages.".into(),
+                details: String::new(),
+            },
+            "pdf",
+            "png",
+        );
+        assert_eq!(e.message, "Kiln couldn't convert the file.");
+        assert_eq!(e.details, "the PDF has no pages.");
+    }
+
+    #[test]
+    fn a_missing_engine_says_where_to_look() {
+        let e = JobError::new(Error::EngineMissing { engine: "Pandoc" }, "md", "docx");
+        assert_eq!(
+            e.message,
+            "Needs Pandoc, which isn't installed. Settings > Engines says where to get it."
+        );
+        assert!(e.details.is_empty());
+        assert_eq!(e.engine, None);
+    }
+
+    #[test]
+    fn a_job_names_what_it_reads_and_writes() {
+        let convert = JobKind::Convert {
+            input: "a/clip.MOV".into(),
+            target: "mp4".into(),
+        };
+        assert_eq!(convert.exts(), ("MOV".to_owned(), "mp4".to_owned()));
+        let tool = JobKind::Tool {
+            tool: Tool::Merge,
+            inputs: vec!["a.pdf".into(), "b.pdf".into()],
+        };
+        assert_eq!(tool.exts(), ("pdf".to_owned(), "pdf".to_owned()));
     }
 }

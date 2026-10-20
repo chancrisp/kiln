@@ -28,10 +28,37 @@ pub enum JobState {
         saved: Option<PathBuf>,
     },
     Failed {
+        /// One plain sentence, whole. The row cuts it short if it must.
         message: String,
+        /// The engine's output, for Show details.
         details: String,
+        /// Who wrote `details`: the engine, or `None` for Kiln itself.
+        engine: Option<&'static str>,
     },
     Cancelled,
+}
+
+/// The details dialog's title: "What FFmpeg said", or "What Kiln said"
+/// when the words are Kiln's own.
+pub fn details_title(engine: Option<&str>) -> String {
+    format!("What {} said", engine.unwrap_or("Kiln"))
+}
+
+/// The details dialog's Copy button, which reads "Copied" for a moment
+/// after a copy. `since` is how long ago the last copy was.
+pub fn copy_label(since: Option<std::time::Duration>) -> &'static str {
+    match since {
+        Some(d) if d < COPIED_FOR => "Copied",
+        _ => "Copy",
+    }
+}
+
+/// How long the Copy button says "Copied".
+pub const COPIED_FOR: std::time::Duration = std::time::Duration::from_millis(1200);
+
+/// Text for the clipboard, with Windows line ends.
+pub fn clipboard_lines(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\n', "\r\n")
 }
 
 /// How a row's second line is coloured.
@@ -358,7 +385,10 @@ impl Entry {
                 };
                 (format!("Ready: {first}{more}"), Tone::Result)
             }
-            JobState::Failed { message, .. } => (message.clone(), Tone::Crack),
+            JobState::Failed { message, .. } => (
+                message.split_whitespace().collect::<Vec<_>>().join(" "),
+                Tone::Crack,
+            ),
             JobState::Cancelled => ("Cancelled.".to_owned(), Tone::Muted),
         }
     }
@@ -388,11 +418,25 @@ impl Entry {
     }
 
     /// The link at the right of the row: "Show details" on a failed row
-    /// with more to show, "Export" on a row holding results.
-    pub fn link(&self) -> Option<&'static str> {
+    /// with more to show, "Export" on a row holding results. `cut` says
+    /// the row's line doesn't fit, so its whole sentence is more to show.
+    pub fn link(&self, cut: bool) -> Option<&'static str> {
         match &self.job {
-            JobState::Failed { details, .. } if !details.is_empty() => Some("Show details"),
+            JobState::Failed { .. } if self.details(cut).is_some() => Some("Show details"),
             _ if self.held().is_some() => Some("Export"),
+            _ => None,
+        }
+    }
+
+    /// What Show details opens on a failed row: the dialog's title and
+    /// text. That's the engine's output when there is some, else the
+    /// whole sentence when the row had to cut it short (`cut`).
+    pub fn details(&self, cut: bool) -> Option<(String, String)> {
+        match &self.job {
+            JobState::Failed {
+                details, engine, ..
+            } if !details.trim().is_empty() => Some((details_title(*engine), details.clone())),
+            JobState::Failed { message, .. } if cut => Some((details_title(None), message.clone())),
             _ => None,
         }
     }
@@ -1299,10 +1343,21 @@ mod tests {
         };
         assert_eq!(e.line().0, "Ready: a part 1.wav and 1 more");
         e.job = JobState::Failed {
-            message: "FFmpeg isn't installed. Get it from Settings > Engines.".into(),
+            message:
+                "Needs FFmpeg, which isn't installed.\nSettings > Engines says where to get it."
+                    .into(),
             details: String::new(),
+            engine: None,
         };
-        assert_eq!(e.line().1, Tone::Crack);
+        // One line, whole: the row cuts it short only where it must.
+        assert_eq!(
+            e.line(),
+            (
+                "Needs FFmpeg, which isn't installed. Settings > Engines says where to get it."
+                    .to_owned(),
+                Tone::Crack
+            )
+        );
     }
 
     #[test]
@@ -1630,25 +1685,61 @@ mod tests {
     fn rows_link_to_details_or_export() {
         let mut failed = row("a.png");
         failed.job = JobState::Failed {
-            message: "Couldn't convert the file to JPG.".into(),
+            message: "FFmpeg couldn't convert the file.".into(),
             details: "engine output".into(),
+            engine: Some("FFmpeg"),
         };
-        assert_eq!(failed.link(), Some("Show details"));
+        assert_eq!(failed.link(false), Some("Show details"));
+        assert_eq!(
+            failed.details(false),
+            Some(("What FFmpeg said".to_owned(), "engine output".to_owned()))
+        );
         failed.job = JobState::Failed {
-            message: "Couldn't convert the file to JPG.".into(),
+            message: "There's no plain border to crop.".into(),
             details: String::new(),
+            engine: None,
         };
-        assert_eq!(failed.link(), None);
+        assert_eq!(failed.link(false), None);
+        assert_eq!(failed.details(false), None);
+        // A line cut short shows its whole sentence, in Kiln's words.
+        assert_eq!(failed.link(true), Some("Show details"));
+        assert_eq!(
+            failed.details(true),
+            Some((
+                "What Kiln said".to_owned(),
+                "There's no plain border to crop.".to_owned()
+            ))
+        );
         let held = held_row("a.png", &["held/a.jpg"], None);
-        assert_eq!(held.link(), Some("Export"));
+        assert_eq!(held.link(false), Some("Export"));
+        assert_eq!(held.link(true), Some("Export"));
+        assert_eq!(held.details(true), None);
         assert_eq!(held.saved(), None);
         let saved = held_row("a.png", &[r"C:\Out\a.jpg"], Some(r"C:\Out"));
-        assert_eq!(saved.link(), None);
+        assert_eq!(saved.link(false), None);
         assert_eq!(
             saved.saved(),
             Some((Path::new(r"C:\Out"), &[PathBuf::from(r"C:\Out\a.jpg")][..]))
         );
-        assert_eq!(row("idle.png").link(), None);
+        assert_eq!(row("idle.png").link(true), None);
+    }
+
+    #[test]
+    fn the_details_dialog_says_whose_words_they_are() {
+        assert_eq!(details_title(Some("FFmpeg")), "What FFmpeg said");
+        assert_eq!(details_title(Some("LibreOffice")), "What LibreOffice said");
+        assert_eq!(details_title(Some("Kiln")), "What Kiln said");
+        assert_eq!(details_title(None), "What Kiln said");
+    }
+
+    #[test]
+    fn copy_says_copied_for_a_moment() {
+        use std::time::Duration;
+        assert_eq!(copy_label(None), "Copy");
+        assert_eq!(copy_label(Some(Duration::ZERO)), "Copied");
+        assert_eq!(copy_label(Some(Duration::from_millis(1199))), "Copied");
+        assert_eq!(copy_label(Some(Duration::from_millis(1200))), "Copy");
+        assert_eq!(clipboard_lines("a\nb\r\nc"), "a\r\nb\r\nc");
     }
 
     #[test]

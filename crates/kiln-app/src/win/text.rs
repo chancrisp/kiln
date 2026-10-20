@@ -190,6 +190,24 @@ impl Text {
             m.widthIncludingTrailingWhitespace
         }
     }
+
+    /// Height of `s` wrapped to `width` in `format`, for scrolling it.
+    pub fn block_height(&self, s: &str, format: &IDWriteTextFormat, width: f32) -> f32 {
+        let wide: Vec<u16> = s.encode_utf16().collect();
+        unsafe {
+            let Ok(layout) = self
+                .factory
+                .CreateTextLayout(&wide, format, width.max(1.0), 1e6)
+            else {
+                return 0.0;
+            };
+            let mut m = DWRITE_TEXT_METRICS::default();
+            if layout.GetMetrics(&mut m).is_err() {
+                return 0.0;
+            }
+            m.height
+        }
+    }
 }
 
 /// The bundled serif as a private font collection. Needs Windows 10 1703

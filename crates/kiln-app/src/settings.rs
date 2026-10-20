@@ -212,6 +212,11 @@ pub struct EnginePaths {
 }
 
 /// The engines Kiln runs as separate programs.
+pub const FFMPEG_DOWNLOAD: &str = "https://ffmpeg.org/download.html";
+pub const PANDOC_DOWNLOAD: &str = "https://pandoc.org/installing.html";
+pub const LIBREOFFICE_DOWNLOAD: &str = "https://www.libreoffice.org/download/";
+pub const CALIBRE_DOWNLOAD: &str = "https://calibre-ebook.com/download";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Engine {
     Ffmpeg,
@@ -234,6 +239,28 @@ impl Engine {
             Engine::Pandoc => "Pandoc",
             Engine::LibreOffice => "LibreOffice",
             Engine::Calibre => "Calibre",
+        }
+    }
+
+    /// What the engine is for, under its name in Settings > Engines.
+    pub fn purpose(self) -> &'static str {
+        match self {
+            Engine::Ffmpeg => "Audio, video, GIF, HEIC and AVIF.",
+            Engine::Pandoc => "Markdown, HTML and other text documents.",
+            Engine::LibreOffice => "Word, Excel and PowerPoint files, and PDF output.",
+            Engine::Calibre => "E-books.",
+        }
+    }
+
+    /// The engine's official download page, which Get it opens in the
+    /// browser. These four are the only addresses Kiln ever opens for an
+    /// engine; Kiln itself never downloads anything.
+    pub fn download_page(self) -> &'static str {
+        match self {
+            Engine::Ffmpeg => FFMPEG_DOWNLOAD,
+            Engine::Pandoc => PANDOC_DOWNLOAD,
+            Engine::LibreOffice => LIBREOFFICE_DOWNLOAD,
+            Engine::Calibre => CALIBRE_DOWNLOAD,
         }
     }
 
@@ -572,6 +599,34 @@ mod opt_path {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_engine_says_what_it_is_for() {
+        let lines: Vec<_> = Engine::ALL.iter().map(|e| e.purpose()).collect();
+        assert_eq!(
+            lines,
+            [
+                "Audio, video, GIF, HEIC and AVIF.",
+                "Markdown, HTML and other text documents.",
+                "Word, Excel and PowerPoint files, and PDF output.",
+                "E-books.",
+            ]
+        );
+    }
+
+    #[test]
+    fn get_it_opens_only_the_official_pages() {
+        let pages: Vec<_> = Engine::ALL.iter().map(|e| e.download_page()).collect();
+        assert_eq!(
+            pages,
+            [
+                "https://ffmpeg.org/download.html",
+                "https://pandoc.org/installing.html",
+                "https://www.libreoffice.org/download/",
+                "https://calibre-ebook.com/download",
+            ]
+        );
+    }
 
     #[test]
     fn the_hint_follows_the_keys() {

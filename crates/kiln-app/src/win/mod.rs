@@ -38,8 +38,8 @@ use kiln_core::{
 
 use crate::actions::{self, FileAction};
 use crate::layout::{
-    self, Control, SettingsLayout, SettingsShape, SettingsTab, SheetControl, SheetLayout,
-    ROW_HEIGHT,
+    self, Control, DialogButton, SettingsLayout, SettingsShape, SettingsTab, SheetControl,
+    SheetLayout, TextScroll, ROW_HEIGHT,
 };
 use crate::model::{
     self, batch_summary, leave_prompt, status_line, FileList, JobState, Leave, PromptButton, Tone,
@@ -52,12 +52,15 @@ use crate::ways_in::{self, MenuItem, RowState};
 use crate::wheel::{self, Action, Spot, Wheel, WheelKind};
 use drop::{DragEvent, DropTarget, DRAG_ENTER, DRAG_LEAVE, DRAG_OVER, WM_KILN_DRAG, WM_KILN_DROP};
 use inspect::Inspector;
-use render::{Renderer, RowAnim, SettingsView, SheetView, View, WheelView};
+use render::{DetailsView, Renderer, RowAnim, SettingsView, SheetView, View, WheelView};
 
 const ANIM_TIMER: usize = 1;
 /// Fires once, when "Added 2 files." has been up long enough for the
 /// footer's idle hint to take its place.
 const HINT_TIMER: usize = 2;
+/// Fires once, when the details dialog's "Copied" has been up long
+/// enough to read "Copy" again.
+const COPIED_TIMER: usize = 3;
 /// Added to the hint timer's wait, so it fires after the two seconds.
 const HINT_SLACK: Duration = Duration::from_millis(50);
 const FRAME_MS: u32 = 16;
@@ -349,6 +352,27 @@ struct SettingsUi {
     focus: Option<usize>,
     output_line: (String, bool),
     engine_lines: [(String, bool); 4],
+    /// Engines Kiln can't find, which get a Get it link.
+    engine_missing: [bool; 4],
+}
+
+/// The text beside a settings chooser, and whether it's muted.
+type ChooserLine = (String, bool);
+
+/// The details dialog: what a failed job's engine said.
+struct DetailsUi {
+    /// "What FFmpeg said".
+    title: String,
+    text: String,
+    /// How far the text is scrolled, in DIPs from its top.
+    scroll: f32,
+    /// The button with keyboard focus. It starts on Copy.
+    focus: DialogButton,
+    hover: Option<DialogButton>,
+    /// The button the pointer went down on; it acts on release.
+    pressed: Option<DialogButton>,
+    /// When the text was last copied, for the button's "Copied".
+    copied: Option<Instant>,
 }
 
 struct RowTimes {
@@ -427,15 +451,13 @@ struct App {
     wheel: Option<WheelUi>,
     sheet: Option<SheetUi>,
     next_sheet: u64,
-    /// Engine output shown in the details dialog.
-    details: Option<String>,
-    dialog_close_hover: bool,
+    /// The details dialog, while it's open.
+    details: Option<DetailsUi>,
     status: String,
     clear_hover: bool,
     clear_pressed: bool,
     /// The settings control the pointer went down on; it acts on release.
     settings_pressed: Option<usize>,
-    dialog_close_pressed: bool,
     update: UpdateState,
     tracking_mouse: bool,
     dpi: f32,
@@ -2180,12 +2202,11 @@ impl App {
                     },
                     Err(e) if e.cancelled => JobState::Cancelled,
                     Err(e) => JobState::Failed {
-                        // One plain line in the row; the rest is in the
-                        // details.
-                        message: self.no_room(e).unwrap_or_else(|| {
-                            e.message.lines().next().unwrap_or_default().to_owned()
-                        }),
+                        // One plain sentence in the row; the engine's own
+                        // words are in the details.
+                        message: self.no_room(e).unwrap_or_else(|| e.message.clone()),
                         details: e.details.clone(),
+                        engine: e.engine,
                     },
                 };
                 for path in &job.paths {
@@ -2336,6 +2357,7 @@ impl App {
                     JobState::Failed {
                         message,
                         details: String::new(),
+                        engine: None,
                     }
                 }
             };
@@ -2401,28 +2423,36 @@ impl App {
                     .map_or_else(SettingsTab::default, |ui| ui.tab),
                 output_custom: self.settings.output_folder.is_some(),
                 engine_custom: Engine::ALL.map(|k| e.get(k).is_some()),
+                engine_missing: self
+                    .settings_ui
+                    .as_ref()
+                    .map_or([false; 4], |ui| ui.engine_missing),
             },
         )
     }
 
-    /// The text beside each chooser, refreshed whenever settings change.
-    fn settings_lines(&self) -> ((String, bool), [(String, bool); 4]) {
+    /// The text beside each chooser, and which engines are missing,
+    /// refreshed whenever settings change.
+    fn settings_lines(&self) -> (ChooserLine, [ChooserLine; 4], [bool; 4]) {
         let output = match &self.settings.output_folder {
             Some(p) => (p.display().to_string(), false),
             None => ("Last export folder".to_owned(), true),
         };
         let path_var = std::env::var_os("PATH").unwrap_or_default();
-        let line = |e: Engine| {
-            let st = settings::engine_status(&self.settings, e, &path_var);
+        let status = Engine::ALL.map(|e| settings::engine_status(&self.settings, e, &path_var));
+        let line = |st: &settings::EngineStatus| {
             let muted = !matches!(st, settings::EngineStatus::Chosen { .. });
             (st.describe(), muted)
         };
-        (output, Engine::ALL.map(line))
+        let missing = status
+            .each_ref()
+            .map(|st| *st == settings::EngineStatus::Missing);
+        (output, status.each_ref().map(line), missing)
     }
 
     fn open_settings(&mut self) {
         self.close_wheel();
-        let (output_line, engine_lines) = self.settings_lines();
+        let (output_line, engine_lines, engine_missing) = self.settings_lines();
         self.settings_ui = Some(SettingsUi {
             tab: SettingsTab::General,
             tab_marker: Tween::new(0.0),
@@ -2431,6 +2461,7 @@ impl App {
             focus: None,
             output_line,
             engine_lines,
+            engine_missing,
         });
         self.settings_hover = false;
         self.invalidate();
@@ -2510,6 +2541,15 @@ impl App {
                 }
             }
             Control::EngineReset(e) => self.settings.engines.set(e, None),
+            // Only the engine's fixed official page. Kiln still never
+            // downloads anything itself.
+            Control::EngineGet(e) => {
+                if !system::open_download_page(hwnd, e) {
+                    self.alert(format!("Couldn't open {}'s download page.", e.label()));
+                }
+                self.invalidate();
+                return;
+            }
             Control::CheckUpdates => {
                 self.check_updates();
                 return;
@@ -2521,7 +2561,7 @@ impl App {
         if matches!(c, Control::EngineChoose(_) | Control::EngineReset(_)) {
             self.habits_changed();
         }
-        let (output_line, engine_lines) = self.settings_lines();
+        let (output_line, engine_lines, engine_missing) = self.settings_lines();
         // Reset buttons come and go. Keep keyboard focus on the same
         // control, or on its Choose button when a Reset went away.
         let had_focus = self
@@ -2546,6 +2586,7 @@ impl App {
         if let Some(ui) = &mut self.settings_ui {
             ui.output_line = output_line;
             ui.engine_lines = engine_lines;
+            ui.engine_missing = engine_missing;
             ui.focus = refocus;
             ui.hover = None;
         }
@@ -2646,15 +2687,117 @@ impl App {
         }
     }
 
+    /// Open the details dialog on row `i`: the engine's output, or the
+    /// whole sentence when the row cut it short.
     fn show_details(&mut self, i: usize) {
-        if let Some(JobState::Failed { details, .. }) = self.files.entries().get(i).map(|e| &e.job)
-        {
-            if !details.is_empty() {
-                self.details = Some(details.clone());
-                self.dialog_close_hover = false;
-                self.invalidate();
+        let Some(e) = self.files.entries().get(i) else {
+            return;
+        };
+        let cut = self
+            .row_rect(i)
+            .is_some_and(|r| self.renderer.line_cut(&r, e));
+        if let Some((title, text)) = e.details(cut) {
+            self.details = Some(DetailsUi {
+                title,
+                text: text.trim().to_owned(),
+                scroll: 0.0,
+                focus: DialogButton::Copy,
+                hover: None,
+                pressed: None,
+                copied: None,
+            });
+            self.invalidate();
+        }
+    }
+
+    /// Row `i`'s rectangle in the window, as scrolled.
+    fn row_rect(&self, i: usize) -> Option<layout::Rect> {
+        let mut r = *self.layout().rows.get(i)?;
+        r.y -= self.scroll;
+        Some(r)
+    }
+
+    /// Scroll the details dialog's text, kept inside the text.
+    fn scroll_details(&mut self, by: TextScroll) {
+        let (w, h) = self.renderer.size_dips();
+        let body = layout::dialog(w, h).body;
+        let Some(d) = &self.details else {
+            return;
+        };
+        let content = self.renderer.details_height(&d.text, body.w);
+        let to = layout::scroll_text(by, d.scroll, content, body.h);
+        if let Some(d) = self.details.as_mut().filter(|d| d.scroll != to) {
+            d.scroll = to;
+            self.invalidate();
+        }
+    }
+
+    /// Press a details dialog button: Copy puts all of the text on the
+    /// clipboard and says "Copied" for a moment; Close closes.
+    fn press_details(&mut self, b: DialogButton) {
+        match b {
+            DialogButton::Close => self.details = None,
+            DialogButton::Copy => {
+                let Some(text) = self
+                    .details
+                    .as_ref()
+                    .map(|d| model::clipboard_lines(&d.text))
+                else {
+                    return;
+                };
+                match system::set_clipboard(self.hwnd, &text) {
+                    Ok(()) => {
+                        if let Some(d) = &mut self.details {
+                            d.copied = Some(Instant::now());
+                        }
+                        let ms = model::COPIED_FOR.as_millis() as u32 + 20;
+                        unsafe {
+                            SetTimer(Some(self.hwnd), COPIED_TIMER, ms, None);
+                        }
+                    }
+                    Err(e) => self.alert(format!("Couldn't copy the text: {}", e.message())),
+                }
             }
         }
+        self.invalidate();
+    }
+
+    /// Keys in the details dialog. Escape and Enter close it. Tab and the
+    /// left and right arrows move focus between Copy and Close, and Space
+    /// presses the focused one. Ctrl+C copies. The other arrows, Page Up,
+    /// Page Down, Home and End scroll the text.
+    fn details_key(&mut self, key: VIRTUAL_KEY, ctrl: bool) {
+        let scroll = match key {
+            VK_UP => Some(TextScroll::LineUp),
+            VK_DOWN => Some(TextScroll::LineDown),
+            VK_PRIOR => Some(TextScroll::PageUp),
+            VK_NEXT => Some(TextScroll::PageDown),
+            VK_HOME => Some(TextScroll::Home),
+            VK_END => Some(TextScroll::End),
+            _ => None,
+        };
+        if let Some(by) = scroll {
+            return self.scroll_details(by);
+        }
+        match key {
+            VK_ESCAPE | VK_RETURN => self.details = None,
+            VK_C if ctrl => return self.press_details(DialogButton::Copy),
+            VK_SPACE => {
+                if let Some(b) = self.details.as_ref().map(|d| d.focus) {
+                    return self.press_details(b);
+                }
+            }
+            VK_TAB | VK_LEFT | VK_RIGHT => {
+                if let Some(d) = &mut self.details {
+                    d.focus = match d.focus {
+                        DialogButton::Copy => DialogButton::Close,
+                        DialogButton::Close => DialogButton::Copy,
+                    };
+                }
+            }
+            _ => return,
+        }
+        self.invalidate();
     }
 
     /// Whether `(x, y)` is on a row's link, with nothing over the list.
@@ -2683,7 +2826,7 @@ impl App {
             matches!(e.job, JobState::Running { .. }) && layout::row_cancel(&r).contains(x, y);
         // A row being exported has no link until it's done.
         let link = !self.row_saving(i)
-            && match e.link() {
+            && match e.link(self.renderer.line_cut(&r, e)) {
                 Some(_) => layout::row_link(&r).contains(x, y),
                 None => e.saved().is_some() && layout::row_line(&r).contains(x, y),
             };
@@ -2713,9 +2856,9 @@ impl App {
         }
         if self.details.is_some() {
             let (w, h) = self.renderer.size_dips();
-            let hot = layout::dialog(w, h).close.contains(x, y);
-            if hot != self.dialog_close_hover {
-                self.dialog_close_hover = hot;
+            let hot = layout::dialog(w, h).hit(x, y);
+            if let Some(d) = self.details.as_mut().filter(|d| d.hover != hot) {
+                d.hover = hot;
                 self.invalidate();
             }
             return;
@@ -2765,7 +2908,7 @@ impl App {
         let export = std::mem::take(&mut self.export_pressed);
         let add = std::mem::take(&mut self.add_pressed);
         let setting = self.settings_pressed.take();
-        let close = std::mem::take(&mut self.dialog_close_pressed);
+        let dialog = self.details.as_mut().and_then(|d| d.pressed.take());
         let sheet = self.sheet.as_mut().and_then(|s| s.pressed.take());
         unsafe {
             let _ = ReleaseCapture();
@@ -2778,7 +2921,7 @@ impl App {
             self.invalidate();
             return;
         }
-        if !clear && !export && !add && setting.is_none() && !close {
+        if !clear && !export && !add && setting.is_none() && dialog.is_none() {
             return;
         }
         if add && self.add_button().is_some_and(|b| b.contains(x, y)) {
@@ -2796,10 +2939,10 @@ impl App {
                 self.activate(c, step_delta(&r, x));
             }
         }
-        if close && self.details.is_some() {
+        if let Some(b) = dialog {
             let (w, h) = self.renderer.size_dips();
-            if layout::dialog(w, h).close.contains(x, y) {
-                self.details = None;
+            if layout::dialog(w, h).hit(x, y) == Some(b) {
+                self.press_details(b);
             }
         }
         self.invalidate();
@@ -2837,8 +2980,10 @@ impl App {
         }
         if self.details.is_some() {
             let (w, h) = self.renderer.size_dips();
-            if layout::dialog(w, h).close.contains(x, y) {
-                self.dialog_close_pressed = true;
+            let hit = layout::dialog(w, h).hit(x, y);
+            if let (Some(d), Some(b)) = (&mut self.details, hit) {
+                d.pressed = Some(b);
+                d.focus = b;
                 unsafe { SetCapture(self.hwnd) };
             }
             self.invalidate();
@@ -2898,10 +3043,7 @@ impl App {
             return true;
         }
         if self.details.is_some() {
-            if matches!(key, VK_ESCAPE | VK_RETURN | VK_SPACE) {
-                self.details = None;
-                self.invalidate();
-            }
+            self.details_key(key, ctrl);
             return true;
         }
         // A fading wheel no longer takes keys; a pulsing one is busy.
@@ -3140,10 +3282,16 @@ impl App {
             add_pressed: self.add_pressed,
             clear_hover: self.clear_hover,
             clear_pressed: self.clear_pressed,
-            dialog_close_pressed: self.dialog_close_pressed,
             wheel: Self::wheel_view(self.wheel.as_ref(), &self.settings.keys),
-            details: self.details.as_deref(),
-            dialog_close_hover: self.dialog_close_hover,
+            details: self.details.as_ref().map(|d| DetailsView {
+                title: &d.title,
+                text: &d.text,
+                scroll: d.scroll,
+                copy_label: model::copy_label(d.copied.map(|t| t.elapsed())),
+                focus: d.focus,
+                hover: d.hover,
+                pressed: d.pressed,
+            }),
             settings_hover: self.settings_hover,
             sheet: match (&self.sheet, &sheet_layout, &sheet_lines) {
                 (Some(s), Some(l), Some((title, context, result))) => Some(SheetView {
@@ -3381,12 +3529,10 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         sheet: None,
         next_sheet: 1,
         details: None,
-        dialog_close_hover: false,
         status: String::new(),
         clear_hover: false,
         clear_pressed: false,
         settings_pressed: None,
-        dialog_close_pressed: false,
         update: UpdateState::default(),
         tracking_mouse: false,
         dpi,
@@ -3623,6 +3769,14 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             }
             Some(LRESULT(0))
         }
+        // "Copied" has been read: the button says "Copy" again.
+        WM_TIMER if wparam.0 == COPIED_TIMER => {
+            unsafe {
+                let _ = KillTimer(Some(hwnd), COPIED_TIMER);
+            }
+            app.invalidate();
+            Some(LRESULT(0))
+        }
         WM_TIMER if wparam.0 == ANIM_TIMER => {
             app.tick();
             if !app.animating() {
@@ -3704,8 +3858,16 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             Some(LRESULT(0))
         }
         WM_MOUSEWHEEL => {
-            if app.wheel.is_none() && app.details.is_none() && app.sheet.is_none() {
-                let delta = ((wparam.0 >> 16) & 0xFFFF) as i16 as f32 / WHEEL_DELTA as f32;
+            let raw = ((wparam.0 >> 16) & 0xFFFF) as i16 as i32;
+            if app.details.is_some() {
+                // A precise touchpad sends less than a notch: still move.
+                let notches = match raw / WHEEL_DELTA as i32 {
+                    0 => raw.signum(),
+                    n => n,
+                };
+                app.scroll_details(TextScroll::Wheel(notches));
+            } else if app.wheel.is_none() && app.sheet.is_none() {
+                let delta = raw as f32 / WHEEL_DELTA as f32;
                 app.scroll -= delta * ROW_HEIGHT;
                 app.clamp_scroll();
                 app.invalidate();

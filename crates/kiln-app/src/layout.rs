@@ -295,11 +295,13 @@ pub fn empty_state(panel: &Rect) -> EmptyState {
 /// The empty window's Add files button, a little wider than the footer's.
 pub const ADD_FILES_EMPTY_WIDTH: f32 = 112.0;
 
-/// The details dialog: panel, title, body and close button.
+/// The details dialog: panel, title, body, and the Copy and Close
+/// buttons.
 pub struct Dialog {
     pub panel: Rect,
     pub title: Rect,
     pub body: Rect,
+    pub copy: Rect,
     pub close: Rect,
 }
 
@@ -315,6 +317,12 @@ pub fn dialog(w: f32, h: f32) -> Dialog {
         BUTTON_WIDTH,
         BUTTON_HEIGHT,
     );
+    let copy = Rect::new(
+        close.x - 8.0 - BUTTON_WIDTH,
+        close.y,
+        BUTTON_WIDTH,
+        BUTTON_HEIGHT,
+    );
     let body = Rect::new(
         panel.x + p,
         title.bottom() + 8.0,
@@ -325,8 +333,74 @@ pub fn dialog(w: f32, h: f32) -> Dialog {
         panel,
         title,
         body,
+        copy,
         close,
     }
+}
+
+/// A button of the details dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DialogButton {
+    Copy,
+    Close,
+}
+
+impl Dialog {
+    /// The button under a point.
+    pub fn hit(&self, x: f32, y: f32) -> Option<DialogButton> {
+        if self.copy.contains(x, y) {
+            Some(DialogButton::Copy)
+        } else if self.close.contains(x, y) {
+            Some(DialogButton::Close)
+        } else {
+            None
+        }
+    }
+
+    pub fn button(&self, b: DialogButton) -> Rect {
+        match b {
+            DialogButton::Copy => self.copy,
+            DialogButton::Close => self.close,
+        }
+    }
+}
+
+/// A line of the details dialog's text, for the arrow keys and the wheel.
+pub const DETAILS_LINE: f32 = 16.0;
+
+/// How the keyboard moves through the details dialog's text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextScroll {
+    LineUp,
+    LineDown,
+    PageUp,
+    PageDown,
+    Home,
+    End,
+    /// Wheel notches: positive scrolls back towards the top.
+    Wheel(i32),
+}
+
+/// A scroll offset kept between the top and where the last line meets
+/// the bottom of a `view_h` tall view of `content_h` of text.
+pub fn clamp_text_scroll(scroll: f32, content_h: f32, view_h: f32) -> f32 {
+    scroll.clamp(0.0, (content_h - view_h).max(0.0))
+}
+
+/// The scroll offset after `by`, clamped. A page keeps one line of the
+/// last page in view; a wheel notch is three lines.
+pub fn scroll_text(by: TextScroll, scroll: f32, content_h: f32, view_h: f32) -> f32 {
+    let page = (view_h - DETAILS_LINE).max(DETAILS_LINE);
+    let to = match by {
+        TextScroll::LineUp => scroll - DETAILS_LINE,
+        TextScroll::LineDown => scroll + DETAILS_LINE,
+        TextScroll::PageUp => scroll - page,
+        TextScroll::PageDown => scroll + page,
+        TextScroll::Home => 0.0,
+        TextScroll::End => content_h,
+        TextScroll::Wheel(n) => scroll - n as f32 * 3.0 * DETAILS_LINE,
+    };
+    clamp_text_scroll(to, content_h, view_h)
 }
 
 /// The pages of the settings panel.
@@ -349,7 +423,7 @@ impl SettingsTab {
         match self {
             SettingsTab::General => "General",
             SettingsTab::Quality => "Quality",
-            SettingsTab::Engines => "Engines",
+            SettingsTab::Engines => kiln_core::plain::HELPER_APPS_TAB,
         }
     }
 
@@ -376,6 +450,8 @@ pub enum Control {
     Step(DefaultSetting),
     EngineChoose(Engine),
     EngineReset(Engine),
+    /// A missing engine's Get it link: its download page, in the browser.
+    EngineGet(Engine),
     CheckUpdates,
     Close,
 }
@@ -425,6 +501,11 @@ pub const FORGET_BUTTON_WIDTH: f32 = 104.0;
 /// Rows on the fullest page. Every page keeps this height, so switching
 /// pages never moves the panel.
 const SETTINGS_ROWS: usize = 5;
+/// An engine's row: its name and where it is, with what it's for on a
+/// muted line underneath. Four of them fit in the height of five rows.
+pub const ENGINE_ROW: f32 = 48.0;
+/// A missing engine's Get it link, left of Choose.
+pub const GET_IT_WIDTH: f32 = 48.0;
 
 /// What the settings panel needs to know to lay itself out: the page, and
 /// which values are set, since those rows grow a Reset button.
@@ -433,6 +514,8 @@ pub struct SettingsShape {
     pub tab: SettingsTab,
     pub output_custom: bool,
     pub engine_custom: [bool; 4],
+    /// Engines Kiln can't find anywhere, which get a Get it link.
+    pub engine_missing: [bool; 4],
 }
 
 pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
@@ -585,13 +668,28 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
         }
         SettingsTab::Engines => {
             for (k, e) in Engine::ALL.into_iter().enumerate() {
-                let v = chooser(
-                    &mut controls,
-                    k,
-                    Control::EngineChoose(e),
-                    shape.engine_custom[k].then_some(Control::EngineReset(e)),
-                );
-                rows.push(row(e.label(), k, Some(v)));
+                let y = title.bottom() + 8.0 + k as f32 * ENGINE_ROW;
+                let ctl = |x: f32, w: f32| Rect::new(x, y + 8.0, w, BUTTON_HEIGHT);
+                let choose = ctl(right - BUTTON_WIDTH, BUTTON_WIDTH);
+                let mut left = choose.x;
+                if shape.engine_custom[k] {
+                    let r = ctl(left - 8.0 - BUTTON_WIDTH, BUTTON_WIDTH);
+                    left = r.x;
+                    controls.push((Control::EngineReset(e), r));
+                } else if shape.engine_missing[k] {
+                    let r = ctl(left - 8.0 - GET_IT_WIDTH, GET_IT_WIDTH);
+                    left = r.x;
+                    controls.push((Control::EngineGet(e), r));
+                }
+                controls.push((Control::EngineChoose(e), choose));
+                let x = panel.x + p;
+                rows.push(SettingsRow {
+                    label: e.label(),
+                    label_rect: Rect::new(x, y + 4.0, SETTINGS_LABEL, 20.0),
+                    value: Some(Rect::new(x0, y + 4.0, (left - 8.0 - x0).max(0.0), 20.0)),
+                    hint: Some(e.purpose()),
+                    hint_rect: Some(Rect::new(x, y + 24.0, (left - 8.0 - x).max(0.0), 20.0)),
+                });
             }
         }
     }
@@ -843,7 +941,34 @@ mod tests {
             assert_eq!(d.title.x - d.panel.x, 16.0);
             assert_eq!(d.panel.bottom() - d.close.bottom(), 16.0);
             assert!(d.body.bottom() <= d.close.y);
+            assert_eq!(d.copy.right() + 8.0, d.close.x);
+            assert_eq!(d.copy.y, d.close.y);
+            assert!(d.copy.x >= d.panel.x + 16.0);
         }
+    }
+
+    #[test]
+    fn details_scroll_stays_inside_the_text() {
+        // 400 of text in a 100 view: 0 to 300.
+        assert_eq!(clamp_text_scroll(-5.0, 400.0, 100.0), 0.0);
+        assert_eq!(clamp_text_scroll(150.0, 400.0, 100.0), 150.0);
+        assert_eq!(clamp_text_scroll(900.0, 400.0, 100.0), 300.0);
+        // Text that fits never scrolls.
+        assert_eq!(clamp_text_scroll(40.0, 80.0, 100.0), 0.0);
+
+        let s = |by, from| scroll_text(by, from, 400.0, 100.0);
+        assert_eq!(s(TextScroll::LineDown, 0.0), DETAILS_LINE);
+        assert_eq!(s(TextScroll::LineUp, 0.0), 0.0);
+        assert_eq!(s(TextScroll::LineUp, 40.0), 40.0 - DETAILS_LINE);
+        assert_eq!(s(TextScroll::PageDown, 0.0), 100.0 - DETAILS_LINE);
+        assert_eq!(s(TextScroll::PageUp, 50.0), 0.0);
+        assert_eq!(s(TextScroll::PageDown, 280.0), 300.0);
+        assert_eq!(s(TextScroll::End, 0.0), 300.0);
+        assert_eq!(s(TextScroll::Home, 250.0), 0.0);
+        assert_eq!(s(TextScroll::Wheel(-1), 0.0), 3.0 * DETAILS_LINE);
+        assert_eq!(s(TextScroll::Wheel(2), 100.0), 100.0 - 6.0 * DETAILS_LINE);
+        assert_eq!(s(TextScroll::Wheel(-100), 0.0), 300.0);
+        assert_eq!(scroll_text(TextScroll::End, 0.0, 60.0, 100.0), 0.0);
     }
 
     #[test]
@@ -882,6 +1007,18 @@ mod tests {
                 tab,
                 output_custom: true,
                 engine_custom: [true; 4],
+                engine_missing: [false; 4],
+            });
+            shapes.push(SettingsShape {
+                tab,
+                engine_custom: [true, false, false, true],
+                engine_missing: [false, true, true, false],
+                ..SettingsShape::default()
+            });
+            shapes.push(SettingsShape {
+                tab,
+                engine_missing: [true; 4],
+                ..SettingsShape::default()
             });
         }
         for (w, h) in [(480.0, 360.0), (720.0, 480.0), (1600.0, 1000.0)] {
@@ -914,6 +1051,46 @@ mod tests {
                 assert!(note.w >= 120.0, "update note too narrow at {w}x{h}");
                 for (c, r) in &s.controls {
                     assert!(apart(&note, r), "update note overlaps {c:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn missing_engines_get_a_link_and_every_row_fits() {
+        for (w, h) in [(480.0, 360.0), (720.0, 480.0), (1600.0, 1000.0)] {
+            let shape = SettingsShape {
+                tab: SettingsTab::Engines,
+                engine_custom: [true, false, false, false],
+                engine_missing: [false, true, false, true],
+                ..SettingsShape::default()
+            };
+            let s = settings(w, h, shape);
+            let gets: Vec<_> = s
+                .controls
+                .iter()
+                .filter_map(|(c, _)| match c {
+                    Control::EngineGet(e) => Some(*e),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(gets, [Engine::Pandoc, Engine::Calibre]);
+            // Get it comes before Choose in Tab order, as it reads.
+            let at = |c| s.controls.iter().position(|(k, _)| *k == c).unwrap();
+            assert_eq!(
+                at(Control::EngineGet(Engine::Pandoc)) + 1,
+                at(Control::EngineChoose(Engine::Pandoc))
+            );
+            // Every row, with its purpose line, ends above the bottom
+            // buttons, so the page keeps the panel's height.
+            let close = s.controls.last().unwrap().1;
+            for row in &s.rows {
+                let hint = row.hint_rect.unwrap();
+                assert!(hint.bottom() + 16.0 <= close.y, "{} at {w}x{h}", row.label);
+                assert!(hint.y >= row.label_rect.bottom());
+                assert!(hint.w >= 200.0, "{} at {w}x{h}", row.label);
+                for (c, r) in &s.controls {
+                    assert!(apart(&hint, r), "{} hint overlaps {c:?}", row.label);
                 }
             }
         }
@@ -1173,6 +1350,11 @@ mod tests {
         let engines = page(SettingsTab::Engines);
         assert_eq!(engines.rows.len(), 4);
         assert_eq!(engines.rows[3].label, "Calibre");
+        assert_eq!(
+            engines.rows[0].hint,
+            Some("Audio, video, GIF, HEIC and AVIF.")
+        );
+        assert_eq!(SettingsTab::Engines.label(), "Engines");
 
         // Pages share one panel, so switching never moves it.
         assert_eq!(general.panel, quality.panel);

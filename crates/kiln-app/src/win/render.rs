@@ -19,8 +19,8 @@ use kiln_core::Preset;
 
 use crate::icons::{self, Cmd, Icon, Style};
 use crate::layout::{
-    self, Control, Layout, Rect, SettingsLayout, SettingsTab, SheetControl, SheetLayout,
-    CHIP_HEIGHT, CHIP_MIN_WIDTH, PROGRESS_HEIGHT, ROW_HEIGHT,
+    self, Control, DialogButton, Layout, Rect, SettingsLayout, SettingsTab, SheetControl,
+    SheetLayout, CHIP_HEIGHT, CHIP_MIN_WIDTH, PROGRESS_HEIGHT, ROW_HEIGHT,
 };
 use crate::model::{self, Entry, JobState, Tone};
 use crate::quality::{QualityDefaults, Value};
@@ -127,13 +127,24 @@ pub struct View<'a> {
     pub clear_hover: bool,
     pub clear_pressed: bool,
     pub wheel: Option<WheelView<'a>>,
-    /// Engine output shown in the details dialog.
-    pub details: Option<&'a str>,
-    pub dialog_close_hover: bool,
-    pub dialog_close_pressed: bool,
+    /// The details dialog, while it's open.
+    pub details: Option<DetailsView<'a>>,
     pub settings_hover: bool,
     pub settings: Option<SettingsView<'a>>,
     pub sheet: Option<SheetView<'a>>,
+}
+
+/// The details dialog this frame: what a failed job's engine said.
+pub struct DetailsView<'a> {
+    /// "What FFmpeg said".
+    pub title: &'a str,
+    pub text: &'a str,
+    pub scroll: f32,
+    /// "Copy", or "Copied" for a moment after a copy.
+    pub copy_label: &'static str,
+    pub focus: DialogButton,
+    pub hover: Option<DialogButton>,
+    pub pressed: Option<DialogButton>,
 }
 
 /// The settings panel this frame.
@@ -239,6 +250,42 @@ fn compose(inner: &Matrix3x2, outer: &Matrix3x2) -> Matrix3x2 {
     }
 }
 
+/// A missing engine's link in Settings > Engines.
+const GET_IT: &str = "Get it";
+
+/// The code on a row's chip.
+fn chip_code(e: &Entry) -> &str {
+    if e.code.is_empty() {
+        "—"
+    } else {
+        &e.code
+    }
+}
+
+/// How wide a row's chip is: its code with padding, at least the minimum.
+fn chip_width(text: &Text, e: &Entry) -> Result<f32> {
+    let (_, text_w) = text.code_layout(chip_code(e), 120.0, CHIP_HEIGHT)?;
+    Ok((text_w + 16.0).max(CHIP_MIN_WIDTH).ceil())
+}
+
+/// Where a row's name and second line start, right of its chip.
+fn row_text_x(r: &Rect, chip_w: f32) -> f32 {
+    r.x + 16.0 + CHIP_MIN_WIDTH.max(chip_w) + 16.0
+}
+
+/// Whether a failed row's line runs past the room it has before the row's
+/// right padding, so the row cuts it short.
+fn line_cut(text: &Text, r: &Rect, e: &Entry) -> bool {
+    if !matches!(e.job, JobState::Failed { .. }) {
+        return false;
+    }
+    let Ok(chip_w) = chip_width(text, e) else {
+        return false;
+    };
+    let room = r.right() - 16.0 - row_text_x(r, chip_w);
+    text.measure(&e.line().0, &text.caption) > room
+}
+
 impl Renderer {
     pub fn new(hwnd: HWND, dpi: f32) -> Result<Self> {
         let factory: ID2D1Factory =
@@ -266,6 +313,17 @@ impl Renderer {
             hwnd,
             dpi,
         })
+    }
+
+    /// How tall the details dialog's text runs when wrapped to `width`.
+    pub fn details_height(&self, text: &str, width: f32) -> f32 {
+        self.text.block_height(text, &self.text.mono_block, width)
+    }
+
+    /// Whether a failed row's line is too long for row `r`, so it's cut
+    /// short and Show details offers the whole sentence.
+    pub fn line_cut(&self, r: &Rect, e: &Entry) -> bool {
+        line_cut(&self.text, r, e)
     }
 
     pub fn display_font_bundled(&self) -> bool {
@@ -394,8 +452,8 @@ impl Renderer {
         if let (Ok(()), Some(wv)) = (&result, &v.wheel) {
             result = d.wheel(wv, p);
         }
-        if let (Ok(()), Some(details)) = (&result, v.details) {
-            result = d.dialog(w, h, details, v);
+        if let (Ok(()), Some(dv)) = (&result, &v.details) {
+            result = d.dialog(w, h, dv, p);
         }
         if let (Ok(()), Some(sv)) = (&result, &v.settings) {
             result = d.settings(w, h, sv, p);
@@ -714,17 +772,16 @@ impl Draw<'_> {
 
         // Format chip: monospace, uppercase, tracked.
         let chip_y = r.y + (ROW_HEIGHT - CHIP_HEIGHT) / 2.0;
-        let code = if e.code.is_empty() { "—" } else { &e.code };
-        let (_, text_w) = self.text.code_layout(code, 120.0, CHIP_HEIGHT)?;
-        let chip_w = (text_w + 16.0).max(CHIP_MIN_WIDTH).ceil();
+        let code = chip_code(e);
+        let chip_w = chip_width(self.text, e)?;
         let chip = Rect::new(r.x + 16.0, chip_y, chip_w, CHIP_HEIGHT);
         self.fill(&chip, shape::RADIUS_CONTROL, p.line, a);
         self.code(code, &chip, p.text, a)?;
 
-        let x = r.x + 16.0 + CHIP_MIN_WIDTH.max(chip_w) + 16.0;
+        let x = row_text_x(r, chip_w);
         let running = matches!(e.job, JobState::Running { .. });
         let saving = v.saving.contains(&e.path);
-        let link = e.link().filter(|_| !saving);
+        let link = e.link(line_cut(self.text, r, e)).filter(|_| !saving);
         let right = if running {
             layout::row_cancel(r).x - 8.0
         } else if link.is_some() {
@@ -1335,32 +1392,58 @@ impl Draw<'_> {
         }
     }
 
-    /// Engine output for a failed job, over a scrim.
-    fn dialog(&self, w: f32, h: f32, details: &str, v: &View) -> Result<()> {
-        let p = v.palette;
+    /// What a failed job's engine said, over a scrim. The text scrolls
+    /// inside the body; focus starts on Copy.
+    fn dialog(&self, w: f32, h: f32, dv: &DetailsView, p: &Palette) -> Result<()> {
         let d = layout::dialog(w, h);
         // A scrim, not a shadow: it quiets the window behind the dialog.
         self.fill(&Rect::new(0.0, 0.0, w, h), 0.0, p.ground, 0.7);
         self.fill(&d.panel, shape::RADIUS_PANEL, p.surface, 1.0);
         self.border(&d.panel, shape::RADIUS_PANEL, p.line, 1.0, shape::BORDER);
-        self.label("Details", &self.text.display, &d.title, p.text, 1.0);
+        self.label(dv.title, &self.text.display, &d.title, p.text, 1.0);
+
+        let body = d.body;
+        let content = self
+            .text
+            .block_height(dv.text, &self.text.mono_block, body.w);
+        let scroll = layout::clamp_text_scroll(dv.scroll, content, body.h);
         unsafe {
+            self.rt
+                .PushAxisAlignedClip(&rectf(&body), D2D1_ANTIALIAS_MODE_ALIASED);
             self.rt.DrawText(
-                &wide(details.trim()),
+                &wide(dv.text),
                 &self.text.mono_block,
-                &rectf(&d.body),
+                &rectf(&Rect::new(
+                    body.x,
+                    body.y - scroll,
+                    body.w,
+                    content.max(body.h) + 1.0,
+                )),
                 self.paint(p.text_muted, 1.0),
-                D2D1_DRAW_TEXT_OPTIONS_CLIP,
+                D2D1_DRAW_TEXT_OPTIONS_NONE,
                 DWRITE_MEASURING_MODE_NATURAL,
             );
+            self.rt.PopAxisAlignedClip();
         }
-        self.button(
-            "Close",
-            &d.close,
-            v.dialog_close_hover,
-            v.dialog_close_pressed,
-            p,
-        );
+        // A thin thumb, as on the list, when the text runs past the body.
+        let max = (content - body.h).max(0.0);
+        if max > 0.0 {
+            let thumb_h = (body.h * body.h / content).max(24.0).min(body.h);
+            let thumb_y = body.y + (body.h - thumb_h) * (scroll / max);
+            let thumb = Rect::new(d.panel.right() - 8.0, thumb_y, 2.0, thumb_h);
+            self.fill(&thumb, 1.0, p.text_muted, 0.5);
+        }
+
+        for (b, text) in [
+            (DialogButton::Copy, dv.copy_label),
+            (DialogButton::Close, "Close"),
+        ] {
+            let r = d.button(b);
+            self.button(text, &r, dv.hover == Some(b), dv.pressed == Some(b), p);
+            if dv.focus == b {
+                self.focus_ring(&r, p);
+            }
+        }
         Ok(())
     }
 
@@ -1457,7 +1540,12 @@ impl Draw<'_> {
             let c = if muted { p.text_muted } else { p.text };
             self.label(text, &self.text.body, &r, c, 1.0);
             if let (Some(hint), Some(hr)) = (row.hint, row.hint_rect) {
-                self.label(hint, &self.text.caption_wrap, &hr, p.text_muted, 1.0);
+                // An engine's purpose has one line, under its name.
+                let format = match l.tab {
+                    SettingsTab::Engines => &self.text.caption,
+                    _ => &self.text.caption_wrap,
+                };
+                self.label(hint, format, &hr, p.text_muted, 1.0);
             }
         }
 
@@ -1472,6 +1560,26 @@ impl Draw<'_> {
                 }
                 Control::OutputReset | Control::EngineReset(_) => {
                     self.button("Reset", r, hover, pressed, p);
+                    None
+                }
+                Control::EngineGet(_) => {
+                    // A link, not a button: underlined text, brighter
+                    // under the pointer.
+                    let c = if hover || pressed {
+                        p.text
+                    } else {
+                        p.text_muted
+                    };
+                    let tw = self.text.measure(GET_IT, &self.text.body).min(r.w);
+                    let lx = r.right() - tw;
+                    self.label(
+                        GET_IT,
+                        &self.text.body,
+                        &Rect::new(lx, r.y, tw + 1.0, r.h),
+                        c,
+                        1.0,
+                    );
+                    self.hline(lx, lx + tw, r.y + r.h / 2.0 + 7.0, c, 0.8);
                     None
                 }
                 Control::Theme(t) => {
