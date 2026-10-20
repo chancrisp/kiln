@@ -144,6 +144,8 @@ const LARGE_BYTES: u64 = 500_000_000;
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Reason {
     Fixed(&'static str),
+    /// A fixed sentence that promises a smaller file.
+    Saving(&'static str),
     Photo,
     Habit(String),
     Compress,
@@ -153,7 +155,7 @@ impl Reason {
     /// The sentence, with `estimate` in it when the reason has a number.
     fn render(&self, estimate: Option<u64>) -> String {
         match (self, estimate) {
-            (Reason::Fixed(text), _) => (*text).to_string(),
+            (Reason::Fixed(text) | Reason::Saving(text), _) => (*text).to_string(),
             (Reason::Photo, Some(bytes)) => {
                 format!("A photo. JPG keeps the look at about {}.", about(bytes))
             }
@@ -165,6 +167,11 @@ impl Reason {
             (Reason::Compress, None) => "Large for its length.".to_string(),
         }
     }
+
+    /// Whether the sentence sells the conversion on a smaller file.
+    fn claims_saving(&self) -> bool {
+        matches!(self, Reason::Photo | Reason::Saving(_))
+    }
 }
 
 /// Every convert rule `f` matches, in the spec's order, as target and reason.
@@ -175,7 +182,7 @@ fn convert_rules(f: &Facts) -> Vec<(&'static str, Reason)> {
     if ext == "gif" && pic.is_some_and(|p| p.animated) {
         out.push((
             "mp4",
-            Reason::Fixed("Same motion at a fraction of the size."),
+            Reason::Saving("Same motion at a fraction of the size."),
         ));
     }
     if ext == "heic" || RAW.contains(&ext) {
@@ -200,8 +207,13 @@ fn convert_rules(f: &Facts) -> Vec<(&'static str, Reason)> {
     if f.kind == Kind::Video && ext != "mp4" {
         out.push(("mp4", Reason::Fixed("Plays on any phone, PC or browser.")));
     }
-    let lists: [(&[&str], &'static str, &'static str); 6] = [
-        (AUDIO, "mp3", "Plays anywhere at a fraction of the size."),
+    if AUDIO.contains(&ext) {
+        out.push((
+            "mp3",
+            Reason::Saving("Plays anywhere at a fraction of the size."),
+        ));
+    }
+    let lists: [(&[&str], &'static str, &'static str); 5] = [
         (WORD, "docx", "Opens in Word and Google Docs."),
         (SHEET, "xlsx", "The spreadsheet format everyone can open."),
         (SLIDES, "pptx", "The slide format everyone can open."),
@@ -217,7 +229,8 @@ fn convert_rules(f: &Facts) -> Vec<(&'static str, Reason)> {
 }
 
 /// The conversion for one file: its habit when that target is offered,
-/// otherwise the first matching rule whose target is offered.
+/// otherwise the first matching rule whose target is offered. A rule sold on
+/// size is skipped when its estimate shows no clear saving.
 fn convert_for(f: &Facts, offered: &Offered, habits: &Habits) -> Option<(String, Reason)> {
     let offers = |ext: &str| offered.targets.iter().any(|t| t == ext);
     if let Some(fav) = habits.favourite(&f.ext) {
@@ -227,7 +240,13 @@ fn convert_for(f: &Facts, offered: &Offered, habits: &Habits) -> Option<(String,
     }
     convert_rules(f)
         .into_iter()
-        .find(|(to, _)| offers(to))
+        .find(|(to, reason)| {
+            offers(to)
+                && !(reason.claims_saving()
+                    && f.estimates
+                        .get(*to)
+                        .is_some_and(|&after| !clearly_smaller(after, f.bytes)))
+        })
         .map(|(to, reason)| (to.to_string(), reason))
 }
 
@@ -244,12 +263,15 @@ fn is_large_video(f: &Facts) -> bool {
     rate.is_some_and(|r| r > LARGE_BITRATE) || f.bytes > LARGE_BYTES
 }
 
-/// A large video whose compressed size, when known, is under 80% of its
-/// size: a saving too small to see isn't worth suggesting.
+/// Whether `after` is under 80% of `before`: a saving too small to see
+/// isn't worth suggesting.
+fn clearly_smaller(after: u64, before: u64) -> bool {
+    u128::from(after) * 10 < u128::from(before) * 8
+}
+
+/// A large video whose compressed size, when known, is clearly smaller.
 fn worth_compressing(f: &Facts) -> bool {
-    is_large_video(f)
-        && f.compressed
-            .is_none_or(|c| u128::from(c) * 10 < u128::from(f.bytes) * 8)
+    is_large_video(f) && f.compressed.is_none_or(|c| clearly_smaller(c, f.bytes))
 }
 
 /// The sum of `values` when every one is known.
@@ -467,6 +489,7 @@ mod tests {
     #[test]
     fn each_rule_suggests_its_target() {
         let mut estimated = photo("png");
+        estimated.bytes = 6_000_000;
         estimated.estimates.insert("jpg".into(), 2_140_000);
         let cases: Vec<(Facts, Option<Suggestion>)> = vec![
             (
@@ -546,6 +569,67 @@ mod tests {
             let ext = f.ext.clone();
             assert_eq!(convert(&[f]), want, "{ext}");
         }
+    }
+
+    #[test]
+    fn a_conversion_sold_on_size_needs_a_real_saving() {
+        let with_estimate = |mut f: Facts, to: &str, bytes: u64, after: u64| {
+            f.bytes = bytes;
+            f.estimates.insert(to.into(), after);
+            f
+        };
+        let gif = || with_picture(facts("gif", Kind::Image), Look::Graphic, false, true);
+        // A tiny PNG photo whose JPG would be three times bigger.
+        assert_eq!(
+            convert(&[with_estimate(photo("png"), "jpg", 396, 1_200)]),
+            None
+        );
+        // At 80% of the file or more, the saving is too small to suggest.
+        assert_eq!(
+            convert(&[with_estimate(photo("png"), "jpg", 1_000, 800)]),
+            None
+        );
+        assert_eq!(
+            convert(&[with_estimate(photo("png"), "jpg", 1_000, 799)]),
+            conv(
+                "jpg",
+                "A photo. JPG keeps the look at about 1 KB.",
+                Some(799)
+            )
+        );
+        assert_eq!(
+            convert(&[with_estimate(facts("wav", Kind::Audio), "mp3", 1_000, 900)]),
+            None
+        );
+        assert_eq!(convert(&[with_estimate(gif(), "mp4", 1_000, 2_000)]), None);
+        // Reasons that aren't about size still stand when the result is bigger.
+        assert_eq!(
+            convert(&[with_estimate(
+                facts("heic", Kind::Image),
+                "jpg",
+                1_000,
+                3_000
+            )]),
+            conv(
+                "jpg",
+                "Opens anywhere. The original stays as it is.",
+                Some(3_000)
+            )
+        );
+        // One file that wouldn't shrink keeps a shared JPG off the whole set.
+        let big = with_estimate(photo("png"), "jpg", 6_000_000, 2_000_000);
+        let tiny = with_estimate(photo("png"), "jpg", 396, 1_200);
+        assert_eq!(convert(&[big, tiny]), None);
+        // A habit is the person's own choice and isn't second-guessed.
+        let mut habits = Habits::default();
+        for _ in 0..3 {
+            habits.record("png", "jpg");
+        }
+        let tiny = with_estimate(photo("png"), "jpg", 396, 1_200);
+        assert_eq!(
+            suggest(&[tiny], &all(), &habits).convert,
+            conv("jpg", "You usually pick JPG.", Some(1_200))
+        );
     }
 
     #[test]
@@ -710,8 +794,10 @@ mod tests {
     #[test]
     fn several_files_must_agree() {
         let mut a = photo("png");
+        a.bytes = 5_000_000;
         a.estimates.insert("jpg".into(), 1_000_000);
         let mut b = photo("png");
+        b.bytes = 8_000_000;
         b.estimates.insert("jpg".into(), 2_000_000);
         assert_eq!(
             convert(&[a, b]),

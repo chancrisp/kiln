@@ -98,3 +98,10 @@ fn letterboxed_video_is_worded_by_axis() {
         "{out}"
     );
 }
+
+#[test]
+fn a_tiny_png_gets_no_bigger_jpg() {
+    // 396 bytes as PNG; its JPG would be about three times that.
+    let out = stdout(&suggest(&["rgb_gradient.png"]));
+    assert_eq!(out, "rgb_gradient.png   No suggestion.\n");
+}
