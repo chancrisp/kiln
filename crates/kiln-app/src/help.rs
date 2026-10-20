@@ -81,7 +81,10 @@ pub fn help_content(keys: &KeyMap, holding: bool) -> Vec<HelpSection> {
                 line("Ctrl+S", "Export the selected results."),
                 line("Ctrl+Shift+S", "Export all: every result Kiln holds."),
                 line("Double-click", "Open a result to look at it."),
-            ],
+            ]
+            .into_iter()
+            .chain(holding.then(|| line("Drag out", "Save a result where you drop it.")))
+            .collect(),
         },
         HelpSection {
             title: "Keyboard shortcuts",
@@ -243,9 +246,10 @@ mod tests {
         );
         assert_eq!(
             keys_of(results),
-            ["", "Ctrl+S", "Ctrl+Shift+S", "Double-click"]
+            ["", "Ctrl+S", "Ctrl+Shift+S", "Double-click", "Drag out"]
         );
         assert!(results.lines[2].what.starts_with("Export all"));
+        assert_eq!(results.lines[4].what, "Save a result where you drop it.");
     }
 
     #[test]
@@ -254,6 +258,7 @@ mod tests {
         let results = find(&h, "Results");
         assert_eq!(results.lines[0].what, crate::model::NO_HOLDING);
         assert!(results.lines[0].what.contains("saved next to each file"));
+        assert!(results.lines.iter().all(|l| l.keys != "Drag out"));
     }
 
     #[test]

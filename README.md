@@ -103,7 +103,8 @@ Kiln knows 85 formats and converts between 1,245 pairs. When no single helper
 app does a pair, Kiln chains two steps through a shared format, such as HEIC to
 JPG through PNG, or MOBI to PDF through DOCX. The steps run in one temporary
 folder, and only the finished file is kept, held inside Kiln until you
-export it.
+export it. You can also drag a finished file out of Kiln to save it where you
+drop it.
 
 | Kind | Reads | Converts to | Helper app |
 |---|---|---|---|
