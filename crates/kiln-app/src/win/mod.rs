@@ -1,5 +1,6 @@
 //! The Win32 window: creation, the message loop, input and animation.
 
+mod drag_out;
 mod drop;
 mod handoff;
 mod inspect;
@@ -10,9 +11,10 @@ mod tips;
 mod uia;
 mod updates;
 
-use std::cell::OnceCell;
+use std::cell::{Cell, OnceCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -109,6 +111,8 @@ const PROBE_LIMIT: usize = 64;
 const MK_SHIFT_FLAG: u32 = 0x0004;
 const MK_CONTROL_FLAG: u32 = 0x0008;
 const MK_ALT_FLAG: u32 = 0x0020;
+/// The left button is down (a mouse message's MK_LBUTTON).
+const MK_LBUTTON_FLAG: u32 = 0x0001;
 
 /// How long the wheel takes to pour open.
 const OPEN_MS: u32 = 160;
@@ -448,6 +452,21 @@ struct DetailsUi {
     last_copy: Option<(bool, Instant)>,
 }
 
+/// A plain press on a list row, until the button is released or a drag
+/// starts.
+#[derive(Debug, Clone, Copy)]
+struct ListPress {
+    row: usize,
+    /// Where the pointer went down, in layout units.
+    point: (f32, f32),
+    /// The press was inside a selection of two or more rows and kept it:
+    /// the release without a drag is the click.
+    collapse: bool,
+    /// Moving far enough with the button down drags the selection's held
+    /// results out of Kiln.
+    drag: bool,
+}
+
 /// What sits over the file list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Over {
@@ -685,6 +704,14 @@ struct App {
     /// Files dropped or sent from Explorer while a panel or dialog was up,
     /// added once the list is in view again.
     queued: Vec<PathBuf>,
+    /// Set while Kiln runs a drag of its own results, shared with the drop
+    /// target, which then ignores it.
+    own_drag: Rc<Cell<bool>>,
+    /// The plain press on a list row the button is still down on.
+    list_press: Option<ListPress>,
+    /// Held files dragged out in this run that are still there: one that
+    /// goes later was moved by the drop, not lost.
+    dragged: HashSet<PathBuf>,
 }
 
 impl App {
@@ -1457,6 +1484,13 @@ impl App {
     /// gone, and stop saying it once it's back. A row being exported is
     /// left be: its files are on their way out.
     fn check_gone(&mut self) {
+        // A dragged result that went after its drag was moved by the drop.
+        if self.files.settle_drags(&self.dragged, |p| p.exists()) {
+            self.dragged.retain(|p| p.exists());
+            self.forget_dropped_notes();
+            self.held_changed();
+            self.invalidate();
+        }
         let saving = self.saving_rows();
         let rows: Vec<(PathBuf, bool)> = self
             .files
@@ -1476,6 +1510,104 @@ impl App {
                 self.invalidate();
             }
         }
+    }
+
+    /// A row whose results a drag moved out says so: a note from before,
+    /// such as an export that failed, no longer stands in for its line.
+    fn forget_dropped_notes(&mut self) {
+        for e in self.files.entries() {
+            if matches!(
+                e.job,
+                JobState::Done {
+                    saved: Some(model::Saved::Dropped),
+                    ..
+                }
+            ) {
+                self.notes.remove(&e.path);
+            }
+        }
+    }
+
+    /// Whether a press on row `i` may become a drag out: the row holds
+    /// results that are all there and no export is moving, Kiln has a
+    /// holding folder, and nothing is over the list.
+    fn may_drag(&self, i: usize) -> bool {
+        self.holding.is_some()
+            && self.over().list_live()
+            && !system::modal_open()
+            && !self.row_saving(i)
+            && self
+                .files
+                .entries()
+                .get(i)
+                .is_some_and(|e| e.held().is_some() && !e.is_gone(|p| p.exists()))
+    }
+
+    /// Whether the pointer, at `(x, y)` with `keys` (MK_ flags), has gone
+    /// past the system drag distance from a press that may drag.
+    fn drag_due(&self, x: f32, y: f32, keys: u32) -> bool {
+        let Some(p) = self.list_press.filter(|p| p.drag) else {
+            return false;
+        };
+        if keys & MK_LBUTTON_FLAG == 0 {
+            return false;
+        }
+        let (cx, cy) = unsafe { (GetSystemMetrics(SM_CXDRAG), GetSystemMetrics(SM_CYDRAG)) };
+        // Pixels to layout units, as the pointer is measured.
+        let k = 1.0 / layout::px_per_unit(self.dpi, self.zoom);
+        model::past_drag(
+            x - p.point.0,
+            y - p.point.1,
+            (cx / 2) as f32 * k,
+            (cy / 2) as f32 * k,
+        )
+    }
+
+    /// Drag the selection's held results out of Kiln. When the drag
+    /// returns, a file that's gone was moved by the drop; one still there
+    /// was copied, or the drag was cancelled, and stays held.
+    fn drag_out(&mut self) {
+        let saving = self.saving_files();
+        let files = self.files.drag_files(|p| saving.contains(p) || !p.exists());
+        if files.is_empty() {
+            // Nothing left to carry: the press stays a click.
+            if let Some(p) = &mut self.list_press {
+                p.drag = false;
+            }
+            return;
+        }
+        self.list_press = None;
+        unsafe {
+            let _ = ReleaseCapture();
+        }
+        // Remembered first: the drop can move a file while the drag still
+        // runs, and a look for gone results meanwhile must see it as
+        // dragged out.
+        self.dragged.extend(files.iter().cloned());
+        // The drag's loop delivers the window's messages, as a dialog's
+        // does: work that would start meanwhile waits.
+        self.own_drag.set(true);
+        system::window_loop(true);
+        let result = drag_out::drag_files(self.hwnd, &files);
+        system::window_loop(false);
+        self.own_drag.set(false);
+        if self.destroyed {
+            return;
+        }
+        // Only whether each file is still there says it moved: Explorer's
+        // own move reports no effect.
+        let moved: Vec<PathBuf> = files.iter().filter(|p| !p.exists()).cloned().collect();
+        if !moved.is_empty() {
+            self.files.dragged_out(&moved);
+            self.forget_dropped_notes();
+            self.held_changed();
+        }
+        self.dragged.retain(|p| p.exists());
+        if let Err(e) = result {
+            log(&format!("couldn't start the drag: {e}"));
+            self.alert(model::DRAG_FAILED.to_owned());
+        }
+        self.invalidate();
     }
 
     /// Where an export dialog for `source`'s results opens.
@@ -3499,7 +3631,9 @@ impl App {
         )
     }
 
-    fn mouse_move(&mut self, x: f32, y: f32) {
+    /// The pointer moved to `(x, y)`, with the buttons and keys `keys`
+    /// (the message's MK_ flags) says.
+    fn mouse_move(&mut self, x: f32, y: f32, keys: u32) {
         if self.sheet.is_some() {
             let hover = self.sheet_hit(x, y);
             if let Some(s) = self.sheet.as_mut().filter(|s| s.is_open()) {
@@ -3540,6 +3674,10 @@ impl App {
         }
         if self.wheel.is_some() {
             self.wheel_point(x, y);
+            return;
+        }
+        if self.drag_due(x, y, keys) {
+            self.drag_out();
             return;
         }
         let (row, cancel, link) = self.hit_row(x, y);
@@ -3594,8 +3732,14 @@ impl App {
             .help
             .as_mut()
             .is_some_and(|ui| std::mem::take(&mut ui.pressed));
+        let press = self.list_press.take();
         unsafe {
             let _ = ReleaseCapture();
+        }
+        // A press inside a selection that didn't become a drag: the click.
+        if let Some(p) = press.filter(|p| p.collapse) {
+            self.files.click(p.row);
+            self.invalidate();
         }
         if help_close {
             let (w, h) = self.renderer.size_dips();
@@ -3646,6 +3790,7 @@ impl App {
         let (shift, ctrl) = (keys & MK_SHIFT_FLAG != 0, keys & MK_CONTROL_FLAG != 0);
         // The pointer takes over from the keyboard: no button keeps a ring.
         self.button_focus = None;
+        self.list_press = None;
         if self.sheet.is_some() {
             let hit = self.sheet_hit(x, y);
             let inside = self.sheet_layout().is_some_and(|l| l.panel.contains(x, y));
@@ -3738,13 +3883,26 @@ impl App {
             match row {
                 Some(i) if ctrl => self.files.ctrl_click(i),
                 Some(i) if shift => self.files.shift_click(i),
-                Some(i) => {
+                Some(i) if cancel || link => {
                     self.files.click(i);
                     if cancel {
                         self.cancel_row(i);
-                    } else if link {
+                    } else {
                         self.follow_link(i);
                     }
+                }
+                // Held until release or a drag: a press inside a selection
+                // keeps it, so the whole selection can be dragged out.
+                Some(i) => {
+                    let collapse = self.files.press(i);
+                    let drag = self.may_drag(i);
+                    self.list_press = Some(ListPress {
+                        row: i,
+                        point: (x, y),
+                        collapse,
+                        drag,
+                    });
+                    unsafe { SetCapture(self.hwnd) };
                 }
                 // A plain click off the rows clears the selection.
                 None if !ctrl && !shift => self.files.clear_selection(),
@@ -4889,6 +5047,9 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         take_focus: false,
         button_focus: None,
         queued: vec![],
+        own_drag: Rc::new(Cell::new(false)),
+        list_press: None,
+        dragged: HashSet::new(),
     });
     let app = Box::into_raw(app);
     unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, app as isize) };
@@ -4904,7 +5065,7 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         log("bundled serif unavailable; using the fallback");
     }
 
-    let target: IDropTarget = DropTarget::new(hwnd).into();
+    let target: IDropTarget = DropTarget::new(hwnd, app_ref(app).own_drag.clone()).into();
     unsafe { RegisterDragDrop(hwnd, &target)? };
 
     unsafe {
@@ -5297,7 +5458,7 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             if app.last_mouse != Some(at) {
                 app.last_mouse = Some(at);
                 let (x, y) = app.dips(at.0, at.1);
-                app.mouse_move(x, y);
+                app.mouse_move(x, y, wparam.0 as u32);
             }
             Some(LRESULT(0))
         }
@@ -5457,6 +5618,8 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             app.on_exported(*ex);
             Some(LRESULT(0))
         }
+        // Kiln's own drag back over Kiln: the drop target ignores it too.
+        WM_KILN_DRAG | WM_KILN_DROP if app.own_drag.get() => Some(LRESULT(0)),
         WM_KILN_DRAG => {
             let ev = unsafe { &*(lparam.0 as *const DragEvent) };
             match wparam.0 {

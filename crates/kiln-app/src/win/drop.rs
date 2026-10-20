@@ -1,7 +1,9 @@
 //! The OLE drop target. It runs on the UI thread and forwards each event
 //! to the window procedure with SendMessage, so all state stays in `App`.
 
+use std::cell::Cell;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use windows::core::{implement, Ref, Result};
 use windows::Win32::Foundation::{HWND, LPARAM, POINTL, WPARAM};
@@ -36,14 +38,18 @@ pub struct DragEvent {
 #[implement(IDropTarget)]
 pub struct DropTarget {
     hwnd: HWND,
-    has_files: std::cell::Cell<bool>,
+    has_files: Cell<bool>,
+    /// Set while Kiln runs a drag of its own results: dropping them back
+    /// onto Kiln does nothing.
+    own: Rc<Cell<bool>>,
 }
 
 impl DropTarget {
-    pub fn new(hwnd: HWND) -> Self {
+    pub fn new(hwnd: HWND, own: Rc<Cell<bool>>) -> Self {
         Self {
             hwnd,
-            has_files: std::cell::Cell::new(false),
+            has_files: Cell::new(false),
+            own,
         }
     }
 
@@ -124,7 +130,8 @@ impl IDropTarget_Impl for DropTarget_Impl {
         pt: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
-        let files = data.as_ref().is_some_and(offers_files);
+        // Kiln's own drag: refused, and the window hears nothing of it.
+        let files = !self.own.get() && data.as_ref().is_some_and(offers_files);
         self.has_files.set(files);
         set_effect(effect, effect_for(files));
         if files {
@@ -147,7 +154,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
         pt: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
-        let files = self.has_files.get();
+        let files = self.has_files.get() && !self.own.get();
         set_effect(effect, effect_for(files));
         if files {
             let ev = DragEvent {
@@ -182,6 +189,10 @@ impl IDropTarget_Impl for DropTarget_Impl {
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
         self.has_files.set(false);
+        if self.own.get() {
+            set_effect(effect, DROPEFFECT_NONE);
+            return Ok(());
+        }
         let paths = data.as_ref().map(dropped_paths).unwrap_or_default();
         set_effect(effect, effect_for(!paths.is_empty()));
         let ev = DragEvent {
