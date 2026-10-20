@@ -3,7 +3,9 @@
 //! the model and the layout, so it can be tested without a window.
 //! `win::uia` serves it through UI Automation.
 
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use kiln_core::Preset;
 
@@ -137,6 +139,8 @@ pub struct Node {
     pub status: Option<String>,
     /// Its text changes as things happen, and is announced.
     pub live: bool,
+    /// The key that does it, said apart from its name: "Tab".
+    pub shortcut: Option<&'static str>,
     pub children: Vec<Node>,
 }
 
@@ -153,6 +157,7 @@ impl Node {
             help: None,
             status: None,
             live: false,
+            shortcut: None,
             children: vec![],
         }
     }
@@ -228,6 +233,31 @@ impl Node {
         path.iter().try_fold(self, |n, &i| n.children.get(i))
     }
 
+    /// Where to go from the node at `path`: its parent, a sibling or a
+    /// child. The root's parent and siblings are the window's own
+    /// business, so they're `Neighbour::Nothing`.
+    pub fn neighbour(&self, path: &[usize], to: Toward) -> Neighbour {
+        let Some(n) = self.at(path) else {
+            return Neighbour::Nothing;
+        };
+        let key = |n: Option<&Node>| n.map_or(Neighbour::Nothing, |n| Neighbour::Node(n.key));
+        match (to, path.split_last()) {
+            (Toward::FirstChild, _) => key(n.children.first()),
+            (Toward::LastChild, _) => key(n.children.last()),
+            (_, None) => Neighbour::Nothing,
+            (Toward::Parent, Some((_, []))) => Neighbour::Root,
+            (Toward::Parent, Some((_, parent))) => key(self.at(parent)),
+            (Toward::Next | Toward::Previous, Some((&i, parent))) => {
+                let j = if to == Toward::Next {
+                    i.checked_add(1)
+                } else {
+                    i.checked_sub(1)
+                };
+                key(j.and_then(|j| self.at(parent)?.children.get(j)))
+            }
+        }
+    }
+
     /// The deepest node on screen under a point, in layout units: later
     /// siblings are drawn over earlier ones, so they're tried first.
     pub fn hit(&self, x: f32, y: f32) -> &Node {
@@ -252,6 +282,80 @@ impl Node {
             value: self.role == Role::Spinner,
             scroll_item: self.role == Role::ListItem,
         }
+    }
+}
+
+/// A direction to move through the tree, as UI Automation navigates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Toward {
+    Parent,
+    Next,
+    Previous,
+    FirstChild,
+    LastChild,
+}
+
+/// Where a move through the tree lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Neighbour {
+    /// The window itself.
+    Root,
+    Node(u64),
+    Nothing,
+}
+
+/// Whether the window should do `req` now: its element is still there
+/// and, for anything but moving the focus or scrolling, can be used. A
+/// request made against an older tree is dropped rather than acting on
+/// something the person can no longer see.
+pub fn accepts(tree: &Node, req: &Request) -> bool {
+    match tree.find(&req.id) {
+        None => false,
+        Some(_) if matches!(req.verb, Verb::Focus | Verb::ScrollIntoView) => true,
+        Some(n) => !n.states.disabled,
+    }
+}
+
+/// How often a running row's progress is told again, at most.
+pub const PROGRESS_EVERY: Duration = Duration::from_millis(250);
+
+/// Whole percent, 0 to 100.
+pub fn percent(fraction: f32) -> u32 {
+    (fraction.clamp(0.0, 1.0) * 100.0).round() as u32
+}
+
+/// Holds each running row's progress to a few changes a second, so a
+/// screen reader isn't told every frame's percent.
+#[derive(Debug, Default)]
+pub struct ProgressGate {
+    told: HashMap<PathBuf, (u32, Instant)>,
+}
+
+impl ProgressGate {
+    /// The percent to show for the row at `path`: the new one once
+    /// `PROGRESS_EVERY` has passed since the last change, the last one
+    /// before that.
+    pub fn shown(&mut self, path: &Path, fraction: Option<f32>, now: Instant) -> Option<u32> {
+        let Some(f) = fraction else {
+            self.told.remove(path);
+            return None;
+        };
+        let pct = percent(f);
+        match self.told.get(path) {
+            Some(&(last, at)) if last != pct && now.duration_since(at) < PROGRESS_EVERY => {
+                Some(last)
+            }
+            Some(&(last, _)) if last == pct => Some(last),
+            _ => {
+                self.told.insert(path.to_owned(), (pct, now));
+                Some(pct)
+            }
+        }
+    }
+
+    /// Forget rows that aren't running any more.
+    pub fn keep(&mut self, running: impl Fn(&Path) -> bool) {
+        self.told.retain(|p, _| running(p));
     }
 }
 
@@ -283,6 +387,8 @@ pub struct RowIn<'a> {
     pub instead: Option<&'a str>,
     /// The link the row shows: "Show details" or "Export".
     pub link: Option<&'static str>,
+    /// How far a running row has got, in whole percent, as last told.
+    pub progress: Option<u32>,
 }
 
 /// The open wheel.
@@ -358,6 +464,8 @@ pub struct Input<'a> {
 
 /// The list's name.
 pub const LIST_NAME: &str = "Files";
+/// The wheel centre's "Options… (Tab)", with the key said apart.
+pub const OPTIONS_NAME: &str = "Options…";
 /// The settings tabs' name.
 pub const TABS_NAME: &str = "Settings pages";
 
@@ -569,8 +677,8 @@ fn row(r: &RowIn, rect: Rect, offscreen: bool) -> Node {
     .help(Some(&e.folder));
     n.states.offscreen = offscreen;
     let mut children = vec![];
-    if let JobState::Running { fraction, .. } = &e.job {
-        n.status = fraction.map(|f| format!("{}%", (f.clamp(0.0, 1.0) * 100.0).round()));
+    if let JobState::Running { .. } = &e.job {
+        n.status = r.progress.map(|p| format!("{p}%"));
         children.push(Node::new(
             Id::RowCancel(path.clone()),
             Role::Button,
@@ -669,12 +777,14 @@ fn menu(wh: &WheelIn) -> Node {
     }
     if wh.options {
         let o = layout::wheel_centre(R_INNER).options;
-        items.push(Node::new(
+        let mut options = Node::new(
             Id::WheelOptions,
             Role::MenuItem,
-            wheel::OPTIONS_TARGET,
+            OPTIONS_NAME,
             Rect::new(cx + o.x * s, cy + o.y * s, o.w * s, o.h * s),
-        ));
+        );
+        options.shortcut = Some("Tab");
+        items.push(options);
     }
     Node::new(Id::Wheel, Role::Menu, name, around((0.0, 0.0), 2.0 * reach))
         .focusable()
@@ -936,6 +1046,10 @@ mod tests {
                 selected: false,
                 instead: None,
                 link: e.link(false),
+                progress: match &e.job {
+                    JobState::Running { fraction, .. } => fraction.map(percent),
+                    _ => None,
+                },
             })
             .collect()
     }
@@ -1186,7 +1300,8 @@ mod tests {
         assert!(webp.states.focused && webp.states.selected);
         let more = named(menu, Role::MenuItem, "More");
         named(more, Role::MenuItem, &wheel::target_label("bmp"));
-        named(menu, Role::MenuItem, wheel::OPTIONS_TARGET);
+        let options = named(menu, Role::MenuItem, OPTIONS_NAME);
+        assert_eq!(options.shortcut, Some("Tab"));
     }
 
     #[test]
@@ -1374,5 +1489,201 @@ mod tests {
         let paths = t.paths();
         let (_, path) = paths.iter().find(|(k, _)| *k == row.key).unwrap();
         assert_eq!(t.at(path).map(|n| &n.id), Some(&row.id));
+    }
+
+    #[test]
+    fn two_selected_rows_both_read_selected() {
+        let lines = empty_lines(&Settings::default());
+        let es = [
+            entry("a.png", JobState::Idle),
+            entry("b.png", JobState::Idle),
+            entry("c.png", JobState::Idle),
+        ];
+        let mut rs = rows(&es);
+        rs[0].selected = true;
+        rs[2].selected = true;
+        let t = tree(&input(&lines, rs));
+        let list = t.find(&Id::List).unwrap();
+        assert!(list.patterns().selection);
+        let selected: Vec<bool> = list.children.iter().map(|c| c.states.selected).collect();
+        assert_eq!(selected, [true, false, true]);
+    }
+
+    #[test]
+    fn the_options_sheet_reads_its_knobs_and_buttons() {
+        let lines = empty_lines(&Settings::default());
+        let l = layout::sheet(
+            800.0,
+            600.0,
+            &[kiln_core::Knob::Preset, kiln_core::Knob::Size],
+        );
+        let knobs = [
+            ("Quality".to_owned(), "High".to_owned()),
+            ("Size".to_owned(), "1080p".to_owned()),
+        ];
+        let mut i = input(&lines, vec![]);
+        i.sheet = Some(SheetIn {
+            layout: &l,
+            title: "Convert to MP4",
+            target: "MP4: video",
+            context: "interview.mov, 3.4 MB",
+            result: "1080p, about 1.1 MB",
+            rows: &knobs,
+            preset: Preset::High,
+            focus: Some(0),
+        });
+        let t = tree(&i);
+        sound(&t);
+        assert_eq!(t.children.len(), 1);
+        let d = named(&t, Role::Dialog, "Convert to MP4");
+        let quality = named(d, Role::Group, "Quality");
+        assert!(quality.patterns().selection);
+        let chosen: Vec<&str> = quality
+            .children
+            .iter()
+            .filter(|c| c.states.selected)
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(chosen, [Preset::High.label()]);
+        assert!(quality.children[0].states.focused);
+        let size = named(d, Role::Spinner, "Size");
+        assert_eq!(size.value.as_deref(), Some("1080p"));
+        named(d, Role::Text, "1080p, about 1.1 MB");
+        named(d, Role::Button, "Cancel");
+        named(d, Role::Button, "Convert");
+    }
+
+    #[test]
+    fn requests_for_elements_that_are_gone_are_dropped() {
+        let lines = empty_lines(&Settings::default());
+        let quality = QualityDefaults::default();
+        let es = [entry("a.png", JobState::Idle)];
+        let ask = |id: Id, verb: Verb| Request { id, verb };
+
+        // With Settings open, the list's buttons aren't there to press.
+        let l = layout::settings(800.0, 600.0, SettingsShape::default());
+        let mut i = input(&lines, rows(&es));
+        i.settings = Some(settings_input(&l, &quality, None));
+        let open = tree(&i);
+        assert!(open.find(&Id::Clear).is_none());
+        assert!(!accepts(&open, &ask(Id::Clear, Verb::Invoke)));
+        assert!(!accepts(&open, &ask(Id::AddFiles, Verb::Invoke)));
+        let theme = Id::Setting(Control::Theme(ThemeChoice::default()));
+        assert!(accepts(&open, &ask(theme.clone(), Verb::Select)));
+        // Forget picks is disabled without picks: it can take the focus
+        // but not be pressed.
+        let forget = Id::Setting(Control::ForgetPicks);
+        assert!(!accepts(&open, &ask(forget.clone(), Verb::Invoke)));
+        assert!(accepts(&open, &ask(forget, Verb::Focus)));
+
+        // With Settings closed, its controls are gone.
+        let closed = tree(&input(&lines, rows(&es)));
+        assert!(accepts(&closed, &ask(Id::Clear, Verb::Invoke)));
+        assert!(!accepts(&closed, &ask(theme, Verb::Select)));
+        let step = Id::Setting(Control::Step(crate::quality::DefaultSetting::Resolution));
+        assert!(!accepts(&closed, &ask(step, Verb::SetValue("720p".into()))));
+        // A row that left the list is gone too.
+        let gone = Id::Row(PathBuf::from(r"C:\photos\gone.png"));
+        assert!(!accepts(&closed, &ask(gone, Verb::Select)));
+        assert!(accepts(
+            &closed,
+            &ask(Id::Row(es[0].path.clone()), Verb::Select)
+        ));
+    }
+
+    #[test]
+    fn neighbours_agree_with_paths() {
+        let lines = empty_lines(&Settings::default());
+        let es = [
+            entry("a.png", JobState::Idle),
+            entry(
+                "b.png",
+                JobState::Running {
+                    action: Action::Convert("jpg".into()),
+                    fraction: Some(0.5),
+                },
+            ),
+        ];
+        let t = tree(&input(&lines, rows(&es)));
+        let key_at = |p: &[usize]| t.at(p).map(|n| n.key);
+        for (key, path) in &t.paths() {
+            let n = t.at(path).unwrap();
+            assert_eq!(n.key, *key);
+            let first = t.neighbour(path, Toward::FirstChild);
+            let last = t.neighbour(path, Toward::LastChild);
+            match n.children.len() {
+                0 => assert_eq!((first, last), (Neighbour::Nothing, Neighbour::Nothing)),
+                k => {
+                    let mut p = path.clone();
+                    p.push(0);
+                    assert_eq!(first, Neighbour::Node(key_at(&p).unwrap()));
+                    *p.last_mut().unwrap() = k - 1;
+                    assert_eq!(last, Neighbour::Node(key_at(&p).unwrap()));
+                }
+            }
+            let Some((&i, parent)) = path.split_last() else {
+                // The window's own parent and siblings are the HWND's.
+                assert_eq!(t.neighbour(path, Toward::Parent), Neighbour::Nothing);
+                assert_eq!(t.neighbour(path, Toward::Next), Neighbour::Nothing);
+                continue;
+            };
+            let up = t.neighbour(path, Toward::Parent);
+            if parent.is_empty() {
+                assert_eq!(up, Neighbour::Root);
+            } else {
+                assert_eq!(up, Neighbour::Node(key_at(parent).unwrap()));
+            }
+            let sibling = |j: Option<usize>| {
+                j.and_then(|j| {
+                    let mut p = parent.to_vec();
+                    p.push(j);
+                    key_at(&p)
+                })
+                .map_or(Neighbour::Nothing, Neighbour::Node)
+            };
+            assert_eq!(t.neighbour(path, Toward::Next), sibling(Some(i + 1)));
+            assert_eq!(
+                t.neighbour(path, Toward::Previous),
+                sibling(i.checked_sub(1))
+            );
+        }
+    }
+
+    #[test]
+    fn progress_is_told_a_few_times_a_second_at_most() {
+        let mut gate = ProgressGate::default();
+        let path = Path::new(r"C:\photos\a.mov");
+        let t0 = Instant::now();
+        assert_eq!(gate.shown(path, Some(0.10), t0), Some(10));
+        // Inside 250 ms a new percent waits, so the tree doesn't change.
+        let soon = t0 + Duration::from_millis(100);
+        assert_eq!(gate.shown(path, Some(0.13), soon), Some(10));
+        assert_eq!(gate.shown(path, Some(0.104), soon), Some(10));
+        let lines = empty_lines(&Settings::default());
+        let running = |f: f32| {
+            entry(
+                "a.mov",
+                JobState::Running {
+                    action: Action::Convert("mp4".into()),
+                    fraction: Some(f),
+                },
+            )
+        };
+        let (before, after) = ([running(0.10)], [running(0.13)]);
+        let mut a = rows(&before);
+        a[0].progress = Some(10);
+        let mut b = rows(&after);
+        b[0].progress = gate.shown(path, Some(0.13), soon);
+        let (ta, tb) = (tree(&input(&lines, a)), tree(&input(&lines, b)));
+        assert_eq!(ta, tb);
+        // Once 250 ms have passed it moves on.
+        let later = t0 + PROGRESS_EVERY;
+        assert_eq!(gate.shown(path, Some(0.13), later), Some(13));
+        assert_eq!(gate.shown(path, Some(0.20), later), Some(13));
+        // A job that stopped saying how far is forgotten.
+        assert_eq!(gate.shown(path, None, later), None);
+        assert_eq!(gate.shown(path, Some(0.5), later), Some(50));
+        gate.keep(|_| false);
+        assert!(gate.told.is_empty());
     }
 }

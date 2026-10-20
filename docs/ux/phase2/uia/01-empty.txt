@@ -1,42 +1,42 @@
 Kiln UIA dump: 01-empty
 State: Empty window, no files
-Captured: 2026-10-20T01:54:50, kiln-app release build, 100% scale, scratch APPDATA and LOCALAPPDATA
+Captured: 2026-10-20T02:09:38, kiln-app release build, 100% scale, scratch APPDATA and LOCALAPPDATA
 
 == Raw view (everything UIA exposes) ==
-- name="Kiln" | type=Window | automationId="Kiln" | rect=x=208 y=208 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
-  - name="Help" | type=Button | automationId="HelpButton" | rect=x=848 y=251 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Help (F1)"
-  - name="Settings" | type=Button | automationId="SettingsButton" | rect=x=888 y=251 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Settings (Ctrl+,)"
-  - name="Drop files here" | type=Group | automationId="DropPanel" | rect=x=232 y=311 w=688 h=392 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
-    - name="Or add them with the button below, or Ctrl+O." | type=Text | automationId="DropLine(0)" | rect=x=248 y=471 w=656 h=20 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
-    - name="Add files" | type=Button | automationId="AddFiles" | rect=x=520 y=503 w=112 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Add files (Ctrl+O)"
-    - name="Hold Shift while dropping to convert, Ctrl for tools, or Alt for file actions." | type=Text | automationId="DropLine(2)" | rect=x=248 y=567 w=656 h=16 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
-    - name="Everything converts on this PC. Nothing is uploaded." | type=Text | automationId="DropLine(3)" | rect=x=248 y=587 w=656 h=16 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
-    - name="Fire raw files into finished ones." | type=Text | automationId="DropLine(4)" | rect=x=248 y=611 w=656 h=20 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+- name="Kiln" | type=Window | automationId="Kiln" | rect=x=26 y=26 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+  - name="Help" | type=Button | automationId="HelpButton" | rect=x=666 y=69 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Help (F1)"
+  - name="Settings" | type=Button | automationId="SettingsButton" | rect=x=706 y=69 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Settings (Ctrl+,)"
+  - name="Drop files here" | type=Group | automationId="DropPanel" | rect=x=50 y=129 w=688 h=392 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Or add them with the button below, or Ctrl+O." | type=Text | automationId="DropLine(0)" | rect=x=66 y=289 w=656 h=20 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Add files" | type=Button | automationId="AddFiles" | rect=x=338 y=321 w=112 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Add files (Ctrl+O)"
+    - name="Hold Shift while dropping to convert, Ctrl for tools, or Alt for file actions." | type=Text | automationId="DropLine(2)" | rect=x=66 y=385 w=656 h=16 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Everything converts on this PC. Nothing is uploaded." | type=Text | automationId="DropLine(3)" | rect=x=66 y=405 w=656 h=16 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Fire raw files into finished ones." | type=Text | automationId="DropLine(4)" | rect=x=66 y=429 w=656 h=20 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
 
 == Control view (what Narrator walks) ==
-- name="Kiln" | type=Window | automationId="Kiln" | rect=x=208 y=208 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
-  - name="Help" | type=Button | automationId="HelpButton" | rect=x=848 y=251 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Help (F1)"
-  - name="Settings" | type=Button | automationId="SettingsButton" | rect=x=888 y=251 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Settings (Ctrl+,)"
-  - name="Drop files here" | type=Group | automationId="DropPanel" | rect=x=232 y=311 w=688 h=392 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
-    - name="Or add them with the button below, or Ctrl+O." | type=Text | automationId="DropLine(0)" | rect=x=248 y=471 w=656 h=20 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
-    - name="Add files" | type=Button | automationId="AddFiles" | rect=x=520 y=503 w=112 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Add files (Ctrl+O)"
-    - name="Hold Shift while dropping to convert, Ctrl for tools, or Alt for file actions." | type=Text | automationId="DropLine(2)" | rect=x=248 y=567 w=656 h=16 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
-    - name="Everything converts on this PC. Nothing is uploaded." | type=Text | automationId="DropLine(3)" | rect=x=248 y=587 w=656 h=16 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
-    - name="Fire raw files into finished ones." | type=Text | automationId="DropLine(4)" | rect=x=248 y=611 w=656 h=20 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+- name="Kiln" | type=Window | automationId="Kiln" | rect=x=26 y=26 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+  - name="Help" | type=Button | automationId="HelpButton" | rect=x=666 y=69 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Help (F1)"
+  - name="Settings" | type=Button | automationId="SettingsButton" | rect=x=706 y=69 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Settings (Ctrl+,)"
+  - name="Drop files here" | type=Group | automationId="DropPanel" | rect=x=50 y=129 w=688 h=392 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Or add them with the button below, or Ctrl+O." | type=Text | automationId="DropLine(0)" | rect=x=66 y=289 w=656 h=20 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Add files" | type=Button | automationId="AddFiles" | rect=x=338 y=321 w=112 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Add files (Ctrl+O)"
+    - name="Hold Shift while dropping to convert, Ctrl for tools, or Alt for file actions." | type=Text | automationId="DropLine(2)" | rect=x=66 y=385 w=656 h=16 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Everything converts on this PC. Nothing is uploaded." | type=Text | automationId="DropLine(3)" | rect=x=66 y=405 w=656 h=16 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Fire raw files into finished ones." | type=Text | automationId="DropLine(4)" | rect=x=66 y=429 w=656 h=20 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
 
 == Content view ==
-- name="Kiln" | type=Window | automationId="Kiln" | rect=x=208 y=208 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
-  - name="Help" | type=Button | automationId="HelpButton" | rect=x=848 y=251 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Help (F1)"
-  - name="Settings" | type=Button | automationId="SettingsButton" | rect=x=888 y=251 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Settings (Ctrl+,)"
-  - name="Drop files here" | type=Group | automationId="DropPanel" | rect=x=232 y=311 w=688 h=392 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
-    - name="Or add them with the button below, or Ctrl+O." | type=Text | automationId="DropLine(0)" | rect=x=248 y=471 w=656 h=20 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
-    - name="Add files" | type=Button | automationId="AddFiles" | rect=x=520 y=503 w=112 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Add files (Ctrl+O)"
-    - name="Hold Shift while dropping to convert, Ctrl for tools, or Alt for file actions." | type=Text | automationId="DropLine(2)" | rect=x=248 y=567 w=656 h=16 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
-    - name="Everything converts on this PC. Nothing is uploaded." | type=Text | automationId="DropLine(3)" | rect=x=248 y=587 w=656 h=16 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
-    - name="Fire raw files into finished ones." | type=Text | automationId="DropLine(4)" | rect=x=248 y=611 w=656 h=20 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+- name="Kiln" | type=Window | automationId="Kiln" | rect=x=26 y=26 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+  - name="Help" | type=Button | automationId="HelpButton" | rect=x=666 y=69 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Help (F1)"
+  - name="Settings" | type=Button | automationId="SettingsButton" | rect=x=706 y=69 w=32 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Settings (Ctrl+,)"
+  - name="Drop files here" | type=Group | automationId="DropPanel" | rect=x=50 y=129 w=688 h=392 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Or add them with the button below, or Ctrl+O." | type=Text | automationId="DropLine(0)" | rect=x=66 y=289 w=656 h=20 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Add files" | type=Button | automationId="AddFiles" | rect=x=338 y=321 w=112 h=32 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[Invoke] | help="Add files (Ctrl+O)"
+    - name="Hold Shift while dropping to convert, Ctrl for tools, or Alt for file actions." | type=Text | automationId="DropLine(2)" | rect=x=66 y=385 w=656 h=16 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Everything converts on this PC. Nothing is uploaded." | type=Text | automationId="DropLine(3)" | rect=x=66 y=405 w=656 h=16 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
+    - name="Fire raw files into finished ones." | type=Text | automationId="DropLine(4)" | rect=x=66 y=429 w=656 h=20 | keyboardFocusable=False | hasFocus=False | enabled=True | offscreen=False | patterns=[]
 
 == Focused element ==
-name="Kiln" | type=Window | automationId="Kiln" | rect=x=208 y=208 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
+name="Kiln" | type=Window | automationId="Kiln" | rect=x=26 y=26 w=736 h=519 | keyboardFocusable=False | hasFocus=True | enabled=True | offscreen=False | patterns=[Window,Transform]
 
 == ElementFromPoint at each element's centre ==
 "Kiln" -> "Drop files here" (Group)

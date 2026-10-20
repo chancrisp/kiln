@@ -73,6 +73,9 @@ const HINT_TIMER: usize = 2;
 /// Fires once, when the details dialog's "Copied" has been up long
 /// enough to read "Copy" again.
 const COPIED_TIMER: usize = 3;
+/// Fires once, when UI Automation's tree is due to catch up with an
+/// animation or a job's progress.
+const A11Y_TIMER: usize = 4;
 /// Added to the hint timer's wait, so it fires after the two seconds.
 const HINT_SLACK: Duration = Duration::from_millis(50);
 const FRAME_MS: u32 = 16;
@@ -611,6 +614,16 @@ struct App {
     alert: Option<String>,
     /// What UI Automation clients are told the window holds.
     uia: uia::Host,
+    /// Each running row's progress as UI Automation was last told it.
+    progress: a11y::ProgressGate,
+    /// When UI Automation's tree was last built.
+    a11y_built: Option<Instant>,
+    /// A11Y_TIMER is set to build it again.
+    a11y_pending: bool,
+    /// What to tell UI Automation clients once this message is done.
+    a11y_events: Vec<uia::Event>,
+    /// Counts each status set: see `say`.
+    status_seq: u64,
 }
 
 impl App {
@@ -795,7 +808,12 @@ impl App {
                 settled: None,
             });
         }
-        self.status = status_line(self.files.len(), r.added, r.duplicates, r.skipped);
+        self.say(status_line(
+            self.files.len(),
+            r.added,
+            r.duplicates,
+            r.skipped,
+        ));
         // An add that added nothing says why, whatever is selected.
         if r.added == 0 {
             self.alert = Some(self.status.clone());
@@ -829,7 +847,14 @@ impl App {
     /// happen, which the selection count doesn't hide.
     fn alert(&mut self, text: String) {
         self.alert = Some(text.clone());
-        self.status = text;
+        self.say(text);
+    }
+
+    /// Set the status line. Each set counts, so an alert set again with
+    /// the same words is said again.
+    fn say(&mut self, text: impl Into<String>) {
+        self.status = text.into();
+        self.status_seq += 1;
     }
 
     /// Whether the status is an alert that still stands.
@@ -941,7 +966,7 @@ impl App {
         self.files.remove(i);
         self.rows.remove(i);
         self.notes.remove(&path);
-        self.status = status_line(self.files.len(), 0, 0, 0);
+        self.say(status_line(self.files.len(), 0, 0, 0));
         self.held_changed();
         self.clamp_scroll();
         self.invalidate();
@@ -1033,7 +1058,7 @@ impl App {
         if !self.exports.is_empty() {
             if matches!(then, Then::Close) {
                 self.close_when_saved = true;
-                self.status = "Saving… Kiln will close when it's done.".to_owned();
+                self.say("Saving… Kiln will close when it's done.".to_owned());
                 self.invalidate();
                 return;
             }
@@ -1046,7 +1071,7 @@ impl App {
                 .zip(&mask)
                 .any(|(e, &picked)| picked && saving.contains(&e.path));
             if busy || self.leaving.is_some() {
-                self.status = model::SAVING.to_owned();
+                self.say(model::SAVING.to_owned());
                 self.invalidate();
                 return;
             }
@@ -1226,7 +1251,7 @@ impl App {
     /// picker for several. A row already being exported is left be.
     fn export_row(&mut self, i: usize) {
         if self.leaving.is_some() {
-            self.status = model::SAVING.to_owned();
+            self.say(model::SAVING.to_owned());
             self.invalidate();
             return;
         }
@@ -1321,7 +1346,7 @@ impl App {
     /// footer.
     fn export_together(&mut self, sources: &[PathBuf]) {
         if self.leaving.is_some() {
-            self.status = model::SAVING.to_owned();
+            self.say(model::SAVING.to_owned());
             self.invalidate();
             return;
         }
@@ -1350,7 +1375,7 @@ impl App {
     /// Every held result, into one folder.
     fn export_everything(&mut self) {
         if self.leaving.is_some() {
-            self.status = model::SAVING.to_owned();
+            self.say(model::SAVING.to_owned());
             self.invalidate();
             return;
         }
@@ -1490,11 +1515,11 @@ impl App {
                 _ => {}
             }
         }
-        self.status = if all {
+        self.say(if all {
             model::export_summary(moved.len(), results.len())
         } else {
             status_line(self.files.len(), 0, 0, 0)
-        };
+        });
         if all && !failed.is_empty() {
             self.alert = Some(self.status.clone());
         }
@@ -2343,7 +2368,10 @@ impl App {
             );
         }
         let n = paths.len();
-        self.status = format!("Working on {n} file{}.", if n == 1 { "" } else { "s" });
+        self.say(format!(
+            "Working on {n} file{}.",
+            if n == 1 { "" } else { "s" }
+        ));
         self.held_changed();
         self.animate();
     }
@@ -2448,8 +2476,10 @@ impl App {
                     if b.pending == 0 {
                         let summary =
                             batch_summary(&b.action, b.files, b.ok, b.failed, b.cancelled);
-                        self.status = model::with_export_hint(summary, b.held);
-                        if b.failed > 0 {
+                        let failed = b.failed > 0;
+                        let line = model::with_export_hint(summary, b.held);
+                        self.say(line);
+                        if failed {
                             self.alert = Some(self.status.clone());
                         }
                         self.batches.remove(&job.batch);
@@ -2475,7 +2505,7 @@ impl App {
             FileAction::CopyPath => {
                 let text = actions::clipboard_text(&paths);
                 match system::set_clipboard(self.hwnd, &text) {
-                    Ok(()) => self.status = actions::copied_summary(paths.len()),
+                    Ok(()) => self.say(actions::copied_summary(paths.len())),
                     Err(e) => self.alert(format!("Couldn't copy the path: {}", e.message())),
                 }
             }
@@ -2584,7 +2614,7 @@ impl App {
                 self.rows[i].settled = Some(now);
             }
         }
-        self.status = actions::moved_summary(ok, failed, &m.dest);
+        self.say(actions::moved_summary(ok, failed, &m.dest));
         if failed > 0 {
             self.alert = Some(self.status.clone());
         }
@@ -3560,8 +3590,9 @@ impl App {
 
     // Accessibility.
 
-    /// What the window shows, as a tree for UI Automation.
-    fn a11y_tree(&self) -> a11y::Node {
+    /// What the window shows, as a tree for UI Automation. `progress`
+    /// holds each row's percent as UI Automation is told it.
+    fn a11y_tree(&self, progress: &[Option<u32>]) -> a11y::Node {
         let size = self.renderer.size_dips();
         let l = self.layout();
         let saving = self.saving_rows();
@@ -3589,6 +3620,7 @@ impl App {
                     selected: self.files.is_selected(i),
                     instead,
                     link,
+                    progress: progress.get(i).copied().flatten(),
                 }
             })
             .collect();
@@ -3675,22 +3707,79 @@ impl App {
     }
 
     /// Give UI Automation the window as it is now, once a client has
-    /// asked for it. It hears of new focus, rows and status from here.
-    fn sync_a11y(&mut self) {
+    /// asked for it. What to tell clients, a new focus, rows or status,
+    /// waits in `a11y_events` until the message is done.
+    fn sync_a11y(&mut self, announce: bool) {
         if !self.uia.active() {
             return;
         }
-        let tree = self.a11y_tree();
+        if self.a11y_pending {
+            self.a11y_pending = false;
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), A11Y_TIMER);
+            }
+        }
+        let now = Instant::now();
+        self.a11y_built = Some(now);
+        let entries = self.files.entries();
+        let progress: Vec<Option<u32>> = entries
+            .iter()
+            .map(|e| {
+                let fraction = match &e.job {
+                    JobState::Running { fraction, .. } => *fraction,
+                    _ => None,
+                };
+                self.progress.shown(&e.path, fraction, now)
+            })
+            .collect();
+        let listed: HashSet<&Path> = entries.iter().map(|e| e.path.as_path()).collect();
+        self.progress.keep(|p| listed.contains(p));
+        let tree = self.a11y_tree(&progress);
         let unit_px = layout::px_per_unit(self.dpi, self.zoom);
         let has_focus = unsafe { GetFocus() } == self.hwnd;
-        let status = self.status.clone();
-        self.uia.update(tree, unit_px, has_focus, &status);
+        let status = uia::Status {
+            text: &self.status,
+            seq: self.status_seq,
+            alert: self.alerting(),
+        };
+        let events = self.uia.update(tree, unit_px, has_focus, status, announce);
+        self.a11y_events.extend(events);
+    }
+
+    /// Bring UI Automation up to date after a message that may change
+    /// little: an animation frame, a job's progress, a drag. At most
+    /// every `a11y::PROGRESS_EVERY`; a timer catches up what's left.
+    fn sync_a11y_soon(&mut self) {
+        if !self.uia.active() || self.a11y_pending {
+            return;
+        }
+        let wait = self.a11y_built.map_or(Duration::ZERO, |t| {
+            a11y::PROGRESS_EVERY.saturating_sub(t.elapsed())
+        });
+        if wait.is_zero() {
+            return self.sync_a11y(true);
+        }
+        self.a11y_pending = true;
+        let ms = wait.as_millis().clamp(1, u32::MAX as u128) as u32;
+        unsafe {
+            SetTimer(Some(self.hwnd), A11Y_TIMER, ms, None);
+        }
     }
 
     /// Do what a UI Automation client asked, as the click or key that
     /// does the same would.
     fn a11y_do(&mut self, req: a11y::Request) {
         use a11y::{Id, Verb};
+        // Asked of an older tree: what it named may have gone, or can't be
+        // used any more.
+        if !a11y::accepts(&self.a11y_tree(&[]), &req) {
+            return;
+        }
+        if req.verb == Verb::Focus {
+            unsafe {
+                let _ = SetFocus(Some(self.hwnd));
+            }
+        }
         let row = |app: &App, path: &Path| app.files.entries().iter().position(|e| e.path == path);
         match (&req.id, &req.verb) {
             (Id::HelpButton, Verb::Invoke) => self.open_help(),
@@ -4001,7 +4090,6 @@ impl App {
             t.sync(tools, self.unit_dpi());
         }
         self.tips = tips;
-        self.sync_a11y();
     }
 
     // Tooltips.
@@ -4354,6 +4442,11 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         added: None,
         alert: None,
         uia: uia::Host::new(hwnd),
+        progress: a11y::ProgressGate::default(),
+        a11y_built: None,
+        a11y_pending: false,
+        a11y_events: Vec::new(),
+        status_seq: 0,
     });
     let app = Box::into_raw(app);
     unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, app as isize) };
@@ -4552,10 +4645,40 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     if ptr.is_null() {
         return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     }
-    let app = unsafe { &mut *ptr };
-    match handle(app, msg, wparam, lparam) {
+    let (answer, events) = {
+        let app = unsafe { &mut *ptr };
+        let answer = handle(app, msg, wparam, lparam);
+        after(app, msg, wparam);
+        (answer, std::mem::take(&mut app.a11y_events))
+    };
+    // With `App` no longer borrowed: a client told something may call
+    // straight back in.
+    uia::raise(events);
+    match answer {
         Some(r) => r,
         None => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+/// After each message, bring UI Automation's tree up to date, even while
+/// minimised, when nothing paints. Input and the window's own news go at
+/// once; anything else, such as animation frames and job progress, goes a
+/// few times a second at most. Painting never builds it.
+fn after(app: &mut App, msg: u32, wparam: WPARAM) {
+    if !app.uia.active() {
+        return;
+    }
+    match msg {
+        WM_PAINT | WM_ERASEBKGND | WM_GETOBJECT | WM_NCHITTEST | WM_SETCURSOR | WM_DESTROY
+        | WM_NCDESTROY => {}
+        WM_TIMER if wparam.0 == A11Y_TIMER => {}
+        WM_TIMER if wparam.0 == HINT_TIMER || wparam.0 == COPIED_TIMER => app.sync_a11y(true),
+        WM_KEYDOWN | WM_SYSKEYDOWN | WM_LBUTTONDOWN | WM_LBUTTONUP | WM_LBUTTONDBLCLK
+        | WM_CONTEXTMENU | WM_MOUSEWHEEL | WM_SETFOCUS | WM_KILLFOCUS | WM_ACTIVATE
+        | WM_COPYDATA | WM_SIZE | WM_DPICHANGED | WM_KILN_DROP | WM_KILN_EXPORTED
+        | WM_KILN_MOVED | WM_KILN_FACTS | WM_KILN_PROBE | WM_KILN_UPDATE => app.sync_a11y(true),
+        m if m == uia::WM_KILN_A11Y => app.sync_a11y(true),
+        _ => app.sync_a11y_soon(),
     }
 }
 
@@ -4640,6 +4763,14 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
                 let _ = KillTimer(Some(hwnd), COPIED_TIMER);
             }
             app.invalidate();
+            Some(LRESULT(0))
+        }
+        WM_TIMER if wparam.0 == A11Y_TIMER => {
+            unsafe {
+                let _ = KillTimer(Some(hwnd), A11Y_TIMER);
+            }
+            app.a11y_pending = false;
+            app.sync_a11y(true);
             Some(LRESULT(0))
         }
         WM_TIMER if wparam.0 == ANIM_TIMER => {
@@ -4831,7 +4962,6 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
         WM_KILN_EXPORTED => {
             let ex = unsafe { Box::from_raw(lparam.0 as *mut Exported) };
             app.on_exported(*ex);
-            app.sync_a11y();
             Some(LRESULT(0))
         }
         WM_KILN_DRAG => {
@@ -4865,8 +4995,6 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
         WM_KILN_JOB => {
             let ev = unsafe { Box::from_raw(lparam.0 as *mut JobEvent) };
             app.on_job(*ev);
-            // Said even while minimised, when nothing paints.
-            app.sync_a11y();
             Some(LRESULT(0))
         }
         // Coming back to Kiln: a held result may have been removed by hand
@@ -4892,19 +5020,16 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             let first = !app.uia.active();
             let root = app.uia.root();
             if first {
-                app.sync_a11y();
+                // The tree is simply there for the first client: nothing
+                // to announce.
+                app.sync_a11y(false);
             }
             Some(uia::answer(hwnd, wparam, lparam, root))
         }
         uia::WM_KILN_A11Y => {
             let req = unsafe { Box::from_raw(lparam.0 as *mut a11y::Request) };
             app.a11y_do(*req);
-            app.sync_a11y();
             Some(LRESULT(0))
-        }
-        WM_SETFOCUS | WM_KILLFOCUS => {
-            app.sync_a11y();
-            None
         }
         WM_DESTROY => {
             // UI Automation lets go of the tree first.

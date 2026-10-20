@@ -5,7 +5,8 @@
 //! a snapshot of the tree, swapped in by the UI thread after each change,
 //! and never touch `App`. What a client asks an element to do is posted to
 //! the window as `WM_KILN_A11Y`, and the UI thread does it the way a click
-//! or a key would.
+//! or a key would, if the element is still there. Events are raised once
+//! the window is done with `App`, as a client can call straight back in.
 
 #![allow(non_upper_case_globals)]
 
@@ -21,12 +22,12 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::System::Com::SAFEARRAY;
-use windows::Win32::System::Ole::{SafeArrayCreateVector, SafeArrayPutElement};
+use windows::Win32::System::Ole::{SafeArrayCreateVector, SafeArrayDestroy, SafeArrayPutElement};
 use windows::Win32::System::Variant::{VARIANT, VT_BOOL, VT_BSTR, VT_I4, VT_UNKNOWN};
 use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
-use crate::a11y::{Id, Node, Request, Role, Verb};
+use crate::a11y::{Id, Neighbour, Node, Request, Role, Toward, Verb};
 
 /// Posted by a provider when a client asks an element to do something;
 /// lparam is a `Box<Request>` the window takes.
@@ -94,6 +95,31 @@ struct Said {
     focus: Option<u64>,
     rows: Vec<u64>,
     status: String,
+    /// The status's count when it was last said: an alert set again with
+    /// the same words is said again.
+    seq: u64,
+}
+
+/// The status line as `Host::update` needs it.
+pub struct Status<'a> {
+    pub text: &'a str,
+    /// Counts each time the status is set, even to the same words.
+    pub seq: u64,
+    /// It reports something going wrong or not happening.
+    pub alert: bool,
+}
+
+/// Something to tell listening clients, raised by `raise` once the window
+/// is done with `App`.
+pub struct Event {
+    shared: Weak<Shared>,
+    kind: Kind,
+}
+
+enum Kind {
+    Focus(u64),
+    Rows(u64),
+    Status(String, bool),
 }
 
 /// The window's side: owns the snapshot and raises events.
@@ -149,66 +175,67 @@ impl Host {
         .into()
     }
 
-    /// Swap in a new tree, then tell listening clients what changed:
-    /// where the focus went, rows added or removed, a new status.
-    pub fn update(&mut self, root: Node, unit_px: f32, has_focus: bool, status: &str) {
+    /// Swap in a new tree, unless it's the one clients already have, and
+    /// return what to tell them: where the focus went, rows added or
+    /// removed, a new status. With `announce` false, as when the first
+    /// client connects, nothing is told: the tree is simply there.
+    pub fn update(
+        &mut self,
+        root: Node,
+        unit_px: f32,
+        has_focus: bool,
+        status: Status,
+        announce: bool,
+    ) -> Vec<Event> {
         let focus = root.focused().map(|n| n.key).filter(|_| has_focus);
         let rows: Vec<u64> = root
             .find(&Id::List)
             .map(|l| l.children.iter().map(|c| c.key).collect())
             .unwrap_or_default();
         let list = root.find(&Id::List).map(|l| l.key);
+        let unit_px = unit_px.max(0.01);
         {
             let mut snap = self.shared.lock();
             if !snap.alive {
-                return;
+                return Vec::new();
             }
-            snap.index = root.paths().into_iter().collect();
-            snap.root = root;
-            snap.unit_px = unit_px.max(0.01);
-            snap.has_focus = has_focus;
+            let same = snap.root == root && snap.unit_px == unit_px && snap.has_focus == has_focus;
+            if !same {
+                snap.index = root.paths().into_iter().collect();
+                snap.root = root;
+                snap.unit_px = unit_px;
+                snap.has_focus = has_focus;
+            }
         }
-        // Note what's new before saying it: raising an event can bring a
-        // client straight back in, even to this window's messages.
         let new_focus = (focus != self.said.focus).then_some(focus).flatten();
         let new_rows = rows != self.said.rows;
-        let new_status = (status != self.said.status && !status.is_empty()).then_some(status);
+        let again = status.alert && status.seq != self.said.seq;
+        let new_status = (status.text != self.said.status || again) && !status.text.is_empty();
         self.said.focus = focus;
         self.said.rows = rows;
-        status.clone_into(&mut self.said.status);
-        // Outside the lock, and only when someone is listening.
-        if !unsafe { UiaClientsAreListening() }.as_bool() {
-            return;
+        status.text.clone_into(&mut self.said.status);
+        self.said.seq = status.seq;
+        if !announce {
+            return Vec::new();
         }
-        let weak = Arc::downgrade(&self.shared);
+        let shared = Arc::downgrade(&self.shared);
+        let mut events = Vec::new();
+        let mut tell = |kind| {
+            events.push(Event {
+                shared: shared.clone(),
+                kind,
+            })
+        };
         if let Some(key) = new_focus {
-            let el: IRawElementProviderSimple = Element::new(weak.clone(), key).into();
-            let _ = unsafe { UiaRaiseAutomationEvent(&el, UIA_AutomationFocusChangedEventId) };
+            tell(Kind::Focus(key));
         }
         if let (true, Some(key)) = (new_rows, list) {
-            let el: IRawElementProviderSimple = Element::new(weak.clone(), key).into();
-            let mut id = runtime_id(key);
-            let _ = unsafe {
-                UiaRaiseStructureChangedEvent(
-                    &el,
-                    StructureChangeType_ChildrenInvalidated,
-                    id.as_mut_ptr(),
-                    id.len() as i32,
-                )
-            };
+            tell(Kind::Rows(key));
         }
-        if let Some(status) = new_status {
-            let root: IRawElementProviderSimple = Root { shared: weak }.into();
-            let _ = unsafe {
-                UiaRaiseNotificationEvent(
-                    &root,
-                    NotificationKind_ActionCompleted,
-                    NotificationProcessing_MostRecent,
-                    &BSTR::from(status),
-                    &BSTR::from("kiln.status"),
-                )
-            };
+        if new_status {
+            tell(Kind::Status(status.text.to_owned(), status.alert));
         }
+        events
     }
 
     /// The window is closing: every element goes, and UI Automation lets
@@ -223,6 +250,51 @@ impl Host {
         unsafe {
             UiaReturnRawElementProvider(hwnd, WPARAM(0), LPARAM(0), None);
             let _ = UiaDisconnectAllProviders();
+        }
+    }
+}
+
+/// Tell listening clients what `Host::update` found. Called with no
+/// borrow of `App` held, as a client may call straight back in.
+pub fn raise(events: Vec<Event>) {
+    if events.is_empty() || !unsafe { UiaClientsAreListening() }.as_bool() {
+        return;
+    }
+    for Event { shared, kind } in events {
+        match kind {
+            Kind::Focus(key) => {
+                let el: IRawElementProviderSimple = Element::new(shared, key).into();
+                let _ = unsafe { UiaRaiseAutomationEvent(&el, UIA_AutomationFocusChangedEventId) };
+            }
+            Kind::Rows(key) => {
+                let el: IRawElementProviderSimple = Element::new(shared, key).into();
+                let mut id = runtime_id(key);
+                let _ = unsafe {
+                    UiaRaiseStructureChangedEvent(
+                        &el,
+                        StructureChangeType_ChildrenInvalidated,
+                        id.as_mut_ptr(),
+                        id.len() as i32,
+                    )
+                };
+            }
+            Kind::Status(text, alert) => {
+                let root: IRawElementProviderSimple = Root { shared }.into();
+                let kind = if alert {
+                    NotificationKind_ActionAborted
+                } else {
+                    NotificationKind_ActionCompleted
+                };
+                let _ = unsafe {
+                    UiaRaiseNotificationEvent(
+                        &root,
+                        kind,
+                        NotificationProcessing_MostRecent,
+                        &BSTR::from(text),
+                        &BSTR::from("kiln.status"),
+                    )
+                };
+            }
         }
     }
 }
@@ -243,7 +315,10 @@ fn int_array(values: &[i32]) -> Result<*mut SAFEARRAY> {
         }
         for (i, v) in values.iter().enumerate() {
             let i = i as i32;
-            SafeArrayPutElement(psa, &i, (v as *const i32).cast())?;
+            if let Err(e) = SafeArrayPutElement(psa, &i, (v as *const i32).cast()) {
+                let _ = SafeArrayDestroy(psa);
+                return Err(e);
+            }
         }
         Ok(psa)
     }
@@ -259,8 +334,12 @@ fn unknown_array(items: &[IUnknown]) -> Result<*mut SAFEARRAY> {
         }
         for (i, item) in items.iter().enumerate() {
             let i = i as i32;
-            // SafeArrayPutElement AddRefs what it stores.
-            SafeArrayPutElement(psa, &i, item.as_raw())?;
+            // SafeArrayPutElement AddRefs what it stores, and
+            // SafeArrayDestroy releases it.
+            if let Err(e) = SafeArrayPutElement(psa, &i, item.as_raw()) {
+                let _ = SafeArrayDestroy(psa);
+                return Err(e);
+            }
         }
         Ok(psa)
     }
@@ -351,8 +430,13 @@ struct Root {
 }
 
 impl Root_Impl {
+    /// The window's side, while the window is open.
     fn shared(&self) -> Result<Arc<Shared>> {
-        self.shared.upgrade().ok_or_else(gone)
+        let shared = self.shared.upgrade().ok_or_else(gone)?;
+        if !shared.lock().alive {
+            return Err(gone());
+        }
+        Ok(shared)
     }
 
     fn child(&self, last: bool) -> Result<IRawElementProviderFragment> {
@@ -380,6 +464,7 @@ impl IRawElementProviderSimple_Impl for Root_Impl {
     }
 
     fn GetPropertyValue(&self, id: UIA_PROPERTY_ID) -> Result<VARIANT> {
+        self.shared()?;
         Ok(match id {
             UIA_AutomationIdPropertyId => var_str("Kiln"),
             _ => VARIANT::default(),
@@ -554,6 +639,10 @@ impl IRawElementProviderSimple_Impl for Element_Impl {
                 UIA_IsOffscreenPropertyId => var_bool(s.offscreen),
                 UIA_IsDialogPropertyId => var_bool(n.role == Role::Dialog),
                 UIA_LiveSettingPropertyId if n.live => var_i4(Polite.0),
+                UIA_AcceleratorKeyPropertyId => match n.shortcut {
+                    Some(k) => var_str(k),
+                    None => VARIANT::default(),
+                },
                 UIA_ClassNamePropertyId => var_str("Kiln"),
                 _ => VARIANT::default(),
             })
@@ -567,47 +656,29 @@ impl IRawElementProviderSimple_Impl for Element_Impl {
 
 impl IRawElementProviderFragment_Impl for Element_Impl {
     fn Navigate(&self, direction: NavigateDirection) -> Result<IRawElementProviderFragment> {
-        enum To {
-            Root,
-            Key(u64),
-            Nothing,
-        }
-        let to = self.with(|snap, n, path| {
-            let sibling = |d: isize| {
-                let (last, parent) = path.split_last()?;
-                let i = last.checked_add_signed(d)?;
-                snap.root.at(parent)?.children.get(i).map(|c| c.key)
-            };
-            Ok(match direction {
-                NavigateDirection_Parent => match path.split_last() {
-                    Some((_, [])) => To::Root,
-                    Some((_, parent)) => {
-                        snap.root.at(parent).map_or(To::Nothing, |p| To::Key(p.key))
-                    }
-                    None => To::Nothing,
-                },
-                NavigateDirection_NextSibling => sibling(1).map_or(To::Nothing, To::Key),
-                NavigateDirection_PreviousSibling => sibling(-1).map_or(To::Nothing, To::Key),
-                NavigateDirection_FirstChild => {
-                    n.children.first().map_or(To::Nothing, |c| To::Key(c.key))
-                }
-                NavigateDirection_LastChild => {
-                    n.children.last().map_or(To::Nothing, |c| To::Key(c.key))
-                }
-                _ => To::Nothing,
-            })
-        })?;
-        match to {
-            To::Root => Ok(Root {
+        let to = match direction {
+            NavigateDirection_Parent => Toward::Parent,
+            NavigateDirection_NextSibling => Toward::Next,
+            NavigateDirection_PreviousSibling => Toward::Previous,
+            NavigateDirection_FirstChild => Toward::FirstChild,
+            NavigateDirection_LastChild => Toward::LastChild,
+            _ => return none(),
+        };
+        match self.with(|snap, _, path| Ok(snap.root.neighbour(path, to)))? {
+            Neighbour::Root => Ok(Root {
                 shared: self.shared.clone(),
             }
             .into()),
-            To::Key(key) => Ok(self.other(key).into()),
-            To::Nothing => none(),
+            Neighbour::Node(key) => Ok(self.other(key).into()),
+            Neighbour::Nothing => none(),
         }
     }
 
     fn GetRuntimeId(&self) -> Result<*mut SAFEARRAY> {
+        let shared = self.shared.upgrade().ok_or_else(gone)?;
+        if !shared.lock().alive {
+            return Err(gone());
+        }
         int_array(&runtime_id(self.key))
     }
 
