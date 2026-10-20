@@ -105,10 +105,7 @@ fn compress_on_a_type_it_has_no_settings_for_is_a_usage_error() {
         .arg(&input)
         .assert()
         .code(2)
-        .stderr(
-            "kiln: Kiln can't compress AVI files.
-",
-        );
+        .stderr("kiln: Kiln can't compress AVI files.\n");
 }
 
 #[test]

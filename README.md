@@ -263,8 +263,9 @@ format, or an unsupported pair or tool), and 1 when a conversion fails.
 
 `kiln suggest` prints each file's suggestion and its reason. It adds an
 `(all)` line for a tool when one applies, even to a single file, and, for
-several files, one for a conversion they share, when there is one. It ignores your picks, so its output is the same every time.
-It exits with 2 when a file doesn't exist.
+several files, one for a conversion they share, when there is one. It
+ignores your picks, so its output is the same every time. It exits with 2
+when a file doesn't exist.
 
 ```text
 > kiln suggest photo.png sample.mov
