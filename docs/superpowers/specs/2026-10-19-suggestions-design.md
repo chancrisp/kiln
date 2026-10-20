@@ -117,7 +117,8 @@ Limits:
 
 - `inspect` never fails. A file it can't read gives fewer facts.
 - Images over 50 megapixels skip the decode and keep only header facts.
-- PDFs over 200 MB skip the text check.
+- PDFs over 200 MB aren't inspected. They keep only type and size, so no
+  suggestion is based on their pages or text.
 - Every FFmpeg run and PDF read honours `cancel` and stops after 2 s.
 
 ### Suggestion
