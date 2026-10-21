@@ -22,12 +22,8 @@
     <MajorUpgrade DowngradeErrorMessage="A newer version of Kiln is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
-    <!--
-      The icon comes from kiln-app.exe, which embeds kiln.ico as resource 1.
-      The Id ends in .exe because an advertised shortcut's icon must have
-      the same extension as its component's key file (ICE50).
-    -->
-    <Icon Id="KilnIcon.exe" SourceFile="$(StageDir)\kiln-app.exe" />
+    <!-- The Id ends in .exe for ICE50; Windows reads the icon from the file's contents, not its extension. -->
+    <Icon Id="KilnIcon.exe" SourceFile="$(StageDir)\kiln.ico" />
     <Property Id="ARPPRODUCTICON" Value="KilnIcon.exe" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
