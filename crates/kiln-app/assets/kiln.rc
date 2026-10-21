@@ -6,7 +6,6 @@
 // so without it Kiln would appear there as "kiln-app.exe". build.rs passes
 // the crate version as CARGO_PKG_VERSION_MAJOR, _MINOR and _PATCH.
 #define KILN_STR2(x) #x
-#define KILN_STR(x) KILN_STR2(x)
 #define KILN_DOTTED2(a, b, c) KILN_STR2(a.b.c)
 #define KILN_DOTTED(a, b, c) KILN_DOTTED2(a, b, c)
 #define KILN_VERSION_STR KILN_DOTTED(CARGO_PKG_VERSION_MAJOR, CARGO_PKG_VERSION_MINOR, CARGO_PKG_VERSION_PATCH)

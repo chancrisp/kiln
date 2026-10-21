@@ -70,6 +70,16 @@ fn the_open_with_list_matches_the_registry() {
         if line.contains("<RegistryValue") && !line.contains(r#"Root="HKLM""#) {
             problems.push(format!("line {n}: a RegistryValue outside HKLM"));
         }
+        // Under an extension's own key, only OpenWithProgids: never its
+        // default value, which would make Kiln the default app.
+        if let Some((_, rest)) = line.split_once(r#"Key="Software\Classes\."#) {
+            let key = rest.split_once('"').map_or(rest, |(k, _)| k);
+            if !key.ends_with(r"\OpenWithProgids") {
+                problems.push(format!(
+                    "line {n}: a value under an extension's key outside OpenWithProgids"
+                ));
+            }
+        }
     }
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }

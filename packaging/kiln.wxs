@@ -22,8 +22,13 @@
     <MajorUpgrade DowngradeErrorMessage="A newer version of Kiln is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
-    <Icon Id="KilnIcon" SourceFile="$(StageDir)\kiln.ico" />
-    <Property Id="ARPPRODUCTICON" Value="KilnIcon" />
+    <!--
+      The icon comes from kiln-app.exe, which embeds kiln.ico as resource 1.
+      The Id ends in .exe because an advertised shortcut's icon must have
+      the same extension as its component's key file (ICE50).
+    -->
+    <Icon Id="KilnIcon.exe" SourceFile="$(StageDir)\kiln-app.exe" />
+    <Property Id="ARPPRODUCTICON" Value="KilnIcon.exe" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="Kiln" />
@@ -36,7 +41,7 @@
                     Description="Convert files on this PC"
                     Directory="ProgramMenuFolder"
                     WorkingDirectory="INSTALLFOLDER"
-                    Icon="KilnIcon"
+                    Icon="KilnIcon.exe"
                     Advertise="yes" />
         </File>
       </Component>
@@ -81,6 +86,12 @@
     <!--
       Send to, for the account that installs Kiln. A per-user item in a
       per-machine package needs an HKCU key path (ICE38, ICE43, ICE57).
+      Being per user, it is removed only by an uninstall run from the
+      installing account. One run from a different admin account can't
+      reach that account's profile, so the shortcut stays behind there.
+      That comes with any per-user item.
+      The shortcut has no Icon: one that points to kiln-app.exe shows the
+      exe's own icon.
     -->
     <StandardDirectory Id="SendToFolder">
       <Component Id="SendTo">
@@ -88,8 +99,7 @@
                   Name="Kiln"
                   Description="Convert files on this PC"
                   Target="[INSTALLFOLDER]kiln-app.exe"
-                  WorkingDirectory="INSTALLFOLDER"
-                  Icon="KilnIcon" />
+                  WorkingDirectory="INSTALLFOLDER" />
         <RegistryValue Root="HKCU" Key="Software\Kiln" Name="SendTo"
                        Type="integer" Value="1" KeyPath="yes" />
       </Component>
@@ -98,6 +108,18 @@
     <Feature Id="Main">
       <ComponentGroupRef Id="KilnFiles" />
       <ComponentGroupRef Id="OpenWithTypes" />
+    </Feature>
+
+    <!--
+      Send to has a feature of its own. The Start menu shortcut is
+      advertised, and launching it checks the key paths of its feature and
+      that feature's parents. In Main, another account's launch would find
+      this HKCU key path missing, repair the feature and copy Send to into
+      that account, where uninstall would leave it behind. As a separate
+      top-level feature it is never checked by that shortcut. It keeps the
+      default level, so it still installs.
+    -->
+    <Feature Id="SendTo">
       <ComponentRef Id="SendTo" />
     </Feature>
   </Package>
