@@ -180,7 +180,7 @@ up, so a 720p clip stays 720p when the cap is 1080p.
 
 ## Install
 
-- **Installer.** `Kiln-<version>-x64.msi` installs into Program Files, adds a Start menu entry and puts `kiln` on PATH. It also adds Kiln to Open with for the files it converts, and to Send to.
+- **Installer.** `Kiln-<version>-x64.msi` installs into Program Files, adds a Start menu entry and puts `kiln` on PATH. It also adds Kiln to Open with for the files it converts, and, for the account that installs it, to Send to.
 - **Portable.** Unzip `Kiln-<version>-x64-portable.zip` anywhere and run `kiln-app.exe`.
 
 Images convert out of the box. The other kinds use free helper apps that Kiln

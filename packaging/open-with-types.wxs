@@ -5,6 +5,7 @@
   with crates/kiln-core/formats.toml. When a new input format is added
   there, add its two lines here, one in SupportedTypes and one in
   OpenWithProgids. Windows reads only the value names, so the data is empty.
+  A few inputs are left out on purpose; they are listed in that test.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Fragment>
@@ -200,8 +201,6 @@
         <RegistryValue Root="HKLM" Key="Software\Classes\.tif\OpenWithProgids" Name="Kiln.Convert" Type="string" Value="" />
         <RegistryValue Root="HKLM" Key="Software\Classes\Applications\kiln-app.exe\SupportedTypes" Name=".tiff" Type="string" Value="" />
         <RegistryValue Root="HKLM" Key="Software\Classes\.tiff\OpenWithProgids" Name="Kiln.Convert" Type="string" Value="" />
-        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\kiln-app.exe\SupportedTypes" Name=".ts" Type="string" Value="" />
-        <RegistryValue Root="HKLM" Key="Software\Classes\.ts\OpenWithProgids" Name="Kiln.Convert" Type="string" Value="" />
         <RegistryValue Root="HKLM" Key="Software\Classes\Applications\kiln-app.exe\SupportedTypes" Name=".txt" Type="string" Value="" />
         <RegistryValue Root="HKLM" Key="Software\Classes\.txt\OpenWithProgids" Name="Kiln.Convert" Type="string" Value="" />
         <RegistryValue Root="HKLM" Key="Software\Classes\Applications\kiln-app.exe\SupportedTypes" Name=".typ" Type="string" Value="" />

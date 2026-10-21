@@ -46,11 +46,13 @@ Success looks like this:
   Kiln is never the default.
 - The extensions are the ones Kiln converts from: each input format and
   its aliases, lowercase, with a dot.
+- `.ts` is left out, because TypeScript files share the extension.
 - With several files selected, Explorer starts one Kiln per file, and
   the existing hand-off gathers them into the first window.
   - `MultiSelectModel` is left unset. `Player` could hand a plain command
     line only the first file, and the others would be lost.
-  - Explorer's own prompt for more than 15 files stays as Windows has it.
+  - Explorer's own limit on how many selected files one command handles
+    (15 by default, `MultipleInvokePromptMinimum`) stays as Windows has it.
 - Without a version resource, Open with shows Kiln as `kiln-app.exe`. So
   `kiln-app.exe` gets one, with the file description and product name
   `Kiln`.
@@ -103,7 +105,13 @@ Success looks like this:
     into one window.
   - With Kiln already open, Open with a .mp4: it joins the open window.
   - Double-click a .png: it opens in its usual app.
+  - Double-click a .txt and a .mp4 not opened since the install: each opens
+    in its usual app, with no "How do you want to open this file?" prompt.
   - Uninstall: Kiln has gone from Open with and Send to.
+  - Uninstall between check runs: a rebuilt MSI with the same version
+    installs as a second copy.
+  - Open with on ten or more files on the first launch after install: one
+    window, every file a row.
 
 ## Out of scope
 

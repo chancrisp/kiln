@@ -9,6 +9,10 @@ const FRAGMENT: &str = concat!(
     "/../../packaging/open-with-types.wxs"
 );
 
+/// Inputs Kiln reads but the Open with list leaves out. TypeScript files
+/// share the `.ts` extension with MPEG-TS video.
+const NOT_OFFERED: &[&str] = &["ts"];
+
 /// The text between `start` and the next `"` after it, for each line
 /// that holds `start`.
 fn quoted_after<'a>(lines: impl Iterator<Item = &'a str>, start: &str) -> BTreeSet<String> {
@@ -35,7 +39,19 @@ fn compare(what: &str, found: &BTreeSet<String>, want: &BTreeSet<String>) -> Opt
 fn the_open_with_list_matches_the_registry() {
     let text =
         std::fs::read_to_string(FRAGMENT).unwrap_or_else(|e| panic!("cannot read {FRAGMENT}: {e}"));
-    let want: BTreeSet<String> = Registry::builtin().input_extensions().into_iter().collect();
+    let inputs: BTreeSet<String> = Registry::builtin().input_extensions().into_iter().collect();
+    let stale: Vec<&&str> = NOT_OFFERED
+        .iter()
+        .filter(|ext| !inputs.contains(**ext))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "NOT_OFFERED lists extensions that are no longer Kiln inputs: {stale:?}"
+    );
+    let want: BTreeSet<String> = inputs
+        .into_iter()
+        .filter(|ext| !NOT_OFFERED.contains(&ext.as_str()))
+        .collect();
 
     // SupportedTypes: Name=".<ext>" on the lines that carry that key.
     let supported = quoted_after(

@@ -85,6 +85,9 @@
       Being per user, it is removed only by an uninstall run from the
       installing account. One run from a different admin account can't
       reach that account's profile, so the shortcut stays behind there.
+      A repair or major upgrade run from a different admin account
+      likewise installs Send to into that account as well, leaving the
+      first account's shortcut behind.
       That comes with any per-user item.
       The shortcut has no Icon: one that points to kiln-app.exe shows the
       exe's own icon.
