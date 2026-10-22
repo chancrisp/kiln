@@ -128,3 +128,7 @@ window between them as well.
 - [ ] Dark and Light override it. The title bar follows the theme.
 - [ ] Light mode: bone ground (#F3EFE7), soot text, celadon accent, brick errors. Check the list, every wheel, a failed row, the details dialog and Settings.
 - [ ] Nothing in either theme uses pure black, pure white or orange.
+- [ ] Settings > General has "Save results next to the original", On or Off, off by default. The first time a result is ready, Kiln asks once whether to save next to the original from now on; either answer is remembered, and the setting shows it.
+- [ ] With it on, a converted file appears beside the original under a free name (`photo (1).jpg` when `photo.jpg` exists, never overwriting), the row reads "Saved next to the original: photo (1).jpg" with a **Show in folder** link, hovering shows the full path, and closing Kiln asks nothing.
+- [ ] With it on and a folder that can't be written (read-only or full), the result stays held, the row reads "Couldn't save to <folder>. Choose another folder." with a **Choose folder** link, and closing Kiln asks about the unsaved result.
+- [ ] With it off, a finished row reads "Done, not saved yet: photo.jpg"; hovering it says it can be dragged to a folder. Ctrl+S on one result and on several both open a folder picker ("Save photo.jpg to", "Save 3 files to"). "Export as…" in the row menu saves one result under a new name.

@@ -193,6 +193,8 @@ pub struct SettingsView<'a> {
     pub theme: ThemeChoice,
     /// Whether suggestions are on.
     pub suggestions: bool,
+    /// Whether results are saved next to the original as they are ready.
+    pub autosave: bool,
     /// Whether any picks are counted; Forget picks is disabled without.
     pub has_habits: bool,
     pub keys: KeyMap,
@@ -1964,6 +1966,12 @@ impl Draw<'_> {
                     self.segment(label, r, hover, pressed, chosen, p);
                     Some(chosen)
                 }
+                Control::AutoSave(on) => {
+                    let chosen = *on == sv.autosave;
+                    let label = if *on { "On" } else { "Off" };
+                    self.segment(label, r, hover, pressed, chosen, p);
+                    Some(chosen)
+                }
                 Control::ForgetPicks if sv.has_habits => {
                     self.button("Forget picks", r, hover, pressed, p);
                     None
@@ -2120,7 +2128,8 @@ impl Band {
 fn same_group(a: Control, b: Control) -> bool {
     match (a, b) {
         (Control::Theme(_), Control::Theme(_))
-        | (Control::Suggestions(_), Control::Suggestions(_)) => true,
+        | (Control::Suggestions(_), Control::Suggestions(_))
+        | (Control::AutoSave(_), Control::AutoSave(_)) => true,
         (Control::Preset(x, _), Control::Preset(y, _)) => x == y,
         _ => false,
     }

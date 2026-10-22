@@ -657,6 +657,9 @@ pub enum Control {
     Suggestions(bool),
     /// Clears the picks counted for suggestions.
     ForgetPicks,
+    /// The On (true) or Off (false) segment of "Save results next to the
+    /// original".
+    AutoSave(bool),
     /// One segment of a quality preset control.
     Preset(DefaultSetting, Preset),
     /// A value that steps through its choices: "1080p", "30 fps".
@@ -697,6 +700,8 @@ pub const SETTINGS_ROW: f32 = 40.0;
 /// The General page's row for the wheel keys. Too long for one line at
 /// the label's width, it wraps onto two.
 pub const WHEEL_KEYS_LABEL: &str = "Keys to hold while dropping";
+/// The label of the setting that saves each result as it is ready.
+pub const AUTOSAVE_LABEL: &str = "Save results next to the original";
 /// The Quality page's page DPI, which sets how sharp every page drawn as
 /// an image comes out, not only PDF's. It wraps onto two lines in the
 /// second column, as the sheet's knob of the same name doesn't need to.
@@ -745,7 +750,16 @@ pub const SETTINGS_FIRST_FOCUS: usize = 0;
 
 pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
     let p = PANEL_PADDING;
-    let ph = p + 32.0 + 8.0 + SETTINGS_ROWS as f32 * SETTINGS_ROW + p + BUTTON_HEIGHT + p;
+    // General's first row has a hint under it, which the other pages have
+    // no use for; they keep its height so the panel never moves.
+    let ph = p
+        + 32.0
+        + 8.0
+        + SETTINGS_ROWS as f32 * SETTINGS_ROW
+        + SETTINGS_HINT
+        + p
+        + BUTTON_HEIGHT
+        + p;
     let pw = snap((w - 32.0).clamp(0.0, 560.0));
     let panel = Rect::new(
         snap(((w - pw) / 2.0).max(0.0)),
@@ -861,6 +875,18 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
                 ctl(x0 + 2.0 * SEGMENT_WIDTH + 8.0, 3, FORGET_BUTTON_WIDTH),
             ));
             rows.push(row("Suggestions", 3, None));
+
+            for (k, on) in [true, false].into_iter().enumerate() {
+                controls.push((
+                    Control::AutoSave(on),
+                    ctl(x0 + k as f32 * SEGMENT_WIDTH, 4, SEGMENT_WIDTH),
+                ));
+            }
+            // A long label: in two lines, filling the row's height.
+            rows.push(SettingsRow {
+                label_rect: Rect::new(panel.x + p, row_y(4), SETTINGS_LABEL, SETTINGS_ROW),
+                ..row(AUTOSAVE_LABEL, 4, None)
+            });
         }
         SettingsTab::Quality => {
             // Every stepper has its own label: a second one on a line
@@ -1950,7 +1976,8 @@ mod tests {
                 "Start exports in",
                 "Theme",
                 "Keys to hold while dropping",
-                "Suggestions"
+                "Suggestions",
+                "Save results next to the original"
             ]
         );
         assert_eq!(
@@ -1958,7 +1985,7 @@ mod tests {
             Some("Unset: the last folder you exported to, or the file's own folder.")
         );
         assert!(general.rows[1..].iter().all(|r| r.hint.is_none()));
-        assert_eq!(general.controls.len(), 3 + 1 + 3 + 3 + 2 + 1 + 1 + 1);
+        assert_eq!(general.controls.len(), 3 + 1 + 3 + 3 + 2 + 1 + 2 + 1 + 1);
         assert_eq!(general.controls[0].0, Control::Tab(SettingsTab::General));
         let keys = general
             .controls

@@ -61,6 +61,8 @@ pub enum MenuItem {
     /// Opens that wheel at the row, for the selection.
     Wheel(WheelKind),
     Export,
+    /// Save one held result under a name of its own.
+    ExportAs,
     Open,
     ShowInFolder,
     /// Cancels a running job and keeps its row.
@@ -93,6 +95,7 @@ impl MenuItem {
                 enter(w),
             ),
             MenuItem::Export => ("Export…", "Ctrl+S".to_owned()),
+            MenuItem::ExportAs => ("Export as…", String::new()),
             MenuItem::Open => ("Open", String::new()),
             MenuItem::ShowInFolder => ("Show in folder", String::new()),
             MenuItem::Stop => ("Cancel", String::new()),
@@ -136,6 +139,7 @@ pub fn menu_items(selection: &[RowState], wheels: &[WheelKind]) -> Vec<MenuItem>
         results.push(MenuItem::Export);
     }
     if one(RowState::Held) {
+        results.push(MenuItem::ExportAs);
         results.push(MenuItem::Open);
     }
     if one(RowState::Saved) {
@@ -342,6 +346,7 @@ mod tests {
                 Wheel(Actions),
                 Separator,
                 Export,
+                ExportAs,
                 Open,
                 Separator,
                 Remove
@@ -596,6 +601,7 @@ mod tests {
             last: None,
             check: kiln_core::FileCheck::Ok,
             missing: None,
+            save_failed: false,
         }
     }
 

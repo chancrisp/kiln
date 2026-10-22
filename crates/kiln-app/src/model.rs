@@ -348,8 +348,8 @@ pub fn export_all_label(held: usize) -> String {
 /// A row's line when exporting to `folder` failed.
 pub fn save_failed_line(folder: &Path) -> String {
     format!(
-        "Couldn't save to {}. Pick another folder.",
-        folder.display()
+        "Couldn't save to {}. Choose another folder.",
+        crate::actions::folder_name(folder)
     )
 }
 
@@ -424,6 +424,10 @@ pub enum PromptButton {
     Stop(Leave),
     /// Add the files of a big folder after all.
     AddAll,
+    /// Save each result next to its original from now on.
+    SaveNextTo,
+    /// Keep results in Kiln until they are exported.
+    KeepHeld,
     Cancel,
 }
 
@@ -436,8 +440,45 @@ impl PromptButton {
             PromptButton::Stop(Leave::Clear) => "Stop and clear",
             PromptButton::Stop(Leave::Remove) => "Stop and remove",
             PromptButton::AddAll => "Add them all",
+            PromptButton::SaveNextTo => "Save next to the original",
+            PromptButton::KeepHeld => "Keep until I export",
             PromptButton::Cancel => "Cancel",
         }
+    }
+}
+
+/// What becomes of a result that is ready.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoSave {
+    /// It stays where it is: held until exported, or already saved.
+    Hold,
+    /// It waits for the one-time question about saving next to the
+    /// original.
+    Ask,
+    /// It is saved next to the original now.
+    Beside,
+}
+
+/// What to do with a ready result: `holding` says this run holds results
+/// at all (without a holding folder they are written beside their files
+/// already), `asked` that the person has answered the one-time question,
+/// and `on` that they chose to save next to the original.
+pub fn autosave_for(holding: bool, asked: bool, on: bool) -> AutoSave {
+    match (holding, asked, on) {
+        (false, _, _) | (true, true, false) => AutoSave::Hold,
+        (true, false, _) => AutoSave::Ask,
+        (true, true, true) => AutoSave::Beside,
+    }
+}
+
+/// The question asked once, when the first result is ready.
+pub fn autosave_prompt() -> Prompt {
+    Prompt {
+        title: "Save finished files next to the originals from now on? \
+                Otherwise they wait in Kiln until you export them. \
+                You can change this in Settings."
+            .to_owned(),
+        buttons: vec![PromptButton::SaveNextTo, PromptButton::KeepHeld],
     }
 }
 
@@ -644,6 +685,9 @@ pub struct Entry {
     /// A helper app some formats need and Kiln can't find: its backend
     /// ("ffmpeg") and how many formats wait on it.
     pub missing: Option<(String, usize)>,
+    /// Saving this row's held result next to its original didn't work, so
+    /// the row offers to choose another folder.
+    pub save_failed: bool,
     pub job: JobState,
     /// What `inspect` found, once it has.
     pub facts: Option<Facts>,
@@ -702,6 +746,26 @@ impl Entry {
             ),
             JobState::Done {
                 saved: Some(Saved::Folder(folder)),
+                outputs,
+                ..
+            } if self.path.parent().is_some_and(|p| same_path(p, folder)) => {
+                let first = outputs
+                    .first()
+                    .and_then(|p| p.file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let more = match outputs.len() {
+                    0 | 1 => String::new(),
+                    2 => " and 1 more".to_owned(),
+                    k => format!(" and {} more", k - 1),
+                };
+                (
+                    format!("Saved next to the original: {first}{more}"),
+                    Tone::Result,
+                )
+            }
+            JobState::Done {
+                saved: Some(Saved::Folder(folder)),
                 ..
             } => (
                 format!("Saved to {}.", crate::actions::folder_name(folder)),
@@ -722,7 +786,7 @@ impl Entry {
                     2 => " and 1 more".to_owned(),
                     k => format!(" and {} more", k - 1),
                 };
-                (format!("Ready: {first}{more}"), Tone::Result)
+                (format!("Done, not saved yet: {first}{more}"), Tone::Result)
             }
             JobState::Failed { message, .. } => (one_line(message), Tone::Crack),
             JobState::Cancelled => ("Cancelled.".to_owned(), Tone::Muted),
@@ -759,7 +823,9 @@ impl Entry {
     pub fn link(&self, cut: bool) -> Option<&'static str> {
         match &self.job {
             JobState::Failed { .. } if self.details(cut).is_some() => Some("Show details"),
+            _ if self.held().is_some() && self.save_failed => Some("Choose folder"),
             _ if self.held().is_some() => Some("Export"),
+            _ if self.saved().is_some() => Some("Show in folder"),
             // A file nothing has been done to says how to start: Convert,
             // or Get the helper it can't be converted without. A file
             // ruled out on adding has nothing to offer.
@@ -881,11 +947,26 @@ impl Entry {
     /// row draws.
     pub fn tooltip(&self, shown: &str, cut: bool) -> String {
         let line = match &self.job {
-            JobState::Failed { message, .. } if cut => message.trim(),
-            _ if cut => shown,
-            _ => return self.folder.clone(),
+            JobState::Failed { message, .. } if cut => Some(message.trim().to_owned()),
+            _ if cut => Some(shown.to_owned()),
+            _ => None,
         };
-        format!("{line}\n{}", self.folder)
+        // Where a saved result went, in full, and how a held one can be
+        // saved without a dialog.
+        let more = match &self.job {
+            JobState::Done {
+                saved: Some(Saved::Folder(folder)),
+                ..
+            } => Some(format!("Saved to {}", folder.display())),
+            JobState::Done { saved: None, .. } if self.held().is_some() => {
+                Some("Drag this row to a folder to save the result there.".to_owned())
+            }
+            _ => None,
+        };
+        let mut lines: Vec<String> = line.into_iter().collect();
+        lines.push(self.folder.clone());
+        lines.extend(more);
+        lines.join("\n")
     }
 }
 
@@ -1307,6 +1388,8 @@ impl FileList {
                 .filter(|p| moved_to(p).is_none())
                 .cloned()
                 .collect();
+            // Something was saved: whatever went wrong before is over.
+            e.save_failed = false;
             let JobState::Done { outputs, saved, .. } = &mut e.job else {
                 continue;
             };
@@ -1315,6 +1398,18 @@ impl FileList {
                 *saved = Some(Saved::Folder(folder.to_path_buf()));
             } else {
                 *outputs = left;
+            }
+        }
+    }
+
+    /// Note that saving `failed` held files didn't work: their rows offer
+    /// to choose another folder.
+    pub fn export_failed(&mut self, failed: &[PathBuf]) {
+        for e in &mut self.entries {
+            if e.held()
+                .is_some_and(|h| h.iter().any(|p| failed.contains(p)))
+            {
+                e.save_failed = true;
             }
         }
     }
@@ -1515,6 +1610,7 @@ fn entry_for(kiln: &Kiln, available: &Availability, path: PathBuf, size: u64) ->
         targets,
         check,
         missing,
+        save_failed: false,
         job: JobState::Idle,
         facts: None,
         suggestion: None,
@@ -1894,6 +1990,71 @@ mod tests {
         );
         // Only cancelled: nothing to announce.
         assert_eq!(n(0, 0, 0, None), None);
+    }
+
+    #[test]
+    fn a_result_is_held_asked_about_or_saved_beside_by_the_setting() {
+        use AutoSave::*;
+        // Without a holding folder, results are saved already.
+        assert_eq!(autosave_for(false, false, false), Hold);
+        assert_eq!(autosave_for(false, true, true), Hold);
+        // The first result asks once, whatever the setting reads.
+        assert_eq!(autosave_for(true, false, false), Ask);
+        // After that the setting decides.
+        assert_eq!(autosave_for(true, true, false), Hold);
+        assert_eq!(autosave_for(true, true, true), Beside);
+        // The question's buttons.
+        let p = autosave_prompt();
+        assert_eq!(
+            p.buttons,
+            [PromptButton::SaveNextTo, PromptButton::KeepHeld]
+        );
+        assert!(p.title.contains("next to the originals"), "{}", p.title);
+    }
+
+    #[test]
+    fn held_and_saved_rows_say_what_became_of_the_result() {
+        let mut e = row("a.png");
+        e.path = PathBuf::from(r"C:\photos\a.png");
+        e.job = JobState::Done {
+            action: Action::Convert("jpg".into()),
+            outputs: vec![PathBuf::from(r"held\a.jpg")],
+            saved: None,
+        };
+        assert_eq!(e.line().0, "Done, not saved yet: a.jpg");
+        assert_eq!(e.link(false), Some("Export"));
+        assert!(e.tooltip("", false).contains("Drag this row to a folder"));
+        // Saving didn't work: the row offers another folder.
+        let mut list = FileList {
+            entries: vec![e.clone()],
+            ..FileList::default()
+        };
+        list.export_failed(&[PathBuf::from(r"held\a.jpg")]);
+        assert_eq!(list.entries()[0].link(false), Some("Choose folder"));
+        assert_eq!(
+            save_failed_line(Path::new(r"D:\Locked")),
+            "Couldn't save to Locked. Choose another folder."
+        );
+        // Saved beside the original, or elsewhere, with the full path on
+        // hover.
+        e.job = JobState::Done {
+            action: Action::Convert("jpg".into()),
+            outputs: vec![PathBuf::from(r"C:\photos\a.jpg")],
+            saved: Some(Saved::Folder(PathBuf::from(r"C:\photos"))),
+        };
+        assert_eq!(e.line().0, "Saved next to the original: a.jpg");
+        assert_eq!(e.link(false), Some("Show in folder"));
+        e.job = JobState::Done {
+            action: Action::Convert("jpg".into()),
+            outputs: vec![PathBuf::from(r"D:\Out\a.jpg")],
+            saved: Some(Saved::Folder(PathBuf::from(r"D:\Out"))),
+        };
+        assert_eq!(e.line().0, "Saved to Out.");
+        assert!(
+            e.tooltip("", false).ends_with(r"Saved to D:\Out"),
+            "{}",
+            e.tooltip("", false)
+        );
     }
 
     #[test]
@@ -2367,13 +2528,16 @@ mod tests {
             outputs: vec![dir.path().join("a.jpg")],
             saved: None,
         };
-        assert_eq!(e.line(), ("Ready: a.jpg".to_owned(), Tone::Result));
+        assert_eq!(
+            e.line(),
+            ("Done, not saved yet: a.jpg".to_owned(), Tone::Result)
+        );
         e.job = JobState::Done {
             action: Action::Tool(Tool::Split),
             outputs: vec!["a part 1.wav".into(), "a part 2.wav".into()],
             saved: None,
         };
-        assert_eq!(e.line().0, "Ready: a part 1.wav and 1 more");
+        assert_eq!(e.line().0, "Done, not saved yet: a part 1.wav and 1 more");
         e.job = JobState::Failed {
             message:
                 "Needs FFmpeg, which isn't installed.\nSettings > Helper apps says where to get it."
@@ -2499,6 +2663,7 @@ mod tests {
             last: None,
             check: FileCheck::Ok,
             missing: None,
+            save_failed: false,
         }
     }
 
@@ -2629,7 +2794,7 @@ mod tests {
             lines,
             [
                 "Converting to JPG  ·  Working…",
-                "Ready: photo.jpg",
+                "Done, not saved yet: photo.jpg",
                 "Saved to Out.",
                 "Couldn't convert the file."
             ]
@@ -2760,11 +2925,14 @@ mod tests {
     #[test]
     fn held_rows_say_ready() {
         let e = held_row("a.png", &["held/photo.jpg"], None);
-        assert_eq!(e.line(), ("Ready: photo.jpg".to_owned(), Tone::Result));
+        assert_eq!(
+            e.line(),
+            ("Done, not saved yet: photo.jpg".to_owned(), Tone::Result)
+        );
         let e = held_row("a.pdf", &["p 1.png", "p 2.png"], None);
-        assert_eq!(e.line().0, "Ready: p 1.png and 1 more");
+        assert_eq!(e.line().0, "Done, not saved yet: p 1.png and 1 more");
         let e = held_row("a.pdf", &["p 1.png", "p 2.png", "p 3.png"], None);
-        assert_eq!(e.line().0, "Ready: p 1.png and 2 more");
+        assert_eq!(e.line().0, "Done, not saved yet: p 1.png and 2 more");
     }
 
     #[test]
@@ -2889,7 +3057,7 @@ mod tests {
         assert_eq!(held.details(true), None);
         assert_eq!(held.saved(), None);
         let saved = held_row("a.png", &[r"C:\Out\a.jpg"], Some(r"C:\Out"));
-        assert_eq!(saved.link(false), None);
+        assert_eq!(saved.link(false), Some("Show in folder"));
         assert_eq!(
             saved.saved(),
             Some((Path::new(r"C:\Out"), &[PathBuf::from(r"C:\Out\a.jpg")][..]))
@@ -3030,7 +3198,10 @@ mod tests {
             ..Default::default()
         };
         list.dragged_out(&[PathBuf::from("p 1.mp3")]);
-        assert_eq!(list.entries()[0].line().0, "Ready: p 2.mp3 and 1 more");
+        assert_eq!(
+            list.entries()[0].line().0,
+            "Done, not saved yet: p 2.mp3 and 1 more"
+        );
         assert_eq!(list.held_count(), 2);
     }
 
@@ -3209,7 +3380,7 @@ mod tests {
         assert_eq!(export_all_label(3), "Export all (3)");
         assert_eq!(
             save_failed_line(Path::new(r"D:\Locked")),
-            r"Couldn't save to D:\Locked. Pick another folder."
+            "Couldn't save to Locked. Choose another folder."
         );
         assert_eq!(export_summary(5, 5), "Saved 5 files.");
         assert_eq!(export_summary(1, 1), "Saved 1 file.");

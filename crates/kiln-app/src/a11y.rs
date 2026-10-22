@@ -490,6 +490,8 @@ pub struct SettingsIn<'a> {
     pub quality: &'a QualityDefaults,
     pub theme: ThemeChoice,
     pub suggestions: bool,
+    /// Whether results are saved next to the original as they are ready.
+    pub autosave: bool,
     pub has_habits: bool,
     pub keys: KeyMap,
     /// The Start exports in line.
@@ -1001,6 +1003,13 @@ fn settings(s: &SettingsIn) -> Node {
                 r,
             )
             .selected(on == s.suggestions),
+            Control::AutoSave(on) => Node::new(
+                Id::Setting(c),
+                Role::RadioButton,
+                if on { "On" } else { "Off" },
+                r,
+            )
+            .selected(on == s.autosave),
             Control::ForgetPicks => {
                 let mut n = Node::new(Id::Setting(c), Role::Button, "Forget picks", r);
                 n.states.disabled = !s.has_habits;
@@ -1210,6 +1219,7 @@ mod tests {
             last: None,
             check: kiln_core::FileCheck::Ok,
             missing: None,
+            save_failed: false,
         }
     }
 
@@ -1514,7 +1524,7 @@ mod tests {
         i.export_all = Some("Export all (1)");
         let t = tree(&i);
         sound(&t);
-        let row = named(&t, Role::ListItem, "a.png, Ready: a.jpg");
+        let row = named(&t, Role::ListItem, "a.png, Done, not saved yet: a.jpg");
         assert_eq!(row.children.len(), 1);
         assert_eq!(
             (row.children[0].role, row.children[0].name.as_str()),
@@ -1562,8 +1572,8 @@ mod tests {
         sound(&t);
         let row = t.find(&Id::Row(es[0].path.clone())).unwrap();
         let link = &row.children[0];
-        assert_eq!(link.role, Role::Hyperlink);
-        assert_eq!(link.name, es[0].line().0);
+        assert_eq!(link.role, Role::Button);
+        assert_eq!(link.name, "Show in folder a.png");
     }
 
     #[test]
@@ -1696,6 +1706,7 @@ mod tests {
             quality,
             theme: ThemeChoice::default(),
             suggestions: true,
+            autosave: false,
             has_habits: false,
             keys: KeyMap::default(),
             output: "Next to each file",

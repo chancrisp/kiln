@@ -34,6 +34,14 @@ pub struct Settings {
     /// been shown on this PC.
     #[serde(default, skip_serializing_if = "is_false")]
     pub drop_tip_shown: bool,
+    /// Whether each result is saved next to its original as soon as it is
+    /// ready, instead of waiting in Kiln until it is exported.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub save_next_to_original: bool,
+    /// Whether the person has been asked about that, once, when the first
+    /// result was ready.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub save_asked: bool,
 }
 
 impl Default for Settings {
@@ -47,6 +55,8 @@ impl Default for Settings {
             engines: EnginePaths::default(),
             habits: Habits::default(),
             drop_tip_shown: false,
+            save_next_to_original: false,
+            save_asked: false,
         }
     }
 }
@@ -772,6 +782,8 @@ mod tests {
             output_folder: Some(dir.path().join("out")),
             theme: ThemeChoice::Dark,
             drop_tip_shown: true,
+            save_next_to_original: true,
+            save_asked: true,
             ..Settings::default()
         };
         s.keys.assign(WheelKind::Actions, Modifier::Shift);

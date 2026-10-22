@@ -703,6 +703,10 @@ struct App {
     helper_notice: bool,
     /// The taskbar button's progress, made the first time work starts.
     taskbar: Option<system::Taskbar>,
+    /// Results that were ready before the one-time question about saving
+    /// next to the original was answered: the files they came from and the
+    /// held results.
+    autosave_waiting: Vec<(Vec<PathBuf>, Vec<PathBuf>)>,
     /// What the taskbar shows now, so a change of under a part in a
     /// thousand isn't sent again.
     taskbar_shown: Option<(u8, u32)>,
@@ -1445,8 +1449,11 @@ impl App {
             return;
         };
         match system::ask(self.hwnd, &prompt) {
-            // AddAll is only asked about big folders, never on a leave.
-            PromptButton::Cancel | PromptButton::AddAll => {}
+            // The other prompts are asked elsewhere, never on a leave.
+            PromptButton::Cancel
+            | PromptButton::AddAll
+            | PromptButton::SaveNextTo
+            | PromptButton::KeepHeld => {}
             PromptButton::ExportAll => {
                 let listed = self
                     .files
@@ -1791,7 +1798,13 @@ impl App {
         let source = files.first().and_then(|f| self.source_of(f))?;
         let start = self.export_start(&source);
         let n = files.len();
-        let title = format!("Export {n} file{} to", if n == 1 { "" } else { "s" });
+        let title = match files {
+            [one] => format!(
+                "Save {} to",
+                one.file_name().unwrap_or_default().to_string_lossy()
+            ),
+            _ => format!("Save {n} files to"),
+        };
         system::pick_folder_in(self.hwnd, &title, &start)
     }
 
@@ -1847,16 +1860,28 @@ impl App {
         {
             return;
         }
-        let [one] = held.as_slice() else {
-            if let Some(dir) = self.pick_export_folder(&held) {
-                let held = self.still_held(&source, &held);
-                if !held.is_empty() {
-                    self.export(held, Dest::Into(dir), false);
-                }
+        // One dialog for one result or many: the folder to save into.
+        if let Some(dir) = self.pick_export_folder(&held) {
+            let held = self.still_held(&source, &held);
+            if !held.is_empty() {
+                self.export(held, Dest::Into(dir), false);
             }
+        }
+    }
+
+    /// Export one held result of row `i` under a name of its own, with the
+    /// Save dialog: the menu's "Export as…".
+    fn export_as_row(&mut self, i: usize) {
+        if self.leaving.is_some() || self.row_saving(i) {
+            return;
+        }
+        let Some(e) = self.files.entries().get(i) else {
             return;
         };
-        self.save_one(&source, one);
+        let source = e.path.clone();
+        if let Some([one]) = e.held().map(<[PathBuf]>::to_vec).as_deref() {
+            self.save_one(&source, one);
+        }
     }
 
     /// Export one held result, `file` of the row for `source`, with the
@@ -1926,13 +1951,6 @@ impl App {
         }
         self.check_gone();
         let held = self.held_of(sources);
-        // Rows that share one result, such as a merge's, save it by name.
-        if let [one] = held.as_slice() {
-            if let Some(source) = self.source_of(one) {
-                self.save_one(&source, one);
-            }
-            return;
-        }
         if held.is_empty() {
             return;
         }
@@ -2053,6 +2071,7 @@ impl App {
         if self.destroyed {
             return;
         }
+        self.ask_autosave();
         // A resumed leave may make a close due too, as one step did before.
         for _ in 0..2 {
             let ready = self.leaving.as_ref().is_some_and(|l| l.waits.is_empty());
@@ -2104,6 +2123,8 @@ impl App {
             self.last_export = Some(folder.to_path_buf());
         }
         self.files.exported(&moved, folder);
+        let failed_files: Vec<PathBuf> = failed.iter().map(|f| (*f).clone()).collect();
+        self.files.export_failed(&failed_files);
         // A move across drives can leave the held copy behind after a good
         // copy; the export still counts, and the copy goes with the run.
         for e in self.files.entries() {
@@ -2620,6 +2641,7 @@ impl App {
                 self.open_choice(kind, paths, at, keyboard);
             }
             (MenuItem::Export, _) => self.export_rows(rows),
+            (MenuItem::ExportAs, [i]) => self.export_as_row(*i),
             (MenuItem::Open, [i]) => {
                 self.open_held(*i);
             }
@@ -3085,6 +3107,7 @@ impl App {
                         fraction: None,
                         started: Some(Instant::now()),
                     };
+                    entry.save_failed = false;
                     // What Retry runs again. A merge takes several files,
                     // so it can't be retried from one row.
                     entry.last =
@@ -3230,10 +3253,81 @@ impl App {
                         self.say(format!("{said} {}", self.working_status()));
                     }
                 }
+                if let Ok(outputs) = &result {
+                    self.result_ready(&job, outputs);
+                }
                 self.tally_finish(&job, &result);
                 self.sync_taskbar();
                 self.held_changed();
                 self.animate();
+            }
+        }
+        self.invalidate();
+    }
+
+    /// A result is ready and held. With Save next to the original on, it
+    /// goes beside its file at once, never over anything there; until the
+    /// person has been asked, once, it waits for the question.
+    fn result_ready(&mut self, job: &JobInfo, outputs: &[PathBuf]) {
+        if matches!(job.action, Action::File(_)) {
+            return;
+        }
+        match model::autosave_for(
+            self.holding.is_some(),
+            self.settings.save_asked,
+            self.settings.save_next_to_original,
+        ) {
+            model::AutoSave::Hold => {}
+            model::AutoSave::Ask => self
+                .autosave_waiting
+                .push((job.paths.clone(), outputs.to_vec())),
+            model::AutoSave::Beside => self.save_beside(&job.paths, outputs),
+        }
+    }
+
+    /// Save held `outputs` into the folder of the first of `sources`, as an
+    /// export does: under a free name, held still if it fails.
+    fn save_beside(&mut self, sources: &[PathBuf], outputs: &[PathBuf]) {
+        let Some(dir) = sources
+            .first()
+            .and_then(|p| p.parent())
+            .map(Path::to_path_buf)
+        else {
+            return;
+        };
+        // Only what a row still holds: the list can change meanwhile.
+        let held = self.held_of(sources);
+        let files: Vec<PathBuf> = outputs
+            .iter()
+            .filter(|f| held.contains(f))
+            .cloned()
+            .collect();
+        if !files.is_empty() {
+            self.export(files, Dest::Into(dir), false);
+        }
+    }
+
+    /// Ask, once, whether results should be saved next to their originals
+    /// from now on, when the first one is ready and nothing else is open.
+    /// Closing the question without an answer asks again at the next one.
+    fn ask_autosave(&mut self) {
+        if self.autosave_waiting.is_empty() || self.settings.save_asked || system::modal_open() {
+            return;
+        }
+        let on = match system::ask(self.hwnd, &model::autosave_prompt()) {
+            PromptButton::SaveNextTo => true,
+            PromptButton::KeepHeld => false,
+            _ => {
+                self.autosave_waiting.clear();
+                return;
+            }
+        };
+        self.settings.save_next_to_original = on;
+        self.settings.save_asked = true;
+        self.save_settings();
+        for (sources, outputs) in std::mem::take(&mut self.autosave_waiting) {
+            if on {
+                self.save_beside(&sources, &outputs);
             }
         }
         self.invalidate();
@@ -3700,6 +3794,17 @@ impl App {
                 self.settings.suggestions = on;
                 self.save_settings();
                 self.suggestions_changed();
+                self.invalidate();
+                return;
+            }
+            Control::AutoSave(on) => {
+                if self.settings.save_next_to_original == on && self.settings.save_asked {
+                    return;
+                }
+                // Choosing either way answers the one-time question.
+                self.settings.save_next_to_original = on;
+                self.settings.save_asked = true;
+                self.save_settings();
                 self.invalidate();
                 return;
             }
@@ -4701,6 +4806,7 @@ impl App {
                     quality: &self.settings.quality,
                     theme: self.settings.theme,
                     suggestions: self.settings.suggestions,
+                    autosave: self.settings.save_next_to_original,
                     has_habits: !self.settings.habits.is_empty(),
                     keys: self.settings.keys,
                     output: &ui.output_line.0,
@@ -5143,6 +5249,7 @@ impl App {
                 output: (ui.output_line.0.as_str(), ui.output_line.1),
                 theme: self.settings.theme,
                 suggestions: self.settings.suggestions,
+                autosave: self.settings.save_next_to_original,
                 has_habits: !self.settings.habits.is_empty(),
                 keys: self.settings.keys,
                 engines: ui.engine_lines.each_ref().map(|(s, m)| (s.as_str(), *m)),
@@ -5339,6 +5446,7 @@ fn segmented_or_step(c: Control) -> bool {
         Control::Tab(_)
             | Control::Theme(_)
             | Control::Suggestions(_)
+            | Control::AutoSave(_)
             | Control::Preset(..)
             | Control::Step(_)
     )
@@ -5349,7 +5457,8 @@ fn same_group(a: Control, b: Control) -> bool {
     match (a, b) {
         (Control::Tab(_), Control::Tab(_))
         | (Control::Theme(_), Control::Theme(_))
-        | (Control::Suggestions(_), Control::Suggestions(_)) => true,
+        | (Control::Suggestions(_), Control::Suggestions(_))
+        | (Control::AutoSave(_), Control::AutoSave(_)) => true,
         (Control::Preset(x, _), Control::Preset(y, _)) => x == y,
         _ => false,
     }
@@ -5528,6 +5637,7 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         helper_notice: false,
         taskbar: None,
         taskbar_shown: None,
+        autosave_waiting: vec![],
         tally: (0, 0, 0, None),
         notice_row: None,
         add_hover: false,
