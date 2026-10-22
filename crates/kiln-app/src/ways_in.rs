@@ -594,6 +594,8 @@ mod tests {
             suggestion: None,
             facts_at: None,
             last: None,
+            check: kiln_core::FileCheck::Ok,
+            missing: None,
         }
     }
 

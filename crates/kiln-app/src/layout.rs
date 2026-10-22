@@ -193,7 +193,7 @@ pub fn layout(w: f32, h: f32, rows: usize) -> Layout {
 }
 
 /// Width of the "Show details" link at the right of a failed row.
-pub const LINK_WIDTH: f32 = 88.0;
+pub const LINK_WIDTH: f32 = 104.0;
 /// Height of the link's hit area: WCAG 2.5.8's 24 DIPs, on its own.
 pub const LINK_HIT: f32 = 24.0;
 

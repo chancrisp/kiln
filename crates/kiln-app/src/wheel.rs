@@ -4,7 +4,7 @@
 use std::f32::consts::{PI, TAU};
 use std::path::{Path, PathBuf};
 
-use kiln_core::{Kiln, Kind, Suggested, Tool};
+use kiln_core::{Availability, Kiln, Kind, Suggested, Tool};
 
 use crate::actions::FileAction;
 
@@ -171,14 +171,23 @@ pub fn icon_for_tool(tool: Tool) -> &'static str {
 /// What the wheel shows for these files: for Convert, the formats every
 /// file can become, most popular first; for Tools, the tools that apply
 /// to all of them.
-pub fn items_for(kind: WheelKind, kiln: &Kiln, paths: &[PathBuf]) -> Vec<Item> {
+pub fn items_for(
+    kind: WheelKind,
+    kiln: &Kiln,
+    available: &Availability,
+    paths: &[PathBuf],
+) -> Vec<Item> {
     let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
     match kind {
         WheelKind::Convert => {
             let mut common: Option<Vec<String>> = None;
             for p in &refs {
-                let targets: Vec<String> =
-                    kiln.targets_for(p).iter().map(|f| f.ext.clone()).collect();
+                let targets: Vec<String> = kiln
+                    .targets_split(p, available)
+                    .0
+                    .iter()
+                    .map(|f| f.ext.clone())
+                    .collect();
                 common = Some(match common {
                     None => targets,
                     Some(c) => c.into_iter().filter(|e| targets.contains(e)).collect(),
@@ -200,7 +209,8 @@ pub fn items_for(kind: WheelKind, kiln: &Kiln, paths: &[PathBuf]) -> Vec<Item> {
                 .collect()
         }
         WheelKind::Tools => kiln
-            .tools_for(&refs)
+            .offered_with(&refs, available)
+            .tools
             .into_iter()
             .map(|t| Item {
                 label: t.label().to_owned(),
@@ -237,6 +247,9 @@ pub enum Offer {
     Mixed(Vec<(String, usize)>),
     /// One kind of file that nothing applies to.
     Unsupported(String),
+    /// Files whose formats all wait on a helper app that isn't installed:
+    /// its backend ("ffmpeg") and the type that needs it.
+    NeedsHelper(String, String),
 }
 
 /// The type code a file shows under: "MP4", or its extension, or "Other"
@@ -253,12 +266,19 @@ fn type_code(kiln: &Kiln, path: &Path) -> String {
 }
 
 /// Decide what `kind`'s wheel can offer for `paths`.
-pub fn offer(kind: WheelKind, kiln: &Kiln, paths: &[PathBuf]) -> Offer {
+pub fn offer(kind: WheelKind, kiln: &Kiln, available: &Availability, paths: &[PathBuf]) -> Offer {
     if paths.is_empty() {
         return Offer::Nothing;
     }
-    if kind == WheelKind::Actions || !items_for(kind, kiln, paths).is_empty() {
+    if kind == WheelKind::Actions || !items_for(kind, kiln, available, paths).is_empty() {
         return Offer::Choices;
+    }
+    // A file that has formats, none of which can run for want of a helper.
+    for p in paths {
+        let (usable, blocked) = kiln.targets_split(p, available);
+        if let (true, Some((_, backend))) = (usable.is_empty(), blocked.first()) {
+            return Offer::NeedsHelper(backend.clone(), type_code(kiln, p));
+        }
     }
     let mut kinds: Vec<(String, usize)> = vec![];
     for p in paths {
@@ -303,6 +323,12 @@ pub fn offer_sentence(kind: WheelKind, offer: &Offer) -> Option<String> {
         Offer::Choices => None,
         Offer::Nothing => Some("Select a file first.".to_owned()),
         Offer::Unsupported(code) => Some(format!("Kiln can't {verb} {code} files.")),
+        Offer::NeedsHelper(backend, code) => {
+            let name = crate::model::helper_name(backend);
+            Some(format!(
+                "{code} files need {name}, which isn't installed. Use Get {name} on the file's row."
+            ))
+        }
         Offer::Mixed(kinds) => {
             let none = if kind == WheelKind::Tools {
                 "No tool fits all of these files"
@@ -945,7 +971,12 @@ mod tests {
     #[test]
     fn convert_offers_formats_every_file_shares() {
         let kiln = Kiln::new();
-        let items = items_for(WheelKind::Convert, &kiln, &["a.png".into()]);
+        let items = items_for(
+            WheelKind::Convert,
+            &kiln,
+            &Availability::all(),
+            &["a.png".into()],
+        );
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         // Most popular first.
         assert_eq!(&labels[..4], ["JPG", "PDF", "WEBP", "GIF"]);
@@ -954,12 +985,22 @@ mod tests {
             .iter()
             .all(|i| crate::icons::ALL.iter().any(|ic| ic.name == i.icon)));
 
-        let both = items_for(WheelKind::Convert, &kiln, &["a.mp4".into(), "b.mkv".into()]);
+        let both = items_for(
+            WheelKind::Convert,
+            &kiln,
+            &Availability::all(),
+            &["a.mp4".into(), "b.mkv".into()],
+        );
         let labels: Vec<&str> = both.iter().map(|i| i.label.as_str()).collect();
         assert!(labels.contains(&"MP3") && labels.contains(&"WEBM"));
         assert!(!labels.contains(&"MP4") && !labels.contains(&"MKV"));
 
-        let none = items_for(WheelKind::Convert, &kiln, &["a.png".into(), "b.mp3".into()]);
+        let none = items_for(
+            WheelKind::Convert,
+            &kiln,
+            &Availability::all(),
+            &["a.png".into(), "b.mp3".into()],
+        );
         assert!(none.is_empty());
     }
 
@@ -967,7 +1008,8 @@ mod tests {
     fn the_offer_says_why_a_wheel_would_be_empty() {
         let kiln = Kiln::new();
         let p = |names: &[&str]| -> Vec<PathBuf> { names.iter().map(PathBuf::from).collect() };
-        let offer = |names: &[&str]| offer(WheelKind::Convert, &kiln, &p(names));
+        let offer =
+            |names: &[&str]| offer(WheelKind::Convert, &kiln, &Availability::all(), &p(names));
         // One kind.
         assert_eq!(offer(&["a.png", "b.png"]), Offer::Choices);
         // Several kinds with some formats in common.
@@ -984,7 +1026,12 @@ mod tests {
         assert_eq!(offer(&["noext"]), Offer::Unsupported("Other".into()));
         // The Alt wheel has something for any files.
         assert_eq!(
-            super::offer(WheelKind::Actions, &kiln, &p(&["a.png", "b.mp3"])),
+            super::offer(
+                WheelKind::Actions,
+                &kiln,
+                &Availability::all(),
+                &p(&["a.png", "b.mp3"])
+            ),
             Offer::Choices
         );
     }
@@ -996,7 +1043,7 @@ mod tests {
         let paths: Vec<PathBuf> = (0..500)
             .map(|i| PathBuf::from(format!("f{i}.{}", exts[i % exts.len()])))
             .collect();
-        let o = offer(WheelKind::Convert, &kiln, &paths);
+        let o = offer(WheelKind::Convert, &kiln, &Availability::all(), &paths);
         let Offer::Mixed(kinds) = &o else {
             panic!("{o:?}");
         };
@@ -1034,7 +1081,7 @@ mod tests {
     fn tools_have_no_empty_wheel_either() {
         let kiln = Kiln::new();
         let paths: Vec<PathBuf> = vec!["a.png".into(), "b.mp3".into()];
-        let o = offer(WheelKind::Tools, &kiln, &paths);
+        let o = offer(WheelKind::Tools, &kiln, &Availability::all(), &paths);
         if let Offer::Mixed(_) = o {
             assert!(offer_sentence(WheelKind::Tools, &o)
                 .unwrap()
@@ -1048,7 +1095,12 @@ mod tests {
     #[test]
     fn video_keeps_its_everyday_targets_on_the_inner_ring() {
         let kiln = Kiln::new();
-        let (inner, more) = split_common(items_for(WheelKind::Convert, &kiln, &["a.mp4".into()]));
+        let (inner, more) = split_common(items_for(
+            WheelKind::Convert,
+            &kiln,
+            &Availability::all(),
+            &["a.mp4".into()],
+        ));
         let labels: Vec<&str> = inner.iter().map(|i| i.label.as_str()).collect();
         assert_eq!(
             labels,
@@ -1061,7 +1113,12 @@ mod tests {
     #[test]
     fn tools_offer_what_applies() {
         let kiln = Kiln::new();
-        let items = items_for(WheelKind::Tools, &kiln, &["a.mp3".into(), "b.mp3".into()]);
+        let items = items_for(
+            WheelKind::Tools,
+            &kiln,
+            &Availability::all(),
+            &["a.mp3".into(), "b.mp3".into()],
+        );
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         assert_eq!(labels, ["Compress", "Trim", "Split", "Merge"]);
         assert!(items.iter().all(|i| !i.is_code));
@@ -1073,7 +1130,12 @@ mod tests {
     #[test]
     fn actions_are_offered_for_any_files() {
         let kiln = Kiln::new();
-        let items = items_for(WheelKind::Actions, &kiln, &["a.xyz".into(), "b.png".into()]);
+        let items = items_for(
+            WheelKind::Actions,
+            &kiln,
+            &Availability::all(),
+            &["a.xyz".into(), "b.png".into()],
+        );
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         assert_eq!(labels, ["Copy path", "Move", "Open in Terminal"]);
         assert!(items
@@ -1083,7 +1145,8 @@ mod tests {
 
     fn real(kind: WheelKind, path: &str) -> Wheel {
         let kiln = Kiln::new();
-        let (items, more) = split_common(items_for(kind, &kiln, &[path.into()]));
+        let (items, more) =
+            split_common(items_for(kind, &kiln, &Availability::all(), &[path.into()]));
         Wheel {
             kind,
             items,

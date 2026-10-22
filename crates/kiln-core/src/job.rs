@@ -30,6 +30,23 @@ impl Availability {
     pub fn has(&self, backend: &str) -> bool {
         self.0.get(backend).copied().unwrap_or(false)
     }
+
+    /// Every built-in engine found, for tests and for callers that want
+    /// the unfiltered picture.
+    pub fn all() -> Self {
+        Availability(
+            ["image", "ffmpeg", "pandoc", "libreoffice", "calibre", "pdf"]
+                .into_iter()
+                .map(|b| (b, true))
+                .collect(),
+        )
+    }
+
+    /// Everything found except the backends in `missing`.
+    pub fn without(mut self, missing: &[&str]) -> Self {
+        self.0.retain(|b, _| !missing.contains(b));
+        self
+    }
 }
 
 /// The registry plus the backends its routes name.
@@ -82,6 +99,33 @@ impl Kiln {
             .format_of(input)
             .map(|f| self.registry.targets(f))
             .unwrap_or_default()
+    }
+
+    /// Output formats offered for `input`, split by whether the engines
+    /// their routes need are installed: those that can run, and those that
+    /// can't, each with the first missing backend ("ffmpeg").
+    pub fn targets_split(
+        &self,
+        input: &Path,
+        available: &Availability,
+    ) -> (Vec<&Format>, Vec<(&Format, String)>) {
+        let (mut usable, mut blocked) = (vec![], vec![]);
+        let Some(from) = self.registry.format_of(input) else {
+            return (usable, blocked);
+        };
+        for to in self.registry.targets(from) {
+            let missing = self.registry.route(from, to).and_then(|steps| {
+                steps
+                    .iter()
+                    .find(|s| !available.has(&s.backend))
+                    .map(|s| s.backend.to_string())
+            });
+            match missing {
+                Some(b) => blocked.push((to, b)),
+                None => usable.push(to),
+            }
+        }
+        (usable, blocked)
     }
 
     /// The targets and tools Kiln can run on all of `paths` with the
@@ -236,6 +280,15 @@ impl Kiln {
             .registry
             .format(target)
             .ok_or_else(|| Error::UnknownFormat(target.trim_start_matches('.').to_owned()))?;
+        // A file that isn't what its extension says is never handed to an
+        // engine: one would treat a "DOCX" of random bytes as plain text
+        // and report a "converted" file.
+        if crate::check::content_is_wrong(&input, &from.ext) {
+            return Err(Error::WrongContent {
+                path: input.clone(),
+                code: from.code(),
+            });
+        }
         let steps = self
             .registry
             .route(from, to)
@@ -475,5 +528,31 @@ impl WorkDir {
 impl Drop for WorkDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formats_that_need_a_missing_helper_are_split_off_with_the_helper() {
+        let kiln = Kiln::new();
+        let all = Availability::all();
+        let (usable, blocked) = kiln.targets_split(Path::new("a.mp4"), &all);
+        assert!(!usable.is_empty() && blocked.is_empty());
+
+        let no_ffmpeg = Availability::all().without(&["ffmpeg"]);
+        let (usable, blocked) = kiln.targets_split(Path::new("a.mp4"), &no_ffmpeg);
+        assert!(usable.is_empty(), "{usable:?}");
+        assert!(blocked.iter().all(|(_, b)| b == "ffmpeg"));
+        assert!(blocked.iter().any(|(f, _)| f.ext == "mp3"));
+
+        // An image needs no helper for most of its formats.
+        let (usable, _) = kiln.targets_split(Path::new("a.png"), &no_ffmpeg);
+        assert!(usable.iter().any(|f| f.ext == "jpg"));
+        // A type nobody knows has nothing either way.
+        let (usable, blocked) = kiln.targets_split(Path::new("a.xyz"), &all);
+        assert!(usable.is_empty() && blocked.is_empty());
     }
 }

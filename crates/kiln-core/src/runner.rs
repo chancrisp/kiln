@@ -394,23 +394,42 @@ mod tests {
         assert_eq!(e.message, "The PDF has no pages.");
         assert_eq!(e.details, "the PDF has no pages.");
         // One with a library's words in it is not shown on the row.
-        let e = JobError::new(failed("Kiln", "the PDF couldn't be read (bad xref).", ""), &gif);
-        assert_eq!(e.message, "The conversion stopped before it finished. Try again.");
+        let e = JobError::new(
+            failed("Kiln", "the PDF couldn't be read (bad xref).", ""),
+            &gif,
+        );
+        assert_eq!(
+            e.message,
+            "The conversion stopped before it finished. Try again."
+        );
 
         // Image and document failures never put a path on the row.
         let path = std::path::PathBuf::from("C:/x/photo.png");
         for err in [
-            Error::WrongContent { path: path.clone(), code: "PNG".into() },
-            Error::Decode { path: path.clone(), reason: "unexpected end of file".into() },
+            Error::WrongContent {
+                path: path.clone(),
+                code: "PNG".into(),
+            },
+            Error::Decode {
+                path: path.clone(),
+                reason: "unexpected end of file".into(),
+            },
             Error::InputNotFound(path.clone()),
         ] {
             let shown = err.to_string();
             let e = JobError::new(err, &gif);
-            assert!(!e.message.contains("photo.png") && !e.message.contains("C:"), "{}", e.message);
+            assert!(
+                !e.message.contains("photo.png") && !e.message.contains("C:"),
+                "{}",
+                e.message
+            );
             assert_eq!(e.details, shown, "the path waits in the details");
         }
         let e = JobError::new(
-            Error::WrongContent { path, code: "PNG".into() },
+            Error::WrongContent {
+                path,
+                code: "PNG".into(),
+            },
             &gif,
         );
         assert_eq!(
@@ -440,7 +459,10 @@ mod tests {
         let raw = "Input #0, mov from 'C:\\Encrypted\\Password reset.mp4':\n\
                    Output #0 to 'C:\\held\\1\\Password reset.mp3':\nConversion failed!";
         let e = JobError::new(failed("LibreOffice", "Conversion failed!", raw), &mp3);
-        assert_eq!(e.message, "The conversion stopped before it finished. Try again.");
+        assert_eq!(
+            e.message,
+            "The conversion stopped before it finished. Try again."
+        );
     }
 
     #[test]

@@ -5,7 +5,9 @@ use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use kiln_core::{about, Facts, Kiln, Kind, Look, Suggested, Suggestion, Tool};
+use kiln_core::{
+    about, Availability, Facts, FileCheck, Kiln, Kind, Look, Suggested, Suggestion, Tool,
+};
 
 use crate::actions::FileAction;
 use crate::wheel::Action;
@@ -305,6 +307,8 @@ pub enum PromptButton {
     Discard,
     /// Stop the running jobs and go ahead.
     Stop(Leave),
+    /// Add the files of a big folder after all.
+    AddAll,
     Cancel,
 }
 
@@ -316,8 +320,17 @@ impl PromptButton {
             PromptButton::Stop(Leave::Close) => "Stop and close",
             PromptButton::Stop(Leave::Clear) => "Stop and clear",
             PromptButton::Stop(Leave::Remove) => "Stop and remove",
+            PromptButton::AddAll => "Add them all",
             PromptButton::Cancel => "Cancel",
         }
+    }
+}
+
+/// The question asked before adding a folder's many files.
+pub fn big_folder_prompt(files: usize) -> Prompt {
+    Prompt {
+        title: format!("That's {files} files. Add them all?"),
+        buttons: vec![PromptButton::AddAll, PromptButton::Cancel],
     }
 }
 
@@ -508,8 +521,14 @@ pub struct Entry {
     /// Format code shown in monospace: "PNG". Empty if there's no extension.
     pub code: String,
     pub size: u64,
-    /// Codes Kiln can convert this file to, from formats.toml.
+    /// Codes Kiln can convert this file to now, from formats.toml, with the
+    /// helper apps installed.
     pub targets: Vec<String>,
+    /// What a look at the file's first bytes found when it was added.
+    pub check: FileCheck,
+    /// A helper app some formats need and Kiln can't find: its backend
+    /// ("ffmpeg") and how many formats wait on it.
+    pub missing: Option<(String, usize)>,
     pub job: JobState,
     /// What `inspect` found, once it has.
     pub facts: Option<Facts>,
@@ -539,7 +558,13 @@ impl Entry {
     /// The second line of the row and its tone, following the job.
     pub fn line(&self) -> (String, Tone) {
         match &self.job {
-            JobState::Idle => (self.detail(), Tone::Muted),
+            JobState::Idle => (
+                self.detail(),
+                match self.check {
+                    FileCheck::Ok | FileCheck::Unknown => Tone::Muted,
+                    _ => Tone::Crack,
+                },
+            ),
             JobState::Running { action, .. } => (doing(action), Tone::Muted),
             JobState::Done {
                 action: Action::File(FileAction::Move),
@@ -611,8 +636,15 @@ impl Entry {
         match &self.job {
             JobState::Failed { .. } if self.details(cut).is_some() => Some("Show details"),
             _ if self.held().is_some() => Some("Export"),
-            // A file nothing has been done to yet says how to start.
-            JobState::Idle => Some("Convert"),
+            // A file nothing has been done to says how to start: Convert,
+            // or Get the helper it can't be converted without. A file
+            // ruled out on adding has nothing to offer.
+            JobState::Idle if self.check != FileCheck::Ok => None,
+            JobState::Idle => match &self.missing {
+                Some((b, _)) if self.targets.is_empty() => Some(get_label(b)),
+                _ if self.targets.is_empty() => None,
+                _ => Some("Convert"),
+            },
             _ => None,
         }
     }
@@ -666,7 +698,7 @@ impl Entry {
     /// path.
     pub fn detail(&self) -> String {
         let description = self.facts.as_ref().and_then(describe);
-        if description.is_none() && self.suggestion.is_none() {
+        if (description.is_none() && self.suggestion.is_none()) || self.check != FileCheck::Ok {
             return self.plain_detail();
         }
         let mut parts: Vec<String> = description.into_iter().collect();
@@ -688,16 +720,29 @@ impl Entry {
     /// The secondary line before facts arrive: how many formats the file
     /// converts to, in the place of what it is, then its size and folder.
     pub fn plain_detail(&self) -> String {
-        let reach = match self.targets.len() {
-            0 => "No formats for this type".to_owned(),
-            1 => format!("Converts to {}", self.targets[0]),
-            n => format!("Converts to {n} formats"),
+        let folder = self.folder_name();
+        let reach = match self.check {
+            // Nothing in it: the size would only say the same.
+            FileCheck::Empty => return format!("Empty file (0 bytes)  ·  {folder}"),
+            FileCheck::Mismatch => format!("Isn't really a {} file", self.code),
+            FileCheck::Unreadable => {
+                "Can't read this file. Check it isn't open in another app.".to_owned()
+            }
+            FileCheck::Unknown if self.code.is_empty() => "Unknown type".to_owned(),
+            FileCheck::Unknown => format!("Unknown type (.{})", self.code),
+            FileCheck::Ok => match (self.targets.len(), &self.missing) {
+                (0, Some((b, _))) => format!("Needs {} to convert", helper_name(b)),
+                (0, None) => "No formats for this type".to_owned(),
+                (n, Some((b, k))) => format!(
+                    "Converts to {n} {}, {k} more need {}",
+                    if n == 1 { "format" } else { "formats" },
+                    helper_name(b)
+                ),
+                (1, None) => format!("Converts to {}", self.targets[0]),
+                (n, None) => format!("Converts to {n} formats"),
+            },
         };
-        format!(
-            "{reach}  ·  {}  ·  {}",
-            human_size(self.size),
-            self.folder_name()
-        )
+        format!("{reach}  ·  {}  ·  {folder}", human_size(self.size))
     }
 
     /// The last part of the file's folder: "samples" for
@@ -1027,7 +1072,12 @@ impl FileList {
         Some(removed)
     }
 
-    pub fn add(&mut self, kiln: &Kiln, paths: impl IntoIterator<Item = PathBuf>) -> Added {
+    pub fn add(
+        &mut self,
+        kiln: &Kiln,
+        available: &Availability,
+        paths: impl IntoIterator<Item = PathBuf>,
+    ) -> Added {
         let mut result = Added::default();
         for path in paths {
             let Ok(meta) = std::fs::metadata(&path) else {
@@ -1043,7 +1093,8 @@ impl FileList {
                 result.duplicates += 1;
                 continue;
             }
-            self.entries.push(entry_for(kiln, path, meta.len()));
+            self.entries
+                .push(entry_for(kiln, available, path, meta.len()));
             result.added += 1;
         }
         result
@@ -1214,11 +1265,21 @@ impl FileList {
     pub fn relocate(&mut self, kiln: &Kiln, old: &Path, new: PathBuf) -> Option<usize> {
         let i = self.index_of(old)?;
         let e = &mut self.entries[i];
-        let fresh = entry_for(kiln, new, e.size);
+        let fresh = entry_for(kiln, &Availability::all(), new, e.size);
         e.path = fresh.path;
         e.name = fresh.name;
         e.folder = fresh.folder;
         Some(i)
+    }
+
+    /// Work out every row's formats again, after the helper apps found
+    /// changed. Rows the add-time check ruled out stay as they are.
+    pub fn refresh_offers(&mut self, kiln: &Kiln, available: &Availability) {
+        for e in &mut self.entries {
+            if e.check == FileCheck::Ok {
+                (e.targets, e.missing) = offers(kiln, available, &e.path);
+            }
+        }
     }
 
     pub fn clear(&mut self) {
@@ -1265,7 +1326,42 @@ impl FileList {
     }
 }
 
-fn entry_for(kiln: &Kiln, path: PathBuf, size: u64) -> Entry {
+/// The helper app's name, for a backend id.
+pub fn helper_name(backend: &str) -> &'static str {
+    match backend {
+        "ffmpeg" => "FFmpeg",
+        "pandoc" => "Pandoc",
+        "libreoffice" => "LibreOffice",
+        "calibre" => "Calibre",
+        _ => "a helper app",
+    }
+}
+
+/// The row link that opens a helper's download page: "Get FFmpeg".
+pub fn get_label(backend: &str) -> &'static str {
+    match backend {
+        "ffmpeg" => "Get FFmpeg",
+        "pandoc" => "Get Pandoc",
+        "libreoffice" => "Get LibreOffice",
+        "calibre" => "Get Calibre",
+        _ => "Get helper",
+    }
+}
+
+/// What `path`'s formats are with the helpers in `available`: the codes
+/// that can run, and the first missing helper with how many formats wait
+/// on a missing one.
+fn offers(
+    kiln: &Kiln,
+    available: &Availability,
+    path: &Path,
+) -> (Vec<String>, Option<(String, usize)>) {
+    let (usable, blocked) = kiln.targets_split(path, available);
+    let missing = blocked.first().map(|(_, b)| (b.clone(), blocked.len()));
+    (usable.iter().map(|f| f.code()).collect(), missing)
+}
+
+fn entry_for(kiln: &Kiln, available: &Availability, path: PathBuf, size: u64) -> Entry {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -1278,7 +1374,14 @@ fn entry_for(kiln: &Kiln, path: PathBuf, size: u64) -> Entry {
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_uppercase())
         .unwrap_or_default();
-    let targets = kiln.targets_for(&path).iter().map(|f| f.code()).collect();
+    let ext = kiln.registry().format_of(&path).map(|f| f.ext.clone());
+    let check = kiln_core::check_file(&path, ext.as_deref(), size);
+    // A file that can't be what it says, or read, is offered nothing.
+    let (targets, missing) = if check == FileCheck::Ok {
+        offers(kiln, available, &path)
+    } else {
+        (vec![], None)
+    };
     Entry {
         path,
         name,
@@ -1286,6 +1389,8 @@ fn entry_for(kiln: &Kiln, path: PathBuf, size: u64) -> Entry {
         code,
         size,
         targets,
+        check,
+        missing,
         job: JobState::Idle,
         facts: None,
         suggestion: None,
@@ -1301,6 +1406,154 @@ fn same_path(a: &Path, b: &Path) -> bool {
     } else {
         a == b
     }
+}
+
+/// More files than this from folders asks first.
+pub const FOLDER_ASK_ABOVE: usize = 200;
+
+/// What dropped or chosen paths come to once folders are opened.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Expanded {
+    /// The files to add, in the order met.
+    pub files: Vec<PathBuf>,
+    /// How many of them came out of folders.
+    pub from_folders: usize,
+    /// The folders opened.
+    pub folders: Vec<String>,
+    /// What was left out, by name and why: "notes (hidden)".
+    pub skipped: Vec<String>,
+}
+
+impl Expanded {
+    /// Where the files came from, for "Added 12 files from Holiday.": the
+    /// folder's name for one, a count for several. `None` with only
+    /// loose files.
+    pub fn source(&self) -> Option<String> {
+        match self.folders.as_slice() {
+            [] => None,
+            [one] if self.from_folders == self.files.len() => Some(one.clone()),
+            [one] => Some(format!("{one} and elsewhere")),
+            many => Some(format!("{} folders", many.len())),
+        }
+    }
+}
+
+/// Whether a directory entry is one Kiln leaves out of a folder: hidden or
+/// system, or a dot name.
+fn hidden_or_system(name: &str, meta: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const HIDDEN: u32 = 0x2;
+        const SYSTEM: u32 = 0x4;
+        if meta.file_attributes() & (HIDDEN | SYSTEM) != 0 {
+            return true;
+        }
+    }
+    let _ = meta;
+    name.starts_with('.')
+}
+
+/// Open the folders among `paths`. A folder gives its files, and those of
+/// the folders directly inside it, but nothing hidden or system and
+/// nothing deeper. What is left out is named with the reason, so a drop
+/// never says "Skipped 2 items" and stops.
+pub fn expand_dropped(paths: Vec<PathBuf>) -> Expanded {
+    let mut out = Expanded::default();
+    let name_of = |p: &Path| {
+        p.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| p.display().to_string())
+    };
+    for path in paths {
+        let Ok(meta) = std::fs::metadata(&path) else {
+            out.skipped.push(format!("{} (not found)", name_of(&path)));
+            continue;
+        };
+        if !meta.is_dir() {
+            out.files.push(path);
+            continue;
+        }
+        let before = out.files.len();
+        walk_folder(&path, 0, &mut out);
+        out.from_folders += out.files.len() - before;
+        out.folders.push(name_of(&path));
+    }
+    out
+}
+
+fn walk_folder(dir: &Path, depth: usize, out: &mut Expanded) {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        let name = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        out.skipped.push(format!("{name} (can't be opened)"));
+        return;
+    };
+    let mut entries: Vec<_> = read.flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+    for e in entries {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Ok(meta) = e.metadata() else {
+            out.skipped.push(format!("{name} (can't be read)"));
+            continue;
+        };
+        if hidden_or_system(&name, &meta) {
+            out.skipped.push(format!("{name} (hidden)"));
+        } else if meta.is_dir() {
+            if depth == 0 {
+                walk_folder(&e.path(), 1, out);
+            } else {
+                out.skipped.push(format!("{name} (folder inside a folder)"));
+            }
+        } else if meta.is_file() {
+            out.files.push(e.path());
+        }
+    }
+}
+
+/// What a drop said, with folders opened: "Added 12 files from Holiday.
+/// Skipped 2 items: Thumbs.db (hidden), old (folder inside a folder)."
+/// Without folders or names it is [`status_line`].
+pub fn drop_line(
+    total: usize,
+    added: usize,
+    duplicates: usize,
+    from: Option<&str>,
+    skipped: &[String],
+) -> String {
+    if from.is_none() && skipped.is_empty() {
+        return status_line(total, added, duplicates, 0);
+    }
+    let n = |k: usize, one: &str, many: &str| format!("{k} {}", if k == 1 { one } else { many });
+    let mut parts = vec![];
+    if added > 0 {
+        let source = from.map(|f| format!(" from {f}")).unwrap_or_default();
+        parts.push(format!("Added {}{source}.", n(added, "file", "files")));
+    }
+    if duplicates > 0 {
+        parts.push(format!(
+            "{} already in the list.",
+            n(duplicates, "file was", "files were")
+        ));
+    }
+    if !skipped.is_empty() {
+        let shown: Vec<&str> = skipped.iter().take(3).map(String::as_str).collect();
+        let more = match skipped.len() - shown.len() {
+            0 => String::new(),
+            k => format!(" and {k} more"),
+        };
+        parts.push(format!(
+            "Skipped {}: {}{more}.",
+            n(skipped.len(), "item", "items"),
+            shown.join(", ")
+        ));
+    }
+    if parts.is_empty() {
+        parts.push(format!("{}.", n(total, "file", "files")));
+    }
+    parts.join(" ")
 }
 
 /// "3 files.", or what a drop just did: "Added 2 files. Skipped 1 item
@@ -1363,12 +1616,134 @@ mod tests {
     }
 
     #[test]
+    fn a_dropped_folder_gives_its_files_one_level_down_and_names_what_it_skips() {
+        let dir = tempfile::tempdir().unwrap();
+        let holiday = dir.path().join("Holiday");
+        fs::create_dir_all(holiday.join("beach").join("deep")).unwrap();
+        fs::write(holiday.join("a.jpg"), b"x").unwrap();
+        fs::write(holiday.join(".secret.jpg"), b"x").unwrap();
+        fs::write(holiday.join("beach").join("b.jpg"), b"x").unwrap();
+        fs::write(holiday.join("beach").join("deep").join("c.jpg"), b"x").unwrap();
+        let loose = dir.path().join("loose.png");
+        fs::write(&loose, b"x").unwrap();
+        let gone = dir.path().join("gone.png");
+
+        let one = expand_dropped(vec![holiday.clone()]);
+        let names: Vec<String> = one
+            .files
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["a.jpg", "b.jpg"]);
+        assert_eq!(one.from_folders, 2);
+        assert_eq!(one.source().as_deref(), Some("Holiday"));
+        assert!(one.skipped.contains(&".secret.jpg (hidden)".to_owned()));
+        assert!(one
+            .skipped
+            .contains(&"deep (folder inside a folder)".to_owned()));
+        assert_eq!(
+            drop_line(2, 2, 0, one.source().as_deref(), &one.skipped),
+            "Added 2 files from Holiday. Skipped 2 items: .secret.jpg (hidden), deep (folder inside a folder)."
+        );
+
+        // Loose files and a missing path come through by name.
+        let mixed = expand_dropped(vec![loose.clone(), gone, holiday]);
+        assert_eq!(mixed.files.len(), 3);
+        assert_eq!(mixed.source().as_deref(), Some("Holiday and elsewhere"));
+        assert!(mixed.skipped.contains(&"gone.png (not found)".to_owned()));
+        // With no folder and nothing skipped, the old line stands.
+        assert_eq!(drop_line(1, 1, 0, None, &[]), "Added 1 file.");
+        assert_eq!(
+            drop_line(0, 0, 0, None, &["x (hidden)".into()]),
+            "Skipped 1 item: x (hidden)."
+        );
+    }
+
+    #[test]
+    fn a_big_folder_asks_first() {
+        let p = big_folder_prompt(1240);
+        assert_eq!(p.title, "That's 1240 files. Add them all?");
+        assert_eq!(p.buttons, [PromptButton::AddAll, PromptButton::Cancel]);
+        assert_eq!(FOLDER_ASK_ABOVE, 200);
+    }
+
+    #[test]
+    fn a_file_that_cannot_work_says_so_and_offers_nothing() {
+        let (dir, kiln) = setup();
+        let w = |name: &str, bytes: &[u8]| {
+            let p = dir.path().join(name);
+            fs::write(&p, bytes).unwrap();
+            p
+        };
+        let empty = w("empty.png", b"");
+        let fake = w("fake.docx", &[7u8; 2000]);
+        let good = w("good.docx", b"PK\x03\x04rest of a zip");
+        let mut list = FileList::default();
+        list.add(&kiln, &Availability::all(), [empty, fake, good]);
+        let (e, f, g) = (&list.entries()[0], &list.entries()[1], &list.entries()[2]);
+        assert_eq!(e.check, FileCheck::Empty);
+        assert!(e.targets.is_empty());
+        assert!(
+            e.plain_detail().starts_with("Empty file (0 bytes)"),
+            "{}",
+            e.plain_detail()
+        );
+        assert_eq!(e.line().1, Tone::Crack);
+        assert_eq!(f.check, FileCheck::Mismatch);
+        assert!(f.targets.is_empty());
+        assert!(
+            f.detail().starts_with("Isn't really a DOCX file"),
+            "{}",
+            f.detail()
+        );
+        // Neither offers a way to start; a real DOCX does.
+        assert_eq!(e.link(false), None);
+        assert_eq!(f.link(false), None);
+        assert_eq!(g.check, FileCheck::Ok);
+        assert!(!g.targets.is_empty());
+        assert_eq!(g.link(false), Some("Convert"));
+    }
+
+    #[test]
+    fn a_missing_helper_shows_on_the_row_with_a_get_link() {
+        let (dir, kiln) = setup();
+        let mp4 = dir.path().join("clip.mp4");
+        fs::write(&mp4, b"\0\0\0\x18ftypmp42").unwrap();
+        let png = dir.path().join("p.png");
+        fs::write(&png, b"\x89PNG\r\n\x1a\nxx").unwrap();
+        let none = Availability::all().without(&["ffmpeg"]);
+        let mut list = FileList::default();
+        list.add(&kiln, &none, [mp4.clone(), png]);
+        let (v, p) = (&list.entries()[0], &list.entries()[1]);
+        assert!(v.targets.is_empty());
+        assert_eq!(v.missing.as_ref().map(|m| m.0.as_str()), Some("ffmpeg"));
+        assert!(
+            v.detail().starts_with("Needs FFmpeg to convert"),
+            "{}",
+            v.detail()
+        );
+        assert_eq!(v.link(false), Some("Get FFmpeg"));
+        // The picture needs no helper for most of its formats, and says
+        // how many wait on FFmpeg, if any do.
+        assert!(!p.targets.is_empty());
+        assert_eq!(p.link(false), Some("Convert"));
+        // FFmpeg turns up: the row offers its formats again.
+        list.refresh_offers(&kiln, &Availability::all());
+        let v = &list.entries()[0];
+        assert!(!v.targets.is_empty() && v.missing.is_none());
+        assert_eq!(v.link(false), Some("Convert"));
+        assert!(v.detail().starts_with("Converts to "), "{}", v.detail());
+    }
+
+    #[test]
     fn files_are_added_with_their_conversions() {
         let (dir, kiln) = setup();
         let png = dir.path().join("photo.png");
-        fs::write(&png, [0u8; 1500]).unwrap();
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        bytes.resize(1500, 0);
+        fs::write(&png, bytes).unwrap();
         let mut list = FileList::default();
-        let r = list.add(&kiln, [png.clone()]);
+        let r = list.add(&kiln, &Availability::all(), [png.clone()]);
         assert_eq!(
             r,
             Added {
@@ -1401,9 +1776,10 @@ mod tests {
         let a = dir.path().join("a.mp3");
         fs::write(&a, b"x").unwrap();
         let mut list = FileList::default();
-        list.add(&kiln, [a.clone()]);
+        list.add(&kiln, &Availability::all(), [a.clone()]);
         let r = list.add(
             &kiln,
+            &Availability::all(),
             [a, dir.path().to_path_buf(), dir.path().join("missing.wav")],
         );
         assert_eq!(
@@ -1423,11 +1799,12 @@ mod tests {
         let f = dir.path().join("notes.xyz");
         fs::write(&f, b"x").unwrap();
         let mut list = FileList::default();
-        list.add(&kiln, [f]);
+        list.add(&kiln, &Availability::all(), [f]);
         assert!(list.entries()[0].targets.is_empty());
         assert!(list.entries()[0]
             .detail()
-            .starts_with("No formats for this type  ·  "));
+            .starts_with("Unknown type (.XYZ)  ·  "));
+        assert_eq!(list.entries()[0].link(false), None);
     }
 
     /// A list of `n` rows that aren't on disk: "0.png", "1.png"…
@@ -1744,7 +2121,7 @@ mod tests {
         let f = dir.path().join("a.png");
         fs::write(&f, b"x").unwrap();
         let mut list = FileList::default();
-        list.add(&kiln, [f]);
+        list.add(&kiln, &Availability::all(), [f]);
         let e = &mut list.entries_mut()[0];
         let jpg = Action::Convert("jpg".into());
         e.job = JobState::Running {
@@ -1887,6 +2264,8 @@ mod tests {
             suggestion: None,
             facts_at: None,
             last: None,
+            check: FileCheck::Ok,
+            missing: None,
         }
     }
 
@@ -2073,7 +2452,7 @@ mod tests {
         let a = dir.path().join("a.png");
         fs::write(&a, b"x").unwrap();
         let mut list = FileList::default();
-        list.add(&kiln, [a]);
+        list.add(&kiln, &Availability::all(), [a]);
         let before = list.entries().to_vec();
         assert!(!list.set_facts(&dir.path().join("gone.png"), photo(), None));
         assert_eq!(list.entries(), before);
@@ -2091,7 +2470,7 @@ mod tests {
             })
             .collect();
         let mut list = FileList::default();
-        list.add(&kiln, paths);
+        list.add(&kiln, &Availability::all(), paths);
         let listed: Vec<PathBuf> = list.entries().iter().map(|e| e.path.clone()).collect();
         assert_eq!(list.facts_for(&listed), None);
         assert!(list.set_facts(&listed[0], photo(), None));

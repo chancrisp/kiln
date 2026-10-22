@@ -103,16 +103,11 @@ fn unreadable_document_fails_cleanly() {
     let err = Kiln::new()
         .convert(&input, "md", &options(&dir))
         .unwrap_err();
+    // Kiln sees it isn't a DOCX before Pandoc is asked.
     assert!(
-        matches!(
-            err,
-            Error::EngineFailed {
-                engine: "Pandoc",
-                ..
-            }
-        ),
+        matches!(&err, Error::WrongContent { code, .. } if code == "DOCX"),
         "{err:?}"
     );
-    assert_eq!(files_in(dir.path()), ["broken.docx", "work"]);
-    assert!(files_in(&dir.path().join("work")).is_empty());
+    // Nothing is written anywhere, not even a working folder.
+    assert_eq!(files_in(dir.path()), ["broken.docx"]);
 }

@@ -409,7 +409,10 @@ mod tests {
             "The conversion stopped before it finished. Try again."
         );
         for (verb, want) in [
-            ("convert", "The conversion stopped before it finished. Try again."),
+            (
+                "convert",
+                "The conversion stopped before it finished. Try again.",
+            ),
             ("compress", "The job stopped before it finished. Try again."),
             ("crop", "The job stopped before it finished. Try again."),
             ("trim", "The job stopped before it finished. Try again."),
@@ -507,7 +510,10 @@ mod tests {
             stopped("convert"),
         ] {
             assert!(!line.contains('\\'), "{line}");
-            assert!(!line.contains("FFmpeg") && !line.contains("Pandoc"), "{line}");
+            assert!(
+                !line.contains("FFmpeg") && !line.contains("Pandoc"),
+                "{line}"
+            );
             assert!(line.ends_with('.'), "{line}");
         }
     }

@@ -689,6 +689,9 @@ struct App {
     /// What the footer says whenever it has nothing more pressing: why
     /// results are saved next to each file, when there's no holding folder.
     sticky: Option<&'static str>,
+    /// Whether this run has said that a helper app is missing, once, so
+    /// it isn't said for every file.
+    helper_notice: bool,
     /// The Add files button, in the empty window or the footer.
     add_hover: bool,
     add_pressed: bool,
@@ -987,7 +990,20 @@ impl App {
     /// Add `paths` to the list. `keys` says a key asked for them (Ctrl+O,
     /// Ctrl+V), which shows the focus ring on the new focus row.
     fn add(&mut self, paths: Vec<PathBuf>, keys: bool) {
-        let r = self.files.add(&self.kiln, paths);
+        // Folders give their files; a big one asks first.
+        let opened = model::expand_dropped(paths);
+        if opened.from_folders > model::FOLDER_ASK_ABOVE
+            && system::ask(self.hwnd, &model::big_folder_prompt(opened.from_folders))
+                != model::PromptButton::AddAll
+        {
+            self.say("Nothing added.");
+            self.invalidate();
+            return;
+        }
+        let from = opened.source();
+        let skipped = opened.skipped;
+        let available = self.availability().clone();
+        let r = self.files.add(&self.kiln, &available, opened.files);
         let now = Instant::now();
         while self.rows.len() < self.files.len() {
             self.rows.push(RowTimes {
@@ -996,12 +1012,18 @@ impl App {
                 job: None,
             });
         }
-        self.say(status_line(
+        let skipped_count = r.skipped + skipped.len();
+        let mut said = model::drop_line(
             self.files.len(),
             r.added,
             r.duplicates,
-            r.skipped,
-        ));
+            from.as_deref(),
+            &skipped,
+        );
+        if r.skipped > 0 {
+            said = format!("{said} {} didn't open.", r.skipped);
+        }
+        self.say(said);
         // An add that added nothing says why, whatever is selected.
         if r.added == 0 {
             self.alert = Some(self.status.clone());
@@ -1009,7 +1031,7 @@ impl App {
         // Only the plain "Added 2 files." gives way to the idle hint; a line
         // about duplicates or skipped items stays until something replaces
         // it.
-        self.added = ways_in::hint_follows(r.added, r.duplicates, r.skipped)
+        self.added = ways_in::hint_follows(r.added, r.duplicates, skipped_count)
             .then(|| (self.status.clone(), Instant::now()));
         if self.added.is_some() {
             self.arm_hint(ways_in::ADDED_FOR);
@@ -1019,7 +1041,26 @@ impl App {
             .iter()
             .map(|e| e.path.clone())
             .collect();
-        self.inspect(fresh);
+        self.inspect(fresh.clone());
+        // One calm notice per run that a helper app is missing, for the
+        // first file that can't be converted for want of it; the rows
+        // carry the rest.
+        if !self.helper_notice && skipped_count == 0 {
+            let lacking = fresh.iter().find_map(|p| {
+                let e = self.files.entries().get(self.files.index_of(p)?)?;
+                e.missing
+                    .as_ref()
+                    .filter(|_| e.targets.is_empty())
+                    .map(|m| m.0.clone())
+            });
+            if let Some(backend) = lacking {
+                self.helper_notice = true;
+                let name = model::helper_name(&backend);
+                self.alert(format!(
+                    "{name} isn't installed, so some files can't be converted yet. Use Get {name} on their rows."
+                ));
+            }
+        }
         if r.added > 0 {
             self.last_add = self.files.entries()[self.files.len() - 1]
                 .path
@@ -1370,7 +1411,8 @@ impl App {
             return;
         };
         match system::ask(self.hwnd, &prompt) {
-            PromptButton::Cancel => {}
+            // AddAll is only asked about big folders, never on a leave.
+            PromptButton::Cancel | PromptButton::AddAll => {}
             PromptButton::ExportAll => {
                 let listed = self
                     .files
@@ -2116,7 +2158,13 @@ impl App {
         let Some(e) = self.files.entries().get(i) else {
             return;
         };
-        if matches!(e.job, JobState::Idle) {
+        if let (JobState::Idle, Some((backend, _)), true) =
+            (&e.job, &e.missing, e.targets.is_empty())
+        {
+            // Nothing can be done with this file until its helper app is
+            // installed: the link goes to where to get it.
+            self.get_helper(&backend.clone());
+        } else if matches!(e.job, JobState::Idle) {
             // A file nothing has been done to: its link asks what to do.
             let paths = vec![e.path.clone()];
             let at = self.row_anchor(i).unwrap_or_else(|| self.row_centre(i));
@@ -2127,6 +2175,22 @@ impl App {
             self.show_saved(i);
         } else {
             self.show_details(i);
+        }
+    }
+
+    /// Open the download page of the helper app behind `backend`
+    /// ("ffmpeg") in the browser.
+    fn get_helper(&mut self, backend: &str) {
+        let engine = match backend {
+            "ffmpeg" => Engine::Ffmpeg,
+            "pandoc" => Engine::Pandoc,
+            "libreoffice" => Engine::LibreOffice,
+            "calibre" => Engine::Calibre,
+            _ => return,
+        };
+        if !system::open_download_page(self.hwnd, engine) {
+            self.alert(format!("Couldn't open {}'s download page.", engine.label()));
+            self.invalidate();
         }
     }
 
@@ -2264,7 +2328,12 @@ impl App {
 
     fn open_wheel(&mut self, kind: WheelKind, paths: Vec<PathBuf>, at: (f32, f32), keyboard: bool) {
         let (w, h) = self.renderer.size_dips();
-        let (items, more) = wheel::split_common(wheel::items_for(kind, &self.kiln, &paths));
+        let (items, more) = wheel::split_common(wheel::items_for(
+            kind,
+            &self.kiln,
+            self.availability(),
+            &paths,
+        ));
         let mut wheel = Wheel {
             kind,
             items,
@@ -2352,7 +2421,7 @@ impl App {
         let said = if busy {
             model::convert_block(paths.len(), 1).map(str::to_owned)
         } else {
-            let offer = wheel::offer(kind, &self.kiln, &paths);
+            let offer = wheel::offer(kind, &self.kiln, self.availability(), &paths);
             wheel::offer_sentence(kind, &offer)
         };
         match said {
@@ -2447,7 +2516,9 @@ impl App {
             let paths = self.paths_of(&rows);
             let wheels: Vec<WheelKind> = WheelKind::ALL
                 .into_iter()
-                .filter(|&k| !wheel::items_for(k, &self.kiln, &paths).is_empty())
+                .filter(|&k| {
+                    !wheel::items_for(k, &self.kiln, self.availability(), &paths).is_empty()
+                })
                 .collect();
             let states: Vec<RowState> = rows.iter().map(|&i| self.row_state(i)).collect();
             ways_in::menu_items(&states, &wheels)
@@ -3268,6 +3339,23 @@ impl App {
         self.apply_theme();
     }
 
+    /// Close the Settings panel. Back from it, the helper apps are looked
+    /// for again, as one may have been installed or chosen meanwhile, and
+    /// every row's formats follow.
+    fn close_settings(&mut self) {
+        self.settings_ui = None;
+        self.offers_changed();
+    }
+
+    /// The helper apps found may have changed: look again, and work out
+    /// every row's formats and suggestions afresh.
+    fn offers_changed(&mut self) {
+        self.engines.forget();
+        let available = self.availability().clone();
+        self.files.refresh_offers(&self.kiln, &available);
+        self.habits_changed();
+    }
+
     /// Save after an explicit change in Settings.
     fn save_settings(&mut self) {
         // The engines may be others now.
@@ -3452,7 +3540,7 @@ impl App {
             Control::Preset(s, preset) => self.settings.quality.set(s, Value::Preset(preset)),
             Control::Step(s) => self.settings.quality.step(s, delta),
             Control::Close => {
-                self.settings_ui = None;
+                self.close_settings();
                 self.invalidate();
                 return;
             }
@@ -3596,7 +3684,7 @@ impl App {
         };
         let focused = ui.focus.map(|i| l.controls[i].0);
         match key {
-            VK_ESCAPE => self.settings_ui = None,
+            VK_ESCAPE => self.close_settings(),
             VK_LEFT | VK_RIGHT if focused.is_some_and(segmented_or_step) => {
                 let delta = if key == VK_LEFT { -1 } else { 1 };
                 let c = focused.expect("checked above");
@@ -4010,7 +4098,7 @@ impl App {
                 unsafe { SetCapture(self.hwnd) };
             } else if !self.settings_layout().panel.contains(x, y) {
                 // A click on the scrim closes the panel.
-                self.settings_ui = None;
+                self.close_settings();
             }
             self.invalidate();
             return;
@@ -5291,6 +5379,7 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         close_when_saved: false,
         destroyed: false,
         sticky,
+        helper_notice: false,
         add_hover: false,
         add_pressed: false,
         convert_hover: false,
