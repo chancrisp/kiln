@@ -154,6 +154,7 @@ pub fn batch_summary(
             Action::Tool(t) => format!("Couldn't {} {what}.", t.id()),
             Action::File(_) => unreachable!("handled above"),
         };
+        s.push_str(&says_why(failed));
         if cancelled > 0 {
             s.push_str(&format!(" {cancelled} cancelled."));
         }
@@ -161,7 +162,7 @@ pub fn batch_summary(
     }
     let mut s = match action {
         Action::Tool(Tool::Merge) if ok > 0 => format!("Merged {} into one.", n(files)),
-        Action::Tool(Tool::Merge) => "Couldn't merge the files.".to_owned(),
+        Action::Tool(Tool::Merge) => format!("Couldn't merge the files.{}", says_why(failed)),
         Action::Convert(ext) if ok == files => {
             format!("Converted {} to {}.", n(ok), ext.to_ascii_uppercase())
         }
@@ -176,13 +177,23 @@ pub fn batch_summary(
     };
     if !merge {
         if failed > 0 {
-            s.push_str(&format!(" {failed} didn't work."));
+            s.push_str(&format!(" {failed} didn't work.{}", says_why(failed)));
         }
         if cancelled > 0 {
             s.push_str(&format!(" {cancelled} cancelled."));
         }
     }
     s
+}
+
+/// What a footer line adds after "Couldn't ..." so it never stands alone:
+/// the cause is on the row. `failed` rows failed.
+fn says_why(failed: usize) -> String {
+    if failed == 1 {
+        " The row says why.".to_owned()
+    } else {
+        " Each row says why.".to_owned()
+    }
 }
 
 /// A held result that someone removed by hand.
@@ -489,9 +500,25 @@ pub struct Entry {
     pub suggestion: Option<Suggestion>,
     /// When the facts arrived, for the second line's crossfade.
     pub facts_at: Option<Instant>,
+    /// What was last asked of this file alone, for Retry. Set when a
+    /// conversion or a one-file tool starts; a merge, which takes several
+    /// files, leaves it unset.
+    pub last: Option<Action>,
 }
 
 impl Entry {
+    /// Whether the row offers Retry: what it was doing is known, and it
+    /// was cancelled or failed in a way that trying again can fix (a
+    /// damaged file would fail the same way, so it gets no Retry).
+    pub fn retryable(&self) -> bool {
+        self.last.is_some()
+            && match &self.job {
+                JobState::Cancelled => true,
+                JobState::Failed { message, .. } => kiln_core::retry_may_help(message),
+                _ => false,
+            }
+    }
+
     /// The second line of the row and its tone, following the job.
     pub fn line(&self) -> (String, Tone) {
         match &self.job {
@@ -643,7 +670,7 @@ impl Entry {
     /// converts to, in the place of what it is, then its size and folder.
     pub fn plain_detail(&self) -> String {
         let reach = match self.targets.len() {
-            0 => "No conversions for this type".to_owned(),
+            0 => "No formats for this type".to_owned(),
             1 => format!("Converts to {}", self.targets[0]),
             n => format!("Converts to {n} formats"),
         };
@@ -1244,6 +1271,7 @@ fn entry_for(kiln: &Kiln, path: PathBuf, size: u64) -> Entry {
         facts: None,
         suggestion: None,
         facts_at: None,
+        last: None,
     }
 }
 
@@ -1380,7 +1408,7 @@ mod tests {
         assert!(list.entries()[0].targets.is_empty());
         assert!(list.entries()[0]
             .detail()
-            .starts_with("No conversions for this type  ·  "));
+            .starts_with("No formats for this type  ·  "));
     }
 
     /// A list of `n` rows that aren't on disk: "0.png", "1.png"…
@@ -1742,20 +1770,23 @@ mod tests {
         assert_eq!(batch_summary(&jpg, 1, 1, 0, 0), "Converted 1 file to JPG.");
         assert_eq!(
             batch_summary(&jpg, 3, 2, 1, 0),
-            "Converted 2 of 3 files to JPG. 1 didn't work."
+            "Converted 2 of 3 files to JPG. 1 didn't work. The row says why."
         );
         assert_eq!(
             batch_summary(&jpg, 1, 0, 1, 0),
-            "Couldn't convert the file to JPG."
+            "Couldn't convert the file to JPG. The row says why."
         );
         assert_eq!(
             batch_summary(&jpg, 3, 0, 2, 1),
-            "Couldn't convert 2 files to JPG. 1 cancelled."
+            "Couldn't convert 2 files to JPG. Each row says why. 1 cancelled."
         );
         assert_eq!(batch_summary(&jpg, 2, 0, 0, 2), "Cancelled.");
         let trim = Action::Tool(Tool::Trim);
         assert_eq!(batch_summary(&trim, 2, 2, 0, 0), "Trimmed 2 files.");
-        assert_eq!(batch_summary(&trim, 1, 0, 1, 0), "Couldn't trim the file.");
+        assert_eq!(
+            batch_summary(&trim, 1, 0, 1, 0),
+            "Couldn't trim the file. The row says why."
+        );
         assert_eq!(
             batch_summary(&trim, 2, 1, 0, 1),
             "Trimmed 1 of 2 files. 1 cancelled."
@@ -1767,7 +1798,7 @@ mod tests {
         );
         assert_eq!(
             batch_summary(&merge, 3, 0, 1, 0),
-            "Couldn't merge the files."
+            "Couldn't merge the files. The row says why."
         );
         for s in [
             batch_summary(&jpg, 9, 0, 9, 0),
@@ -1836,6 +1867,7 @@ mod tests {
             facts: None,
             suggestion: None,
             facts_at: None,
+            last: None,
         }
     }
 
@@ -2058,6 +2090,27 @@ mod tests {
         list.forget_facts();
         assert_eq!(list.facts_for(&listed), None);
         assert!(list.entries().iter().all(|e| e.facts_at.is_none()));
+    }
+
+    #[test]
+    fn retry_is_for_cancelled_rows_and_failures_trying_again_can_fix() {
+        let failed = |message: &str| JobState::Failed {
+            message: message.into(),
+            details: String::new(),
+            engine: None,
+        };
+        let mut e = row("a.png");
+        e.job = JobState::Cancelled;
+        // Nothing known about what it was doing: nothing to run again.
+        assert!(!e.retryable());
+        e.last = Some(Action::Convert("jpg".into()));
+        assert!(e.retryable());
+        e.job = failed("The conversion stopped before it finished. Try again.");
+        assert!(e.retryable());
+        e.job = failed("This file looks damaged, or isn't really a PNG. Try opening it in another app.");
+        assert!(!e.retryable());
+        e.job = JobState::Idle;
+        assert!(!e.retryable());
     }
 
     fn held_row(name: &str, outputs: &[&str], saved: Option<&str>) -> Entry {

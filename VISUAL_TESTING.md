@@ -36,7 +36,7 @@ window between them as well.
 - [ ] Format chips are monospace, uppercase and slightly tracked (PNG, MP4, DOCX).
 - [ ] Rows show the name in bone, then in stone the number of conversions (or what the file is and the suggestion), the size, then the folder's last part.
 - [ ] Hovering a row shows a native tooltip: the whole line when the row cuts it short, then the full folder path on its own line. The cancel cross says "Cancel" and a held row's Export link says "Export (Ctrl+S)".
-- [ ] A file with no conversions says "No conversions for this type".
+- [ ] A file with no conversions says "No formats for this type".
 - [ ] Dropping the same file twice reports it as already in the list. Dropping a folder reports it as skipped.
 - [ ] Hover tints a row; every selected row has the 18% celadon fill, clipped to the panel's rounded corners.
 - [ ] Up, Down, Home and End move the selection to one row. With Shift they extend it from where it started. Delete removes it. Escape clears it.
@@ -75,7 +75,8 @@ window between them as well.
 - [ ] Hovering or selecting a running row shows a cross; clicking it cancels the job and the row says "Cancelled.".
 - [ ] When a job finishes, the output name appears in bone, fading in over about 200 ms.
 - [ ] A failed job shows one plain line in brick and, when the helper app said more, a "Show details" link. Clicking it, or pressing Space on the row, opens the details over a scrim. Escape, Enter or Close dismisses it.
-- [ ] The footer sums up each batch calmly: "Converted 3 files to JPG.", "Couldn't convert the file to FLAC.". No exclamation marks.
+- [ ] A failed row never shows a file path or the helper's own words, and ends with a next step ("Try opening it in another app.", "Try again."). Where trying again can help, or after a cancel, a Retry link sits beside Show details (or alone) and runs the job again; a damaged file gets none. The right-click menu has Retry too.
+- [ ] The footer sums up each batch calmly: "Converted 3 files to JPG.", "Couldn't convert the file to FLAC. The row says why.". No exclamation marks.
 - [ ] Clear and Delete cancel running jobs first and leave no partial files behind.
 
 ## App icon

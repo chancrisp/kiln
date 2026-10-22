@@ -638,6 +638,7 @@ struct App {
     hover_row: Option<usize>,
     hover_cancel: bool,
     hover_link: bool,
+    hover_retry: bool,
     drag: Tween,
     /// The files in the current drag, read when it entered the window.
     drag_paths: Vec<PathBuf>,
@@ -2046,7 +2047,7 @@ impl App {
         if !self.over().list_live() {
             return false;
         }
-        let (Some(i), false, false) = self.hit_row(x, y) else {
+        let (Some(i), false, false, false) = self.hit_row(x, y) else {
             return false;
         };
         self.open_held(i)
@@ -2409,6 +2410,7 @@ impl App {
                 self.open_held(*i);
             }
             (MenuItem::ShowInFolder, [i]) => self.show_saved(*i),
+            (MenuItem::Retry, [i]) => self.retry_row(*i),
             (MenuItem::Stop, _) => {
                 for &i in rows {
                     self.cancel_row(i);
@@ -2862,10 +2864,15 @@ impl App {
             let id = self.runner.submit(kind, options);
             for p in &group {
                 if let Some(i) = self.files.index_of(p) {
-                    self.files.entries_mut()[i].job = JobState::Running {
+                    let entry = &mut self.files.entries_mut()[i];
+                    entry.job = JobState::Running {
                         action: action.clone(),
                         fraction: None,
                     };
+                    // What Retry runs again. A merge takes several files,
+                    // so it can't be retried from one row.
+                    entry.last = (!matches!(action, Action::Tool(Tool::Merge)))
+                        .then(|| action.clone());
                     self.rows[i].settled = None;
                     self.rows[i].job = Some(id);
                 }
@@ -3239,6 +3246,7 @@ impl App {
         self.hover_row = None;
         self.hover_cancel = false;
         self.hover_link = false;
+        self.hover_retry = false;
         (self.clear_hover, self.export_hover, self.add_hover) = (false, false, false);
         (self.clear_pressed, self.export_pressed, self.add_pressed) = (false, false, false);
         self.invalidate();
@@ -3529,6 +3537,18 @@ impl App {
         }
     }
 
+    /// Run again what row `i` was last asked to do, after it was
+    /// cancelled or failed in a way trying again can fix.
+    fn retry_row(&mut self, i: usize) {
+        let Some(e) = self.files.entries().get(i).filter(|e| e.retryable()) else {
+            return;
+        };
+        let (path, action) = (e.path.clone(), e.last.clone());
+        if let Some(action) = action {
+            self.start(action, vec![path], None);
+        }
+    }
+
     /// Open the details dialog on row `i`: the engine's output, or the
     /// whole sentence when the row cut it short.
     fn show_details(&mut self, i: usize) {
@@ -3643,7 +3663,10 @@ impl App {
 
     /// Whether `(x, y)` is on a row's link, with nothing over the list.
     fn on_link(&self, x: f32, y: f32) -> bool {
-        self.over().list_live() && self.hit_row(x, y).2
+        self.over().list_live() && {
+            let hit = self.hit_row(x, y);
+            hit.2 || hit.3
+        }
     }
 
     /// What sits over the list now.
@@ -3659,13 +3682,13 @@ impl App {
 
     // Input.
 
-    /// The row under a point and whether the point is on its cancel cross
-    /// or its link: "Show details", "Export", or an exported row's
-    /// "Saved to" line.
-    fn hit_row(&self, x: f32, y: f32) -> (Option<usize>, bool, bool) {
+    /// The row under a point and whether the point is on its cancel cross,
+    /// its link ("Show details", "Export", or an exported row's "Saved
+    /// to" line) or its Retry.
+    fn hit_row(&self, x: f32, y: f32) -> (Option<usize>, bool, bool, bool) {
         let l = self.layout();
         let Some(i) = layout::row_at(&l, x, y, self.scroll) else {
-            return (None, false, false);
+            return (None, false, false, false);
         };
         let mut r = l.rows[i];
         r.y -= self.scroll;
@@ -3675,11 +3698,13 @@ impl App {
         let saving = self.row_saving(i);
         let link = !saving && e.link(self.renderer.line_cut(&r, e)).is_some();
         let saved = !saving && e.saved().is_some();
-        let part = layout::row_part(&r, x, y, running, link, saved);
+        let retry = !saving && e.retryable();
+        let part = layout::row_part_with_retry(&r, x, y, running, link, saved, retry);
         (
             Some(i),
             part == layout::RowPart::Cancel,
             part == layout::RowPart::Link,
+            part == layout::RowPart::Retry,
         )
     }
 
@@ -3732,7 +3757,7 @@ impl App {
         if self.drag_due(x, y, keys) && self.drag_out() {
             return;
         }
-        let (row, cancel, link) = self.hit_row(x, y);
+        let (row, cancel, link, retry) = self.hit_row(x, y);
         let l = self.layout();
         let clear = l.clear_button.is_some_and(|b| b.contains(x, y));
         let export = self.export_button().is_some_and(|b| b.contains(x, y));
@@ -3755,17 +3780,19 @@ impl App {
             self.help_hover = ask;
             self.invalidate();
         }
-        if (row, cancel, link, clear)
+        if (row, cancel, link, retry, clear)
             != (
                 self.hover_row,
                 self.hover_cancel,
                 self.hover_link,
+                self.hover_retry,
                 self.clear_hover,
             )
         {
             self.hover_row = row;
             self.hover_cancel = cancel;
             self.hover_link = link;
+            self.hover_retry = retry;
             self.clear_hover = clear;
             self.invalidate();
         }
@@ -3936,7 +3963,7 @@ impl App {
         } else {
             // A click in the list hides the focus ring until a key.
             self.files.pointer_used();
-            let (row, cancel, link) = self.hit_row(x, y);
+            let (row, cancel, link, retry) = self.hit_row(x, y);
             let release = match row {
                 // As in Explorer, a Ctrl-press on a selected row keeps it
                 // until release, so the selection can be dragged out.
@@ -3949,10 +3976,12 @@ impl App {
                     self.files.shift_click(i);
                     Some(Release::Nothing)
                 }
-                Some(i) if cancel || link => {
+                Some(i) if cancel || link || retry => {
                     self.files.click(i);
                     if cancel {
                         self.cancel_row(i);
+                    } else if retry {
+                        self.retry_row(i);
                     } else {
                         self.follow_link(i);
                     }
@@ -4472,6 +4501,12 @@ impl App {
                     self.cancel_row(i);
                 }
             }
+            (Id::RowRetry(p), Verb::Invoke) => {
+                if let Some(i) = row(self, p) {
+                    self.files.click(i);
+                    self.retry_row(i);
+                }
+            }
             (Id::RowLink(p), Verb::Invoke) => {
                 if let Some(i) = row(self, p) {
                     self.files.click(i);
@@ -4672,6 +4707,7 @@ impl App {
             hover_row: self.hover_row,
             hover_cancel: self.hover_cancel,
             hover_link: self.hover_link,
+            hover_retry: self.hover_retry,
             scroll: self.scroll,
             drag: self.drag.value().clamp(0.0, 1.0),
             heat: heat_now(),
@@ -5078,6 +5114,7 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         hover_row: None,
         hover_cancel: false,
         hover_link: false,
+        hover_retry: false,
         drag: Tween::new(0.0),
         drag_paths: vec![],
         wheel: None,
@@ -5561,6 +5598,7 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             app.hover_row = None;
             app.hover_cancel = false;
             app.hover_link = false;
+            app.hover_retry = false;
             app.clear_hover = false;
             app.clear_pressed = false;
             app.export_hover = false;

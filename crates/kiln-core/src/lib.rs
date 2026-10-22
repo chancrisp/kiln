@@ -41,7 +41,9 @@ pub use libreoffice::{find_installed as find_libreoffice, LibreOfficeConverter};
 pub use names::describe_format;
 pub use pandoc::PandocConverter;
 pub use pdf::PdfConverter;
-pub use plain::{missing_engine, plain_failure, plain_failure_for, FailedJob};
+pub use plain::{
+    missing_engine, plain_failure, plain_failure_for, retry_may_help, FailedJob,
+};
 pub use process::find_on_path;
 pub use quality::{Knob, Limit, MediaInfo, Preset, Quality};
 pub use raster::ImageConverter;

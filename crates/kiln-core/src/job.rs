@@ -63,7 +63,7 @@ impl Kiln {
         let converters: HashMap<_, _> = backends.into_iter().map(|c| (c.id(), c)).collect();
         if let Some(unknown) = registry.backends().find(|b| !converters.contains_key(b)) {
             return Err(Error::Registry(format!(
-                "\"{unknown}\" isn't a backend Kiln has."
+                "Kiln has no converter called \"{unknown}\"."
             )));
         }
         Ok(Self {

@@ -120,6 +120,7 @@ pub struct View<'a> {
     pub hover_row: Option<usize>,
     pub hover_cancel: bool,
     pub hover_link: bool,
+    pub hover_retry: bool,
     pub scroll: f32,
     /// 0 to 1: how far the drag-over highlight has faded in.
     pub drag: f32,
@@ -331,6 +332,8 @@ fn row_text_span(
         .filter(|_| !saving);
     let right = if matches!(e.job, JobState::Running { .. }) {
         layout::row_cancel(r).x - 8.0
+    } else if e.retryable() && !saving {
+        layout::row_retry(r, link.is_some()).x - 8.0
     } else if link.is_some() {
         layout::row_link(r).x - 8.0
     } else {
@@ -356,7 +359,10 @@ fn line_cut_with(text: &Text, r: &Rect, e: &Entry, chip_w: f32) -> bool {
     if !matches!(e.job, JobState::Failed { .. }) {
         return false;
     }
-    let room = r.right() - 16.0 - row_text_x(r, chip_w);
+    let mut room = r.right() - 16.0 - row_text_x(r, chip_w);
+    if e.retryable() {
+        room -= layout::RETRY_WIDTH + 8.0;
+    }
     text.measure(&e.line().0, &text.caption) > room
 }
 
@@ -682,6 +688,31 @@ impl Draw<'_> {
     /// A scrim over the whole window, at `a` of its full strength.
     fn scrim(&self, w: f32, h: f32, a: f32, p: &Palette) {
         self.fill(&Rect::new(0.0, 0.0, w, h), 0.0, p.ground, solid(p, 0.7) * a);
+    }
+
+    /// A row's underlined link text, right-aligned in `area`: muted, a
+    /// step brighter on a wash, and full text colour while hot.
+    #[allow(clippy::too_many_arguments)]
+    fn row_link_label(&self, text: &str, area: &Rect, hot: bool, on_wash: bool, p: &Palette, a: f32) {
+        let c = if hot {
+            p.text
+        } else if on_wash && !p.high_contrast {
+            // A contrast theme has no wash, so its link keeps the
+            // hot-light colour.
+            p.muted_on_wash
+        } else {
+            p.link
+        };
+        let tw = self.text.measure(text, &self.text.caption);
+        let lx = area.right() - tw;
+        self.label(
+            text,
+            &self.text.caption,
+            &Rect::new(lx, area.y, tw + 1.0, area.h),
+            c,
+            a,
+        );
+        self.hline(lx, lx + tw, area.y + 15.0, c, a * solid(p, effects::UNDERLINE));
     }
 
     fn hline(&self, x0: f32, x1: f32, y: f32, c: Rgb, a: f32) {
@@ -1014,32 +1045,20 @@ impl Draw<'_> {
         // The text sits on the second line; its target is taller
         // (`layout::row_link`).
         if let Some(text) = link {
-            let link = layout::row_link_text(r);
-            let hot = hovered && v.hover_link;
-            let c = if hot {
-                p.text
-            } else if (selected || hovered) && !p.high_contrast {
-                // A step brighter on the wash; a contrast theme has no wash,
-                // so its link keeps the hot-light colour.
-                p.muted_on_wash
-            } else {
-                p.link
-            };
-            let tw = self.text.measure(text, &self.text.caption);
-            let lx = link.right() - tw;
-            self.label(
-                text,
-                &self.text.caption,
-                &Rect::new(lx, link.y, tw + 1.0, link.h),
-                c,
+            let area = layout::row_link_text(r);
+            self.row_link_label(text, &area, hovered && v.hover_link, selected || hovered, p, a);
+        }
+        // "Retry" on a cancelled or failed row, beside the link when there is
+        // one.
+        if e.retryable() && !saving {
+            let area = layout::row_retry_text(r, link.is_some());
+            self.row_link_label(
+                "Retry",
+                &area,
+                hovered && v.hover_retry,
+                selected || hovered,
+                p,
                 a,
-            );
-            self.hline(
-                lx,
-                lx + tw,
-                link.y + 15.0,
-                c,
-                a * solid(p, effects::UNDERLINE),
             );
         }
         // The keyboard's row keeps its ring, selected or not.

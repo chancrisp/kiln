@@ -56,6 +56,8 @@ pub enum Id {
     List,
     Row(PathBuf),
     RowCancel(PathBuf),
+    /// "Retry", on a cancelled or failed row.
+    RowRetry(PathBuf),
     /// "Show details", "Export", or an exported row's "Saved to" line.
     RowLink(PathBuf),
     Status,
@@ -807,6 +809,14 @@ fn row(r: &RowIn, rect: Rect, offscreen: bool) -> Node {
             layout::row_line(&rect),
         ));
     }
+    if e.retryable() && r.instead.is_none() {
+        children.push(Node::new(
+            Id::RowRetry(path.clone()),
+            Role::Button,
+            format!("Retry {}", e.name),
+            layout::row_retry(&rect, r.link.is_some()),
+        ));
+    }
     for c in &mut children {
         c.states.offscreen = offscreen;
     }
@@ -1146,6 +1156,7 @@ mod tests {
             facts: None,
             suggestion: None,
             facts_at: None,
+            last: None,
         }
     }
 
@@ -1340,7 +1351,7 @@ mod tests {
     }
 
     #[test]
-    fn a_running_row_says_how_far_and_offers_stop() {
+    fn a_running_row_says_how_far_and_offers_cancel() {
         let lines = empty_lines(&Settings::default());
         let es = [entry(
             "a.png",
@@ -1356,9 +1367,51 @@ mod tests {
         let cancel = &row.children[0];
         assert_eq!(
             (cancel.role, cancel.name.as_str()),
-            (Role::Button, "Stop a.png")
+            (Role::Button, "Cancel a.png")
         );
         assert!(cancel.patterns().invoke);
+    }
+
+    #[test]
+    fn a_cancelled_or_stopped_row_offers_retry_named_with_its_file() {
+        let lines = empty_lines(&Settings::default());
+        let mut cancelled = entry("a.png", JobState::Cancelled);
+        let mut stopped = entry(
+            "b.png",
+            JobState::Failed {
+                message: "The conversion stopped before it finished. Try again.".into(),
+                details: "ffmpeg output".into(),
+                engine: Some("FFmpeg"),
+            },
+        );
+        let mut damaged = entry(
+            "c.png",
+            JobState::Failed {
+                message: "This file looks damaged, or isn't really a PNG. Try opening it in another app.".into(),
+                details: "x".into(),
+                engine: None,
+            },
+        );
+        for e in [&mut cancelled, &mut stopped, &mut damaged] {
+            e.last = Some(Action::Convert("jpg".into()));
+        }
+        let es = [cancelled, stopped, damaged];
+        let t = tree(&input(&lines, rows(&es)));
+        sound(&t);
+        let names = |i: usize| -> Vec<String> {
+            t.find(&Id::Row(es[i].path.clone()))
+                .unwrap()
+                .children
+                .iter()
+                .map(|c| c.name.clone())
+                .collect()
+        };
+        assert_eq!(names(0), ["Retry a.png"]);
+        assert_eq!(names(1), ["Show details b.png", "Retry b.png"]);
+        // A damaged file fails the same way again: no Retry.
+        assert_eq!(names(2), ["Show details c.png"]);
+        let retry = t.find(&Id::RowRetry(es[1].path.clone())).unwrap();
+        assert!(retry.patterns().invoke);
     }
 
     #[test]

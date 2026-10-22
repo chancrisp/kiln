@@ -22,12 +22,17 @@ pub enum RowState {
     Held,
     /// Its results were exported to a folder.
     Saved,
+    /// Cancelled, or failed in a way that trying again can fix.
+    Retryable,
 }
 
 impl Entry {
     /// What the right-click menu offers for this row. `saving` says an
     /// export of it is under way; `exists` whether a path is still on disk.
     pub fn row_state(&self, saving: bool, exists: impl Fn(&Path) -> bool) -> RowState {
+        if self.retryable() {
+            return RowState::Retryable;
+        }
         if let JobState::Running { action, .. } = &self.job {
             // A Move runs on its own and can't be stopped.
             return if matches!(action, Action::File(_)) {
@@ -58,8 +63,10 @@ pub enum MenuItem {
     Export,
     Open,
     ShowInFolder,
-    /// Stops a running job and keeps its row.
+    /// Cancels a running job and keeps its row.
     Stop,
+    /// Starts the same job again on a cancelled or failed row.
+    Retry,
     Remove,
     AddFiles,
     Paste,
@@ -88,7 +95,8 @@ impl MenuItem {
             MenuItem::Export => ("Export…", "Ctrl+S".to_owned()),
             MenuItem::Open => ("Open", String::new()),
             MenuItem::ShowInFolder => ("Show in folder", String::new()),
-            MenuItem::Stop => ("Stop", String::new()),
+            MenuItem::Stop => ("Cancel", String::new()),
+            MenuItem::Retry => ("Retry", String::new()),
             MenuItem::Remove => ("Remove", "Delete".to_owned()),
             MenuItem::AddFiles => ("Add files…", "Ctrl+O".to_owned()),
             MenuItem::Paste => ("Paste", "Ctrl+V".to_owned()),
@@ -109,7 +117,8 @@ impl MenuItem {
 /// The menu for the rows `selection` (one state per selected row), given
 /// the wheels that have anything for them. Items that don't apply are
 /// left out, never greyed: the wheels, then Export and Open for a held
-/// result, Show in folder for a saved one or Stop for a running one, then
+/// result, Show in folder for a saved one, Cancel for a running one or
+/// Retry for a cancelled or failed one, then
 /// Remove, with a separator between groups that are there. Empty without a
 /// selection.
 pub fn menu_items(selection: &[RowState], wheels: &[WheelKind]) -> Vec<MenuItem> {
@@ -134,6 +143,9 @@ pub fn menu_items(selection: &[RowState], wheels: &[WheelKind]) -> Vec<MenuItem>
     }
     if selection.contains(&RowState::Running) {
         results.push(MenuItem::Stop);
+    }
+    if one(RowState::Retryable) {
+        results.push(MenuItem::Retry);
     }
     let mut items = vec![];
     for group in [open, results, vec![MenuItem::Remove]] {
@@ -336,6 +348,12 @@ mod tests {
         );
         assert_eq!(menu_items(&[Saved, Saved], &[]), [Remove]);
         assert!(menu_items(&[], &ALL).is_empty());
+        // A cancelled row, or one that stopped, offers Retry; two rows don't.
+        assert_eq!(
+            menu_items(&[Retryable], &[Convert]),
+            [Wheel(Convert), Separator, Retry, Separator, Remove]
+        );
+        assert_eq!(menu_items(&[Retryable, Retryable], &[]), [Remove]);
     }
 
     #[test]
@@ -385,7 +403,7 @@ mod tests {
                 "Export…\tCtrl+S",
                 "Open",
                 "Show in folder",
-                "Stop",
+                "Cancel",
                 "Remove\tDelete",
                 "Add files…\tCtrl+O",
                 "Paste\tCtrl+V",
@@ -548,6 +566,7 @@ mod tests {
             facts: None,
             suggestion: None,
             facts_at: None,
+            last: None,
         }
     }
 

@@ -42,7 +42,7 @@ impl Converter for PdfConverter {
                 save(&mut doc, req.output)
             }
             _ => Err(Error::Registry(format!(
-                "The PDF backend can't convert {} to {}.",
+                "Kiln can't convert {} to {}.",
                 req.from.code(),
                 req.to.code()
             ))),

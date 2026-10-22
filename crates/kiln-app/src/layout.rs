@@ -221,6 +221,29 @@ pub fn row_link_text(row: &Rect) -> Rect {
     Rect::new(hit.x, row.y + 28.0, hit.w, 20.0)
 }
 
+/// Width of the "Retry" link on a failed or cancelled row.
+pub const RETRY_WIDTH: f32 = 48.0;
+
+/// Where a click hits a row's "Retry" link. `beside_link` says the row
+/// also has "Show details": Retry then sits to its left, with a gap, so
+/// the two targets never touch. Alone it takes the link's place at the
+/// right edge.
+pub fn row_retry(row: &Rect, beside_link: bool) -> Rect {
+    let x = if beside_link {
+        row_link(row).x - 8.0 - RETRY_WIDTH
+    } else {
+        row.right() - 16.0 - RETRY_WIDTH
+    };
+    Rect::new(x, row.y + 26.0, RETRY_WIDTH, LINK_HIT)
+}
+
+/// Where Retry's text is drawn: the second line, right-aligned in its hit
+/// area.
+pub fn row_retry_text(row: &Rect, beside_link: bool) -> Rect {
+    let hit = row_retry(row, beside_link);
+    Rect::new(hit.x, row.y + 28.0, hit.w, 20.0)
+}
+
 /// What a click on a row hits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowPart {
@@ -230,6 +253,8 @@ pub enum RowPart {
     Cancel,
     /// The row's link, or an exported row's "Saved to" line.
     Link,
+    /// A failed or cancelled row's Retry.
+    Retry,
 }
 
 /// The part of `row` under `(x, y)`, a point inside it. `running` says it
@@ -237,8 +262,24 @@ pub enum RowPart {
 /// line that opens its folder. The link's and the cross's areas are
 /// targets of their own, taken out of the row's.
 pub fn row_part(row: &Rect, x: f32, y: f32, running: bool, link: bool, saved: bool) -> RowPart {
+    row_part_with_retry(row, x, y, running, link, saved, false)
+}
+
+/// [`row_part`] for a row that may also have a Retry (`retry`), which
+/// sits beside the link when there is one.
+pub fn row_part_with_retry(
+    row: &Rect,
+    x: f32,
+    y: f32,
+    running: bool,
+    link: bool,
+    saved: bool,
+    retry: bool,
+) -> RowPart {
     if running && row_cancel(row).contains(x, y) {
         RowPart::Cancel
+    } else if retry && row_retry(row, link).contains(x, y) {
+        RowPart::Retry
     } else if (link && row_link(row).contains(x, y))
         || (!link && saved && row_line(row).contains(x, y))
     {
@@ -1095,6 +1136,42 @@ mod tests {
         assert_eq!(l.rows[0].y, l.panel.y);
         assert_eq!(l.rows[2].y, l.panel.y + 2.0 * ROW_HEIGHT);
         assert!(l.panel.bottom() <= l.footer.unwrap().y);
+    }
+
+    #[test]
+    fn retry_has_a_target_of_its_own_beside_show_details() {
+        let l = layout(720.0, 480.0, 3);
+        let (r, next) = (l.rows[0], l.rows[1]);
+        let link = row_link(&r);
+        for beside in [true, false] {
+            let retry = row_retry(&r, beside);
+            // WCAG 2.5.8: 24 DIPs each way, inside its row's band.
+            assert!(retry.h >= 24.0 && retry.w >= 24.0, "{retry:?}");
+            assert!(retry.y >= r.y && retry.bottom() <= r.bottom());
+            assert!(apart(&retry, &next));
+            let text = row_retry_text(&r, beside);
+            assert!(text.y >= retry.y && text.bottom() <= retry.bottom());
+            assert_eq!(text.y, row_line(&r).y);
+            // Its points are Retry; the gap to Show details is the row.
+            let mid = (retry.x + retry.w / 2.0, retry.y + retry.h / 2.0);
+            assert_eq!(
+                row_part_with_retry(&r, mid.0, mid.1, false, beside, false, true),
+                RowPart::Retry
+            );
+            assert_eq!(
+                row_part_with_retry(&r, mid.0, mid.1, false, beside, false, false),
+                RowPart::Row
+            );
+        }
+        // Beside Show details the two never touch: a gap of at least 8.
+        let retry = row_retry(&r, true);
+        assert!(link.x - retry.right() >= 8.0, "{retry:?} {link:?}");
+        assert_eq!(
+            row_part_with_retry(&r, link.x + 4.0, link.y + 4.0, false, true, false, true),
+            RowPart::Link
+        );
+        // Alone it takes the link's right edge.
+        assert_eq!(row_retry(&r, false).right(), link.right());
     }
 
     #[test]

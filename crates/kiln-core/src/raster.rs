@@ -44,7 +44,7 @@ impl Converter for ImageConverter {
         let (from, to) = (req.from.ext.as_str(), req.to.ext.as_str());
         if !reads(from) || !FORMATS.contains(&to) {
             return Err(Error::Registry(format!(
-                "The image backend can't convert {} to {}.",
+                "Kiln can't convert {} to {}.",
                 req.from.code(),
                 req.to.code()
             )));
@@ -189,7 +189,7 @@ pub(crate) fn decode(input: &Path, ext: &str) -> Result<DynamicImage> {
     }
     let format = image_format(ext).ok_or_else(|| {
         Error::Registry(format!(
-            "The image backend can't read {}.",
+            "Kiln can't read {} images.",
             ext.to_ascii_uppercase()
         ))
     })?;
@@ -298,7 +298,7 @@ fn write_other(file: File, img: &DynamicImage, ext: &str) -> Result<()> {
         "qoi" => img.write_with_encoder(QoiEncoder::new(&mut out)),
         other => {
             return Err(Error::Registry(format!(
-                "The image backend can't write {}.",
+                "Kiln can't write {} images.",
                 other.to_ascii_uppercase()
             )))
         }

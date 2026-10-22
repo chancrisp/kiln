@@ -165,14 +165,15 @@ test enforces this.
 - **Success:** the row settles and `Ready:` with the output name appears in bone, fading in over 200 ms, as in `Ready: photo.jpg`. There's no sound or confetti. The result waits inside Kiln until it's exported.
 - **Export:** a held row has an "Export" link where a failed row has "Show details", and Ctrl+S does the same. Once exported, the line reads `Saved to <folder>.`, and clicking it shows the file in Explorer. The footer's **Export all (3)** sits beside Clear while anything is held. A failed export is one line in brick: `Couldn't save to D:\Locked. Pick another folder.`
 - **Drag out:** dragging a held row into a folder moves its result there, and its line reads `Saved where you dropped it.` A drop that only copies leaves it held.
-- **Failure:** the row shows one plain sentence in brick, with a next step where Kiln recognises the failure: "This file looks damaged, or isn't really an MP4. Try opening it in another app." Otherwise it says what the helper app couldn't do, such as "FFmpeg couldn't convert the file." or, for a tool, "FFmpeg couldn't trim the file." The file's own name never picks the sentence. A line too long for the row ends in "…".
+- **Failure:** the row shows one plain sentence in brick that says what happened and what to do next, and never a file path, a library's words or the helper's name. "This file looks damaged, or isn't really an MP4. Try opening it in another app." names a cause Kiln recognises (video, audio, images, documents all use it). A helper that stopped, or any cause Kiln doesn't recognise, reads "The conversion stopped before it finished. Try again." ("The job stopped…" for a tool). Kiln's own plain sentences, such as "The PDF has no pages.", are kept. The file's own name never picks the sentence. A line too long for the row ends in "…". The path and the helper's own words wait in Show details.
+- **Retry** is a link beside Show details (or alone, at the right) on a row that was cancelled, or that failed in a way trying again can fix: a stopped helper, a file another app had open, a full drive. A damaged file or a missing helper would fail the same way, so they get no Retry. Retry runs again what the row was last asked to do, with the current settings; a merge, which takes several files, has none. The right-click menu offers it too.
 - **Show details** appears when the helper app said something or the line was cut short. It opens a dialog titled "What FFmpeg said" ("What Kiln said" for Kiln's own words), with the row's whole sentence first and then the app's output. The text scrolls with the wheel or touchpad, the arrows, Page Up, Page Down, Home and End. **Copy** copies all of it and reads "Copied" for 1.2 s, or "Couldn't copy" if the clipboard refused. Focus starts on Copy, and Escape or Enter closes the dialog.
 
 ## Help and tooltips
 
 - A **?** button sits in the header beside Settings. It, or F1 anywhere but a panel or dialog, opens help over a scrim, drawn like the details dialog: the ways in (drop, Add files, paste, right-click, holding a key while dropping), how results wait until they're exported, and a table of every keyboard shortcut. The shortcuts follow the keys chosen in Settings.
 - The text scrolls with the wheel or touchpad, the arrows, Page Up, Page Down, Home and End. Focus sits on Close. Escape, Enter, a click outside or Close dismisses it.
-- Icon-only controls have native Windows tooltips: "Settings (Ctrl+,)", "Help (F1)", "Add files (Ctrl+O)", "Export all (Ctrl+Shift+S)", a row's "Stop" and "Export (Ctrl+S)". There are none while a wheel, panel or dialog is up.
+- Icon-only controls have native Windows tooltips: "Settings (Ctrl+,)", "Help (F1)", "Add files (Ctrl+O)", "Export all (Ctrl+Shift+S)", a row's "Cancel" and "Export (Ctrl+S)". There are none while a wheel, panel or dialog is up.
 
 ## Voice
 
@@ -180,8 +181,29 @@ test enforces this.
 - Never use exclamation marks.
 - Menus say "convert". "Fire" appears only in the onboarding tagline, "Fire raw files into finished ones."
 - Error messages name the problem and the next step: "Needs FFmpeg, which isn't installed. Settings > Helper apps says where to get it."
-- Say what happened, not how Kiln feels about it: "Couldn't convert the file to FLAC.", "Moved 2 files to Pictures.", "Cancelled."
+- Say what happened, not how Kiln feels about it: "Moved 2 files to Pictures.", "Cancelled." A footer line that says something failed also says where the reason is: "Couldn't convert the file to FLAC. The row says why."
+- Never put a file path or a library's words on a row or in the footer; they belong in Show details.
 - Use sentence case everywhere, with full stops on full sentences in the footer and row lines.
+
+### Glossary
+
+One word for each idea, in rows, menus, tooltips, dialogs and screen-reader names. Add a word here before using a new one.
+
+| Say | Means | Not |
+|---|---|---|
+| Convert | turn a file into another format | change, transform, process |
+| Format | a kind of file: PNG, MP4 (not "type" or "conversion", except "type" for a file's own kind) | codec, target |
+| Tool | Compress, Crop, Trim, Split, Merge | action (an Alt wheel item is a "file action") |
+| File action | Copy path, Move, Open in Terminal | tool |
+| Helper app | FFmpeg, Pandoc, LibreOffice, Calibre, as a group; name the app only where the person must install it | engine, backend, converter |
+| Cancel | end a running job (the row's button, its menu item, its screen-reader name) | stop, abort |
+| Remove | take a row out of the list (the files are untouched) | delete |
+| Clear | remove every row | reset |
+| Retry | run the row's last job again | redo |
+| Export | copy a held result out of Kiln | save (except "Saved to ..." once it has been exported) |
+| Held | a result waiting in Kiln, not exported yet | pending |
+
+In the "N results aren't saved yet" prompt, "Stop and close/clear/remove" keeps "Stop" because that dialog's own Cancel means "never mind".
 
 ## Clean room
 

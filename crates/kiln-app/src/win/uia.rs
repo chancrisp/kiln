@@ -388,6 +388,7 @@ fn automation_id(id: &Id) -> String {
     match id {
         Id::Row(_) => format!("Row.{:016x}", id.key()),
         Id::RowCancel(_) => format!("RowCancel.{:016x}", id.key()),
+        Id::RowRetry(_) => format!("RowRetry.{:016x}", id.key()),
         Id::RowLink(_) => format!("RowLink.{:016x}", id.key()),
         _ => format!("{id:?}"),
     }

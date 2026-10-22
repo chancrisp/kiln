@@ -65,9 +65,25 @@ impl JobError {
                     target: &doing.target,
                     paths: &paths,
                 };
-                (plain::plain_failure_for(&job, &raw), shown, Some(*engine))
+                // Kiln's own code writes some summaries as whole sentences.
+                let own = (*engine == "Kiln")
+                    .then(|| plain::own_sentence(summary))
+                    .flatten();
+                let plain = plain::plain_failure_for(&job, &raw);
+                let message = match own {
+                    Some(sentence) if plain == plain::plain_failure_for(&job, "") => sentence,
+                    _ => plain,
+                };
+                (message, shown, Some(*engine))
             }
             Error::EngineMissing { engine } => (plain::missing_engine(engine), String::new(), None),
+            // The row gets a sentence with a next step and never a path;
+            // the path and the library's words wait in Show details.
+            Error::WrongContent { code, .. } => (plain::damaged_as(code), e.to_string(), None),
+            Error::Decode { reason, .. } => (plain::unreadable_image(reason), e.to_string(), None),
+            Error::Encode { code, .. } => (plain::cannot_write(code), e.to_string(), None),
+            Error::InputNotFound(_) => (plain::gone(), e.to_string(), None),
+            Error::Io { source, .. } => (plain::io_failure(source.kind()), e.to_string(), None),
             _ => (e.to_string(), String::new(), None),
         };
         JobError {
@@ -372,11 +388,35 @@ mod tests {
         assert!(e.details.starts_with("ffmpeg version 7"));
         assert_eq!(e.engine, Some("FFmpeg"));
 
-        // Kiln's own PDF failures have only a summary: it becomes the
-        // details.
+        // Kiln's own PDF failures have only a summary: when it is a plain
+        // sentence it is the row line, and it is the details too.
         let e = JobError::new(failed("Kiln", "the PDF has no pages.", ""), &gif);
-        assert_eq!(e.message, "Kiln couldn't convert the file.");
+        assert_eq!(e.message, "The PDF has no pages.");
         assert_eq!(e.details, "the PDF has no pages.");
+        // One with a library's words in it is not shown on the row.
+        let e = JobError::new(failed("Kiln", "the PDF couldn't be read (bad xref).", ""), &gif);
+        assert_eq!(e.message, "The conversion stopped before it finished. Try again.");
+
+        // Image and document failures never put a path on the row.
+        let path = std::path::PathBuf::from("C:/x/photo.png");
+        for err in [
+            Error::WrongContent { path: path.clone(), code: "PNG".into() },
+            Error::Decode { path: path.clone(), reason: "unexpected end of file".into() },
+            Error::InputNotFound(path.clone()),
+        ] {
+            let shown = err.to_string();
+            let e = JobError::new(err, &gif);
+            assert!(!e.message.contains("photo.png") && !e.message.contains("C:"), "{}", e.message);
+            assert_eq!(e.details, shown, "the path waits in the details");
+        }
+        let e = JobError::new(
+            Error::WrongContent { path, code: "PNG".into() },
+            &gif,
+        );
+        assert_eq!(
+            e.message,
+            "This file looks damaged, or isn't really a PNG. Try opening it in another app."
+        );
     }
 
     #[test]
@@ -387,7 +427,7 @@ mod tests {
         }
         .doing();
         let e = JobError::new(failed("FFmpeg", "Conversion failed!", ""), &trim);
-        assert_eq!(e.message, "FFmpeg couldn't trim the file.");
+        assert_eq!(e.message, "The job stopped before it finished. Try again.");
     }
 
     #[test]
@@ -400,7 +440,7 @@ mod tests {
         let raw = "Input #0, mov from 'C:\\Encrypted\\Password reset.mp4':\n\
                    Output #0 to 'C:\\held\\1\\Password reset.mp3':\nConversion failed!";
         let e = JobError::new(failed("LibreOffice", "Conversion failed!", raw), &mp3);
-        assert_eq!(e.message, "LibreOffice couldn't convert the file.");
+        assert_eq!(e.message, "The conversion stopped before it finished. Try again.");
     }
 
     #[test]

@@ -64,7 +64,7 @@ pub struct FailedJob<'a> {
 
 /// The row line for a failed engine job that converted `ext` files: a
 /// plain sentence when `raw`, all of the engine's output, says something
-/// Kiln recognises, else "{engine} couldn't convert the file.".
+/// Kiln recognises, else that the job stopped before it finished.
 pub fn plain_failure(engine: &str, ext: &str, raw: &str) -> String {
     plain_failure_for(
         &FailedJob {
@@ -80,7 +80,8 @@ pub fn plain_failure(engine: &str, ext: &str, raw: &str) -> String {
 
 /// [`plain_failure`] for any job: a damaged file names its own type, a
 /// missing encoder names the one being written, and anything else says
-/// what the job couldn't do.
+/// the job stopped before it finished and to try again. Rows never name
+/// the helper that failed: the helper's own words are in Show details.
 pub fn plain_failure_for(job: &FailedJob, raw: &str) -> String {
     let raw = without_names(&raw.to_lowercase(), job.paths);
     let known = KNOWN
@@ -110,8 +111,91 @@ pub fn plain_failure_for(job: &FailedJob, raw: &str) -> String {
             "This FFmpeg can't write {}. A full build of FFmpeg can.",
             job.target.to_ascii_uppercase()
         ),
-        None => format!("{} couldn't {} the file.", job.engine, job.verb),
+        None => stopped(job.verb),
     }
+}
+
+/// Whether trying the same job again could work, judging by the row line:
+/// a helper that stopped, a file another app had open, a full drive.
+/// A damaged file or a missing helper will fail the same way, so a Retry
+/// link would only mislead. Lives beside the sentences so a change to one
+/// is a change to the other (the tests below tie them).
+pub fn retry_may_help(message: &str) -> bool {
+    message.ends_with("Try again.")
+        || message.contains("Check it isn't open in another app.")
+        || message.contains("free space")
+}
+
+/// The row line when a job ends without a cause Kiln recognises, such as
+/// a helper that crashed: the job, what happened, what to do.
+fn stopped(verb: &str) -> String {
+    let job = if verb == "convert" {
+        "The conversion"
+    } else {
+        "The job"
+    };
+    format!("{job} stopped before it finished. Try again.")
+}
+
+/// The row line for a file whose content isn't the type it claims
+/// (`code` is the type, such as "PNG"). Same words as a damaged file the
+/// helper reports, so a person meets one sentence for one problem.
+pub fn damaged_as(code: &str) -> String {
+    let code = code.to_ascii_uppercase();
+    format!(
+        "This file looks damaged, or isn't really {} {code}. Try opening it in another app.",
+        a_or_an(&code)
+    )
+}
+
+/// The row line for an image Kiln couldn't decode. `reason` is the
+/// decoder's own words; when Kiln wrote a whole sentence for it (a camera
+/// RAW file Windows can't read) that sentence is the line, else the image
+/// is called damaged.
+pub fn unreadable_image(reason: &str) -> String {
+    let reason = reason.trim();
+    let whole_sentence = reason.ends_with('.')
+        && reason.chars().next().is_some_and(char::is_uppercase)
+        && !reason.contains(['\\', '/', ':']);
+    if whole_sentence {
+        reason.to_owned()
+    } else {
+        "This image looks damaged, or isn't a type Kiln can read. Try opening it in another app."
+            .to_owned()
+    }
+}
+
+/// The row line for a file Kiln can't open or write because of the
+/// operating system: not there, locked, or something else.
+pub fn io_failure(kind: std::io::ErrorKind) -> String {
+    if kind == std::io::ErrorKind::NotFound {
+        gone()
+    } else {
+        "Kiln couldn't read or write the file. Check it isn't open in another app.".to_owned()
+    }
+}
+
+/// The row line for a file that is no longer where it was added from.
+pub fn gone() -> String {
+    "The file isn't there any more. Check it wasn't moved or deleted, then add it again.".to_owned()
+}
+
+/// The row line when Kiln couldn't write a result of type `code`.
+pub fn cannot_write(code: &str) -> String {
+    format!(
+        "Kiln couldn't write the {}. Try another format, or check the drive has room.",
+        code.to_ascii_uppercase()
+    )
+}
+
+/// The row line for a Kiln-written failure whose own sentence is already
+/// plain (the PDF code says "the PDF has no pages."). Returns `None` when
+/// the text carries a library's words, a path or a code.
+pub fn own_sentence(summary: &str) -> Option<String> {
+    let t = summary.trim();
+    let clean = t.ends_with('.') && !t.contains(['(', ')', '{', '}', '\\', '/', ':']);
+    let first = t.chars().next()?;
+    clean.then(|| first.to_uppercase().chain(t.chars().skip(1)).collect())
 }
 
 /// `raw` (lower case) with every path in `paths`, its folder and its file
@@ -256,11 +340,11 @@ mod tests {
         for engine in ["FFmpeg", "Pandoc", "Calibre"] {
             assert_eq!(
                 plain_failure(engine, "mp4", "stream is encrypted\nConversion failed!"),
-                format!("{engine} couldn't convert the file.")
+                "The conversion stopped before it finished. Try again."
             );
             assert_eq!(
                 plain_failure(engine, "mp4", "title: my password"),
-                format!("{engine} couldn't convert the file.")
+                "The conversion stopped before it finished. Try again."
             );
         }
     }
@@ -272,7 +356,7 @@ mod tests {
         let paths = [input];
         assert_eq!(
             plain_failure_for(&job("FFmpeg", "convert", &paths), raw),
-            "FFmpeg couldn't convert the file."
+            "The conversion stopped before it finished. Try again."
         );
         // Not even for a document engine, in any case, or in the name of
         // the result beside it.
@@ -281,7 +365,7 @@ mod tests {
         let raw = "convert d:\\access denied\\encrypted.docx -> D:\\Access Denied\\ENCRYPTED.pdf\nError: source file could not be loaded";
         assert_eq!(
             plain_failure_for(&job("LibreOffice", "convert", &paths), raw),
-            "LibreOffice couldn't convert the file."
+            "The conversion stopped before it finished. Try again."
         );
         // What the engine says around the name still counts.
         let raw = "Input #0 from 'C:\\x\\Password.mp4':\nInvalid data found when processing input";
@@ -315,22 +399,22 @@ mod tests {
     }
 
     #[test]
-    fn anything_else_says_what_the_job_couldnt_do() {
+    fn anything_else_says_the_job_stopped_and_to_try_again() {
         assert_eq!(
             plain_failure("FFmpeg", "mp4", "Conversion failed!"),
-            "FFmpeg couldn't convert the file."
+            "The conversion stopped before it finished. Try again."
         );
         assert_eq!(
             plain_failure("Pandoc", "md", ""),
-            "Pandoc couldn't convert the file."
+            "The conversion stopped before it finished. Try again."
         );
         for (verb, want) in [
-            ("convert", "FFmpeg couldn't convert the file."),
-            ("compress", "FFmpeg couldn't compress the file."),
-            ("crop", "FFmpeg couldn't crop the file."),
-            ("trim", "FFmpeg couldn't trim the file."),
-            ("split", "FFmpeg couldn't split the file."),
-            ("merge", "FFmpeg couldn't merge the file."),
+            ("convert", "The conversion stopped before it finished. Try again."),
+            ("compress", "The job stopped before it finished. Try again."),
+            ("crop", "The job stopped before it finished. Try again."),
+            ("trim", "The job stopped before it finished. Try again."),
+            ("split", "The job stopped before it finished. Try again."),
+            ("merge", "The job stopped before it finished. Try again."),
         ] {
             assert_eq!(
                 plain_failure_for(&job("FFmpeg", verb, &[]), "Conversion failed!"),
@@ -384,5 +468,73 @@ mod tests {
         ] {
             assert_eq!(missing_engine(engine), want);
         }
+    }
+
+    #[test]
+    fn retry_is_offered_only_where_trying_again_can_work() {
+        for line in [
+            stopped("convert"),
+            stopped("crop"),
+            io_failure(std::io::ErrorKind::PermissionDenied),
+            plain_failure("FFmpeg", "wav", "out.wav: Permission denied"),
+            plain_failure("FFmpeg", "mov", "No space left on device"),
+        ] {
+            assert!(retry_may_help(&line), "{line}");
+        }
+        for line in [
+            damaged_as("png"),
+            unreadable_image("unexpected end of file"),
+            gone(),
+            missing_engine("FFmpeg"),
+            plain_failure("FFmpeg", "opus", "Unknown encoder 'libopus'"),
+            plain_failure("Kiln", "pdf", "the PDF is protected with a password."),
+        ] {
+            assert!(!retry_may_help(&line), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_row_line_never_names_the_helper_or_a_path() {
+        let path = Path::new(r"C:\Users\me\Pictures\holiday.png");
+        for line in [
+            damaged_as("png"),
+            unreadable_image("unexpected end of file"),
+            unreadable_image(&path.to_string_lossy()),
+            io_failure(std::io::ErrorKind::NotFound),
+            io_failure(std::io::ErrorKind::PermissionDenied),
+            cannot_write("jpg"),
+            gone(),
+            stopped("convert"),
+        ] {
+            assert!(!line.contains('\\'), "{line}");
+            assert!(!line.contains("FFmpeg") && !line.contains("Pandoc"), "{line}");
+            assert!(line.ends_with('.'), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_wrong_or_damaged_image_says_what_to_try() {
+        assert_eq!(
+            damaged_as("png"),
+            "This file looks damaged, or isn't really a PNG. Try opening it in another app."
+        );
+        assert_eq!(
+            unreadable_image("unexpected end of file"),
+            "This image looks damaged, or isn't a type Kiln can read. Try opening it in another app."
+        );
+        // A sentence Kiln wrote itself is kept.
+        let raw = "Windows can't read this camera's RAW files. Install the Raw Image Extension from the Microsoft Store.";
+        assert_eq!(unreadable_image(raw), raw);
+    }
+
+    #[test]
+    fn a_files_own_plain_sentence_is_kept_but_library_text_is_not() {
+        assert_eq!(
+            own_sentence("the PDF has no pages.").as_deref(),
+            Some("The PDF has no pages.")
+        );
+        assert_eq!(own_sentence("the PDF couldn't be read (bad xref)."), None);
+        assert_eq!(own_sentence("windows couldn't draw: 0x8898"), None);
+        assert_eq!(own_sentence(r"C:\x\y.pdf isn't a PDF."), None);
     }
 }

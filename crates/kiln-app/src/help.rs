@@ -14,7 +14,7 @@ pub const TITLE: &str = "Help";
 /// shortcut, each naming its shortcut.
 pub const SETTINGS_TIP: &str = "Settings (Ctrl+,)";
 pub const HELP_TIP: &str = "Help (F1)";
-pub const STOP_TIP: &str = "Stop";
+pub const STOP_TIP: &str = "Cancel";
 pub const EXPORT_TIP: &str = "Export (Ctrl+S)";
 pub const ADD_FILES_TIP: &str = "Add files (Ctrl+O)";
 pub const EXPORT_ALL_TIP: &str = "Export all (Ctrl+Shift+S)";
@@ -103,7 +103,7 @@ pub fn help_content(keys: &KeyMap, holding: bool) -> Vec<HelpSection> {
                 line("Escape", "Clear the selection."),
                 line(
                     "Space",
-                    "Export, show details or open the folder, as the file's link says, or stop a running file.",
+                    "Export, show details or open the folder, as the file's link says, or cancel a running file.",
                 ),
                 line(
                     "Delete or Backspace",
@@ -329,7 +329,7 @@ mod tests {
     fn tooltips_name_their_shortcuts() {
         assert_eq!(SETTINGS_TIP, "Settings (Ctrl+,)");
         assert_eq!(HELP_TIP, "Help (F1)");
-        assert_eq!(STOP_TIP, "Stop");
+        assert_eq!(STOP_TIP, "Cancel");
         assert_eq!(EXPORT_TIP, "Export (Ctrl+S)");
         assert_eq!(ADD_FILES_TIP, "Add files (Ctrl+O)");
         assert_eq!(EXPORT_ALL_TIP, "Export all (Ctrl+Shift+S)");
