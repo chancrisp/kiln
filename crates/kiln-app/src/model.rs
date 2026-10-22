@@ -431,9 +431,22 @@ pub fn after_stop(asked: usize, held: usize) -> Next {
     }
 }
 
+/// Why the footer's Convert is disabled for a selection of `selected`
+/// rows, `running` of which are converting; `None` when it can be used.
+pub fn convert_block(selected: usize, running: usize) -> Option<&'static str> {
+    if selected == 0 {
+        Some("Select a file to convert.")
+    } else if running > 0 {
+        Some("A selected file is still converting. Wait for it, or cancel it.")
+    } else {
+        None
+    }
+}
+
 /// A header or footer button the keyboard can be on, besides the list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusButton {
+    Convert,
     AddFiles,
     ExportAll,
     Clear,
@@ -443,8 +456,9 @@ pub enum FocusButton {
 
 /// Where Tab goes from `at`, or Shift+Tab with `back`; `None` is the list.
 /// With files `listed` the order runs from the list through the footer's
-/// Add files, Export all (where `export_all` shows) and Clear, then the
-/// header's Help and Settings, and round to the list. The empty window
+/// Convert (while it is `convert`, enabled, as a disabled control isn't
+/// a stop), Add files, Export all (where `export_all` shows) and Clear,
+/// then the header's Help and Settings, and round to the list. The empty window
 /// has no list: Add files, Help, Settings and round, with `None` before
 /// Add files.
 pub fn tab_stop(
@@ -452,11 +466,14 @@ pub fn tab_stop(
     back: bool,
     listed: bool,
     export_all: bool,
+    convert: bool,
 ) -> Option<FocusButton> {
     use FocusButton::*;
     let order: Vec<Option<FocusButton>> = if listed {
-        [None, Some(AddFiles)]
+        [None]
             .into_iter()
+            .chain(convert.then_some(Some(Convert)))
+            .chain([Some(AddFiles)])
             .chain(export_all.then_some(Some(ExportAll)))
             .chain([Some(Clear), Some(Help), Some(Settings)])
             .collect()
@@ -594,6 +611,8 @@ impl Entry {
         match &self.job {
             JobState::Failed { .. } if self.details(cut).is_some() => Some("Show details"),
             _ if self.held().is_some() => Some("Export"),
+            // A file nothing has been done to yet says how to start.
+            JobState::Idle => Some("Convert"),
             _ => None,
         }
     }
@@ -2107,7 +2126,9 @@ mod tests {
         assert!(e.retryable());
         e.job = failed("The conversion stopped before it finished. Try again.");
         assert!(e.retryable());
-        e.job = failed("This file looks damaged, or isn't really a PNG. Try opening it in another app.");
+        e.job = failed(
+            "This file looks damaged, or isn't really a PNG. Try opening it in another app.",
+        );
         assert!(!e.retryable());
         e.job = JobState::Idle;
         assert!(!e.retryable());
@@ -2260,7 +2281,7 @@ mod tests {
             saved.saved(),
             Some((Path::new(r"C:\Out"), &[PathBuf::from(r"C:\Out\a.jpg")][..]))
         );
-        assert_eq!(row("idle.png").link(true), None);
+        assert_eq!(row("idle.png").link(true), Some("Convert"));
     }
 
     #[test]
@@ -2757,13 +2778,31 @@ mod tests {
     }
 
     #[test]
+    fn convert_is_blocked_for_nothing_selected_and_for_a_busy_row() {
+        assert_eq!(convert_block(0, 0), Some("Select a file to convert."));
+        assert!(convert_block(1, 1).unwrap().contains("still converting"));
+        assert!(convert_block(3, 1).is_some());
+        assert_eq!(convert_block(1, 0), None);
+        assert_eq!(convert_block(500, 0), None);
+    }
+
+    #[test]
+    fn a_new_file_offers_convert_as_its_link() {
+        let e = row("b.png");
+        assert_eq!(e.link(false), Some("Convert"));
+        let mut running = row("b.png");
+        running.job = JobState::Cancelled;
+        assert_eq!(running.link(false), None);
+    }
+
+    #[test]
     fn tab_goes_round_the_list_and_the_buttons() {
         use FocusButton::*;
         let walk = |back: bool, listed: bool, export_all: bool| {
-            let mut at = tab_stop(None, back, listed, export_all);
+            let mut at = tab_stop(None, back, listed, export_all, false);
             let mut seen = vec![at];
             while seen.len() < 8 {
-                at = tab_stop(at, back, listed, export_all);
+                at = tab_stop(at, back, listed, export_all, false);
                 seen.push(at);
             }
             seen
@@ -2808,10 +2847,32 @@ mod tests {
             walk(false, false, false)[..4],
             [Some(AddFiles), Some(Help), Some(Settings), Some(AddFiles)]
         );
-        assert_eq!(tab_stop(None, true, false, false), Some(Settings));
+        assert_eq!(tab_stop(None, true, false, false, false), Some(Settings));
         // A button that's gone starts the path again.
-        assert_eq!(tab_stop(Some(ExportAll), false, true, false), None);
-        assert_eq!(tab_stop(Some(Clear), false, false, false), Some(AddFiles));
+        assert_eq!(tab_stop(Some(ExportAll), false, true, false, false), None);
+        assert_eq!(
+            tab_stop(Some(Clear), false, false, false, false),
+            Some(AddFiles)
+        );
+    }
+
+    #[test]
+    fn convert_is_the_first_stop_after_the_list_while_it_is_enabled() {
+        use FocusButton::*;
+        assert_eq!(tab_stop(None, false, true, false, true), Some(Convert));
+        assert_eq!(
+            tab_stop(Some(Convert), false, true, false, true),
+            Some(AddFiles)
+        );
+        assert_eq!(tab_stop(Some(Convert), true, true, false, true), None);
+        assert_eq!(
+            tab_stop(Some(AddFiles), true, true, true, true),
+            Some(Convert)
+        );
+        // Disabled, it isn't a stop at all.
+        assert_eq!(tab_stop(None, false, true, false, false), Some(AddFiles));
+        // The empty window has no Convert.
+        assert_eq!(tab_stop(None, false, false, false, true), Some(AddFiles));
     }
 
     #[test]

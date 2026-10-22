@@ -187,6 +187,24 @@ pub fn fit_hint(available: f32, full: f32) -> &'static str {
     }
 }
 
+/// The one-time tip after a plain drop, naming the keys that choose what
+/// to do with a drop as the settings have them.
+pub fn drop_tip(keys: &crate::settings::KeyMap) -> String {
+    use crate::wheel::WheelKind::*;
+    format!(
+        "Tip: hold {}, {} or {} as you drop.",
+        keys.key_for(Convert).name(),
+        keys.key_for(Tools).name(),
+        keys.key_for(Actions).name()
+    )
+}
+
+/// Whether a drop that `added` files, with no key held, shows the tip:
+/// once, and only when it brought files in. `shown` says it has been.
+pub fn show_drop_tip(added: usize, shown: bool) -> bool {
+    added > 0 && !shown
+}
+
 /// How long "Added 2 files." stays before the idle hint takes its place.
 pub const ADDED_FOR: Duration = Duration::from_secs(2);
 
@@ -496,6 +514,15 @@ mod tests {
         assert_eq!(hint_wait(ms(1990)), Some(ms(10)));
         assert_eq!(hint_wait(ms(2000)), None);
         assert_eq!(hint_wait(ms(2500)), None);
+    }
+
+    #[test]
+    fn the_drop_tip_comes_once_and_names_the_keys() {
+        let keys = crate::settings::KeyMap::default();
+        assert_eq!(drop_tip(&keys), "Tip: hold Shift, Ctrl or Alt as you drop.");
+        assert!(show_drop_tip(2, false));
+        assert!(!show_drop_tip(0, false));
+        assert!(!show_drop_tip(2, true));
     }
 
     #[test]

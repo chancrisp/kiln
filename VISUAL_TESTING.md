@@ -50,7 +50,12 @@ window between them as well.
 - [ ] Dropping files on the app's icon in Explorer opens Kiln with them listed.
 - [ ] With Kiln already open, dropping more files on the icon adds them to that window and brings it forward. No second window opens.
 - [ ] The empty list's hint names the current wheel keys, and changes when they're reassigned in Settings. It isn't cut off at the smallest window size.
-- [ ] With files listed, the footer has an **Add files** button left of Export all and Clear, the same height and corners as Clear.
+- [ ] With files listed, the footer has an **Add files** button left of Export all and Clear, the same height and corners as Clear, and a **Convert** button left of Add files.
+- [ ] Convert is quiet (muted label, no hover) with nothing selected, and a press says "Select a file to convert." It is also quiet while a selected file is converting. Select a file and it comes to life; pressing it opens the format choice beside the button.
+- [ ] A file nothing has been done to has a **Convert** link at the right end of its row; it selects the row and opens the format choice beside the row, with the file's name still readable. Enter on a selected row opens the same.
+- [ ] Selecting an MP4 and a DOCX and pressing Convert (or Enter) opens no wheel: the footer says "These files have no format in common: …" and Ctrl+A on many mixed files says the same.
+- [ ] The first plain drop that adds files shows "Tip: hold Shift, Ctrl or Alt as you drop." in the footer. A second drop, and any drop after restarting, does not.
+- [ ] Tab goes from the list to Convert (while enabled), then Add files.
 - [ ] "Added 2 files." stays two seconds, then the footer reads "Right-click a file, or select it and press Enter, to convert it." while nothing is running, without moving the pointer. Where that doesn't fit, as in the smallest window, it reads "Right-click a file to convert it." A line that says files were already listed or skipped stays.
 - [ ] Right-clicking a row opens a Windows menu: Convert…, Tools… and File actions… with their keys, then Export… and Open on a held row or Show in folder on a saved one, then Remove. Items that don't apply are missing, not greyed.
 - [ ] The Menu key or Shift+F10 opens the same menu at the selected row's bottom left. Right-clicking an empty part of the list offers Add files… and, with files on the clipboard, Paste.

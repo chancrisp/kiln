@@ -53,6 +53,8 @@ pub enum Id {
     DropPanel,
     DropLine(u8),
     AddFiles,
+    /// The footer's Convert button.
+    ConvertButton,
     List,
     Row(PathBuf),
     RowCancel(PathBuf),
@@ -528,6 +530,8 @@ pub struct Input<'a> {
     pub empty_status: &'a str,
     /// "Export all (3)", while results are held.
     pub export_all: Option<&'a str>,
+    /// Why the footer's Convert is disabled; `None` when it can be used.
+    pub convert_block: Option<&'a str>,
     pub wheel: Option<WheelIn<'a>>,
     pub settings: Option<SettingsIn<'a>>,
     pub details: Option<DetailsIn<'a>>,
@@ -559,6 +563,7 @@ pub fn row_name(e: &Entry, instead: Option<&str>) -> String {
 /// The element for a header or footer button.
 pub fn button_id(b: FocusButton) -> Id {
     match b {
+        FocusButton::Convert => Id::ConvertButton,
         FocusButton::AddFiles => Id::AddFiles,
         FocusButton::ExportAll => Id::ExportAll,
         FocusButton::Clear => Id::Clear,
@@ -570,6 +575,7 @@ pub fn button_id(b: FocusButton) -> Id {
 /// The header or footer button an element is, if it's one.
 pub fn button_of(id: &Id) -> Option<FocusButton> {
     match id {
+        Id::ConvertButton => Some(FocusButton::Convert),
         Id::AddFiles => Some(FocusButton::AddFiles),
         Id::ExportAll => Some(FocusButton::ExportAll),
         Id::Clear => Some(FocusButton::Clear),
@@ -736,15 +742,24 @@ fn main(input: &Input) -> Vec<Node> {
         return out;
     };
     let add = layout::add_files_button(&clear, input.export_all.is_some());
+    let convert = layout::convert_button(&clear, input.export_all.is_some());
     let mut status = text(
         Id::Status,
         input.status,
-        layout::footer_status(&footer, &add),
+        layout::footer_status(&footer, &convert),
     );
     if let Some(s) = &mut status {
         s.live = true;
     }
     out.extend(status);
+    // Disabled, it says why instead of the key.
+    let mut convert_node = Node::new(Id::ConvertButton, Role::Button, "Convert", convert)
+        .focusable()
+        .help(Some(
+            input.convert_block.unwrap_or(crate::help::CONVERT_TIP),
+        ));
+    convert_node.states.disabled = input.convert_block.is_some();
+    out.push(convert_node);
     out.push(
         Node::new(Id::AddFiles, Role::Button, lines.button, add)
             .focusable()
@@ -1187,6 +1202,7 @@ mod tests {
             empty,
             empty_status: "",
             export_all: None,
+            convert_block: None,
             wheel: None,
             settings: None,
             details: None,
@@ -1246,6 +1262,7 @@ mod tests {
         for id in [
             Id::HelpButton,
             Id::SettingsButton,
+            Id::ConvertButton,
             Id::AddFiles,
             Id::ExportAll,
             Id::Clear,
@@ -1258,6 +1275,7 @@ mod tests {
         assert_eq!(t.focused().unwrap().id, Id::Row(es[0].path.clone()));
         // On a button, it has the focus and the row doesn't.
         for b in [
+            FocusButton::Convert,
             FocusButton::AddFiles,
             FocusButton::ExportAll,
             FocusButton::Clear,
@@ -1387,7 +1405,9 @@ mod tests {
         let mut damaged = entry(
             "c.png",
             JobState::Failed {
-                message: "This file looks damaged, or isn't really a PNG. Try opening it in another app.".into(),
+                message:
+                    "This file looks damaged, or isn't really a PNG. Try opening it in another app."
+                        .into(),
                 details: "x".into(),
                 engine: None,
             },

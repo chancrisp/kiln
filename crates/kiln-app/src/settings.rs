@@ -30,6 +30,10 @@ pub struct Settings {
     /// Conversions picked, counted per source type on this PC.
     #[serde(default, skip_serializing_if = "Habits::is_empty")]
     pub habits: Habits,
+    /// Whether the one-time tip about holding a key while dropping has
+    /// been shown on this PC.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub drop_tip_shown: bool,
 }
 
 impl Default for Settings {
@@ -42,12 +46,17 @@ impl Default for Settings {
             quality: QualityDefaults::default(),
             engines: EnginePaths::default(),
             habits: Habits::default(),
+            drop_tip_shown: false,
         }
     }
 }
 
 fn yes() -> bool {
     true
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -762,6 +771,7 @@ mod tests {
         let mut s = Settings {
             output_folder: Some(dir.path().join("out")),
             theme: ThemeChoice::Dark,
+            drop_tip_shown: true,
             ..Settings::default()
         };
         s.keys.assign(WheelKind::Actions, Modifier::Shift);

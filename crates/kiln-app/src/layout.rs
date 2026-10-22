@@ -327,13 +327,28 @@ pub fn add_files_button(clear: &Rect, export_all: bool) -> Rect {
     )
 }
 
+/// Width of the footer's Convert button.
+pub const FOOTER_CONVERT_WIDTH: f32 = 80.0;
+
+/// The footer's Convert button: left of Add files, so it is the first
+/// control after the list in reading and Tab order.
+pub fn convert_button(clear: &Rect, export_all: bool) -> Rect {
+    let add = add_files_button(clear, export_all);
+    Rect::new(
+        add.x - 8.0 - FOOTER_CONVERT_WIDTH,
+        clear.y,
+        FOOTER_CONVERT_WIDTH,
+        clear.h,
+    )
+}
+
 /// The footer's status line: from the footer's left edge to 12 DIPs short
-/// of the leftmost button, `add`.
-pub fn footer_status(footer: &Rect, add: &Rect) -> Rect {
+/// of the leftmost button, `leftmost` (Convert).
+pub fn footer_status(footer: &Rect, leftmost: &Rect) -> Rect {
     Rect::new(
         footer.x + 4.0,
         footer.y,
-        (add.x - 12.0 - footer.x).max(0.0),
+        (leftmost.x - 12.0 - footer.x).max(0.0),
         footer.h,
     )
 }
@@ -1306,6 +1321,7 @@ mod tests {
         let clear = l.clear_button.unwrap();
         let footer = l.footer.unwrap();
         let add = add_files_button(&clear, true);
+        let convert = convert_button(&clear, true);
         let mut rects: Vec<(String, Rect)> = vec![
             ("help".into(), l.help_button),
             ("settings".into(), l.settings_button),
@@ -1313,7 +1329,8 @@ mod tests {
             ("clear".into(), clear),
             ("export all".into(), export_all_button(&clear)),
             ("add".into(), add),
-            ("status".into(), footer_status(&footer, &add)),
+            ("convert".into(), convert),
+            ("status".into(), footer_status(&footer, &convert)),
         ];
         let visible: Vec<&Rect> = l
             .rows
@@ -1722,8 +1739,13 @@ mod tests {
             let beside = add_files_button(&clear, true);
             assert_grid(&beside, "add files");
             assert_eq!(export_all_button(&clear).x - beside.right(), 8.0);
-            // The status keeps room on the left.
-            assert!(beside.x >= footer.x + 100.0, "{beside:?} at {w}");
+            // Convert sits left of it, with the same gap.
+            let convert = convert_button(&clear, true);
+            assert_grid(&convert, "convert");
+            assert_eq!(beside.x - convert.right(), 8.0);
+            assert_eq!((convert.y, convert.h), (clear.y, clear.h));
+            // The buttons leave the left half of the footer to the status.
+            assert!(convert.x >= footer.x + 4.0, "{convert:?} at {w}");
         }
     }
 
@@ -1735,15 +1757,17 @@ mod tests {
         let status = |w: f32, export: bool| {
             let l = layout(w, 480.0, 2);
             let (footer, clear) = (l.footer.unwrap(), l.clear_button.unwrap());
-            let add = add_files_button(&clear, export);
-            let s = footer_status(&footer, &add);
-            assert_eq!(add.x - s.right(), 8.0);
+            let convert = convert_button(&clear, export);
+            let s = footer_status(&footer, &convert);
+            assert_eq!(convert.x - s.right(), 8.0);
             s.w
         };
-        // The default window has room for the full hint either way.
+        // The default window has room for the full hint, and for the short
+        // one while results are held and Export all takes its share.
         assert!(status(720.0, false) >= FULL);
-        assert!(status(720.0, true) >= FULL);
-        // The smallest has room for the short one beside Clear alone.
+        assert!(status(720.0, true) >= SHORT);
+        // The smallest has room for the short one beside the buttons while
+        // nothing is held.
         assert!(status(480.0, false) >= SHORT);
         assert!(status(480.0, false) < FULL);
         assert!(status(480.0, true) >= 0.0);

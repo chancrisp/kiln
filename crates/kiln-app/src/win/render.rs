@@ -137,6 +137,11 @@ pub struct View<'a> {
     /// The Add files button, in the empty window or the footer.
     pub add_hover: bool,
     pub add_pressed: bool,
+    /// The footer's Convert button; disabled, it is drawn quiet and takes
+    /// no hover.
+    pub convert_hover: bool,
+    pub convert_pressed: bool,
+    pub convert_enabled: bool,
     pub clear_hover: bool,
     pub clear_pressed: bool,
     pub wheel: Option<WheelView<'a>>,
@@ -693,7 +698,15 @@ impl Draw<'_> {
     /// A row's underlined link text, right-aligned in `area`: muted, a
     /// step brighter on a wash, and full text colour while hot.
     #[allow(clippy::too_many_arguments)]
-    fn row_link_label(&self, text: &str, area: &Rect, hot: bool, on_wash: bool, p: &Palette, a: f32) {
+    fn row_link_label(
+        &self,
+        text: &str,
+        area: &Rect,
+        hot: bool,
+        on_wash: bool,
+        p: &Palette,
+        a: f32,
+    ) {
         let c = if hot {
             p.text
         } else if on_wash && !p.high_contrast {
@@ -712,7 +725,13 @@ impl Draw<'_> {
             c,
             a,
         );
-        self.hline(lx, lx + tw, area.y + 15.0, c, a * solid(p, effects::UNDERLINE));
+        self.hline(
+            lx,
+            lx + tw,
+            area.y + 15.0,
+            c,
+            a * solid(p, effects::UNDERLINE),
+        );
     }
 
     fn hline(&self, x0: f32, x1: f32, y: f32, c: Rgb, a: f32) {
@@ -1046,7 +1065,14 @@ impl Draw<'_> {
         // (`layout::row_link`).
         if let Some(text) = link {
             let area = layout::row_link_text(r);
-            self.row_link_label(text, &area, hovered && v.hover_link, selected || hovered, p, a);
+            self.row_link_label(
+                text,
+                &area,
+                hovered && v.hover_link,
+                selected || hovered,
+                p,
+                a,
+            );
         }
         // "Retry" on a cancelled or failed row, beside the link when there is
         // one.
@@ -1156,7 +1182,8 @@ impl Draw<'_> {
             .export_all
             .map(|label| (label, layout::export_all_button(&button)));
         let add = layout::add_files_button(&button, export.is_some());
-        let status = layout::footer_status(&footer, &add);
+        let convert = layout::convert_button(&button, export.is_some());
+        let status = layout::footer_status(&footer, &convert);
         // The idle hint comes in two lengths: the full one where it fits.
         let text = if v.status == ways_in::IDLE_HINT {
             let full = self.text.measure(ways_in::IDLE_HINT, &self.text.caption);
@@ -1165,6 +1192,19 @@ impl Draw<'_> {
             v.status
         };
         self.label(text, &self.text.caption, &status, p.text_muted, 1.0);
+        if v.convert_enabled {
+            self.button("Convert", &convert, v.convert_hover, v.convert_pressed, p);
+        } else {
+            // Disabled: the label is muted and the edge flat.
+            self.button_face(&convert, false, false, false, p);
+            self.label(
+                "Convert",
+                &self.text.body_center,
+                &convert,
+                p.text_muted,
+                1.0,
+            );
+        }
         self.button(v.empty.button, &add, v.add_hover, v.add_pressed, p);
         if let Some((label, b)) = export {
             self.button(label, &b, v.export_hover, v.export_pressed, p);

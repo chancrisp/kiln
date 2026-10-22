@@ -159,6 +159,14 @@ test enforces this.
 - With no suggestion, the description takes the place of "Converts to N formats" and nothing else is added.
 - Hovering a row shows a tooltip: the whole line when the row cuts it short, then the file's full folder path on a line of its own.
 
+## Starting a conversion
+
+- **Convert is always in sight.** With files listed, the footer has a **Convert** button left of Add files, and a file nothing has been done to has a **Convert** link at the right end of its row. Both open the same format choice for the selection (the link selects its row first). The wheel stays the quick way: Enter, Shift/Ctrl/Alt+Enter, the held-key drags and the right-click menu all work as before.
+- **Where the choice opens.** From the button it pours from the button's top edge; from a row's link or from Enter it pours from the right end of the row, so the file's name stays readable. The drag route and the right-click menu are unchanged.
+- **Never an empty wheel.** Before a wheel opens, `wheel::offer` decides what it can offer. One kind of file, or several kinds with a format in common, opens the choice. Several kinds with nothing in common do not: the footer says `These files have no format in common: MP4 (3), DOCX (2). Select one kind at a time.` (the first four kinds, then "N more"). One kind Kiln has nothing for reads `Kiln can't convert XYZ files.`
+- **When Convert can't be used.** With nothing selected, or with a selected file that is still converting, the button is quiet (muted label, no hover), is left out of Tab, and says why in its tooltip and, if pressed, in the footer: `Select a file to convert.` / `A selected file is still converting. Wait for it, or cancel it.` A file that is converting can't be started a second time from the button, the link, Enter or the menu.
+- **The drop tip.** The first plain drop that adds files (no Shift, Ctrl or Alt held) shows `Tip: hold Shift, Ctrl or Alt as you drop.` in the footer, with the keys as set in Settings. It shows once on this PC (`drop_tip_shown` in settings.toml) and stands until something replaces it.
+
 ## Progress and results
 
 - **Progress** is a 2 px line along the bottom of the job row, filled with celadon. Its leading edge glows slightly brighter, like a glaze taking heat. This is the only gradient in Kiln. While a job runs, the glow breathes slowly over 2.4 s, like coals. When the helper app can't report progress, the whole line holds a low glow that breathes the same way. There are no spinners.
@@ -173,7 +181,7 @@ test enforces this.
 
 - A **?** button sits in the header beside Settings. It, or F1 anywhere but a panel or dialog, opens help over a scrim, drawn like the details dialog: the ways in (drop, Add files, paste, right-click, holding a key while dropping), how results wait until they're exported, and a table of every keyboard shortcut. The shortcuts follow the keys chosen in Settings.
 - The text scrolls with the wheel or touchpad, the arrows, Page Up, Page Down, Home and End. Focus sits on Close. Escape, Enter, a click outside or Close dismisses it.
-- Icon-only controls have native Windows tooltips: "Settings (Ctrl+,)", "Help (F1)", "Add files (Ctrl+O)", "Export all (Ctrl+Shift+S)", a row's "Cancel" and "Export (Ctrl+S)". There are none while a wheel, panel or dialog is up.
+- Icon-only controls have native Windows tooltips: "Settings (Ctrl+,)", "Help (F1)", "Convert the selected files (Enter)", "Add files (Ctrl+O)", "Export all (Ctrl+Shift+S)", a row's "Cancel" and "Export (Ctrl+S)". There are none while a wheel, panel or dialog is up.
 
 ## Voice
 

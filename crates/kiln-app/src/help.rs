@@ -17,6 +17,7 @@ pub const HELP_TIP: &str = "Help (F1)";
 pub const STOP_TIP: &str = "Cancel";
 pub const EXPORT_TIP: &str = "Export (Ctrl+S)";
 pub const ADD_FILES_TIP: &str = "Add files (Ctrl+O)";
+pub const CONVERT_TIP: &str = "Convert the selected files (Enter)";
 pub const EXPORT_ALL_TIP: &str = "Export all (Ctrl+Shift+S)";
 
 /// One part of the overlay, under its heading.
@@ -58,6 +59,10 @@ pub fn help_content(keys: &KeyMap, holding: bool) -> Vec<HelpSection> {
                 line("Drop", "Drop files anywhere on the window to add them."),
                 line("Ctrl+O", "Add files: choose them in a window."),
                 line("Ctrl+V", "Paste files copied in File Explorer."),
+                line(
+                    "Convert",
+                    "Select files, then press Convert below the list, or the Convert link on a file's row.",
+                ),
                 line(
                     "Right-click",
                     "Right-click a file in the list to convert it, use a tool on it or a file action.",
@@ -233,6 +238,7 @@ mod tests {
                 "Drop",
                 "Ctrl+O",
                 "Ctrl+V",
+                "Convert",
                 "Right-click",
                 "Hold Shift and drop",
                 "Hold Ctrl and drop",
@@ -314,7 +320,7 @@ mod tests {
         let h = help_content(&keys, true);
         let ways = keys_of(find(&h, "Ways in"));
         assert_eq!(
-            ways[4..],
+            ways[5..],
             [
                 "Hold Ctrl and drop",
                 "Hold Shift and drop",
@@ -332,6 +338,7 @@ mod tests {
         assert_eq!(STOP_TIP, "Cancel");
         assert_eq!(EXPORT_TIP, "Export (Ctrl+S)");
         assert_eq!(ADD_FILES_TIP, "Add files (Ctrl+O)");
+        assert_eq!(CONVERT_TIP, "Convert the selected files (Enter)");
         assert_eq!(EXPORT_ALL_TIP, "Export all (Ctrl+Shift+S)");
         // Each shortcut a tip names is one the help table lists.
         let h = help_content(&KeyMap::default(), true);

@@ -223,6 +223,100 @@ pub fn items_for(kind: WheelKind, kiln: &Kiln, paths: &[PathBuf]) -> Vec<Item> {
     }
 }
 
+/// What a wheel opened for the selection has to offer, worked out before
+/// it opens so that no empty wheel is ever shown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Offer {
+    /// Nothing is selected.
+    Nothing,
+    /// The wheel has something for these files: one kind of file, or
+    /// several with something in common.
+    Choices,
+    /// Several kinds of file with nothing in common. The kinds present as
+    /// (type code, files), most files first.
+    Mixed(Vec<(String, usize)>),
+    /// One kind of file that nothing applies to.
+    Unsupported(String),
+}
+
+/// The type code a file shows under: "MP4", or its extension, or "Other"
+/// for a file without one.
+fn type_code(kiln: &Kiln, path: &Path) -> String {
+    match kiln.registry().format_of(path) {
+        Some(f) => f.code(),
+        None => path
+            .extension()
+            .map(|e| e.to_string_lossy().to_ascii_uppercase())
+            .filter(|e| !e.is_empty())
+            .unwrap_or_else(|| "Other".to_owned()),
+    }
+}
+
+/// Decide what `kind`'s wheel can offer for `paths`.
+pub fn offer(kind: WheelKind, kiln: &Kiln, paths: &[PathBuf]) -> Offer {
+    if paths.is_empty() {
+        return Offer::Nothing;
+    }
+    if kind == WheelKind::Actions || !items_for(kind, kiln, paths).is_empty() {
+        return Offer::Choices;
+    }
+    let mut kinds: Vec<(String, usize)> = vec![];
+    for p in paths {
+        let code = type_code(kiln, p);
+        match kinds.iter_mut().find(|(c, _)| *c == code) {
+            Some((_, n)) => *n += 1,
+            None => kinds.push((code, 1)),
+        }
+    }
+    // Most files first; ties keep the order they were met in.
+    kinds.sort_by(|a, b| b.1.cmp(&a.1));
+    match kinds.as_slice() {
+        [(code, _)] => Offer::Unsupported(code.clone()),
+        _ => Offer::Mixed(kinds),
+    }
+}
+
+/// The kinds present, "MP4 (3), DOCX (2)", the first four and a count of
+/// the rest.
+fn kinds_list(kinds: &[(String, usize)]) -> String {
+    const SHOWN: usize = 4;
+    let mut parts: Vec<String> = kinds
+        .iter()
+        .take(SHOWN)
+        .map(|(c, n)| format!("{c} ({n})"))
+        .collect();
+    if kinds.len() > SHOWN {
+        parts.push(format!("{} more", kinds.len() - SHOWN));
+    }
+    parts.join(", ")
+}
+
+/// The footer's sentence for an offer that has no wheel, with what to do
+/// next. `None` when the wheel can open.
+pub fn offer_sentence(kind: WheelKind, offer: &Offer) -> Option<String> {
+    let verb = if kind == WheelKind::Tools {
+        "use a tool on"
+    } else {
+        "convert"
+    };
+    match offer {
+        Offer::Choices => None,
+        Offer::Nothing => Some("Select a file first.".to_owned()),
+        Offer::Unsupported(code) => Some(format!("Kiln can't {verb} {code} files.")),
+        Offer::Mixed(kinds) => {
+            let none = if kind == WheelKind::Tools {
+                "No tool fits all of these files"
+            } else {
+                "These files have no format in common"
+            };
+            Some(format!(
+                "{none}: {}. Select one kind at a time.",
+                kinds_list(kinds)
+            ))
+        }
+    }
+}
+
 /// Split items between the inner ring and More. One more than `COMMON`
 /// still fits, since More would take that segment anyway. Past that the
 /// first `COMMON` stay and the rest go to More, grouped by kind and then
@@ -867,6 +961,88 @@ mod tests {
 
         let none = items_for(WheelKind::Convert, &kiln, &["a.png".into(), "b.mp3".into()]);
         assert!(none.is_empty());
+    }
+
+    #[test]
+    fn the_offer_says_why_a_wheel_would_be_empty() {
+        let kiln = Kiln::new();
+        let p = |names: &[&str]| -> Vec<PathBuf> { names.iter().map(PathBuf::from).collect() };
+        let offer = |names: &[&str]| offer(WheelKind::Convert, &kiln, &p(names));
+        // One kind.
+        assert_eq!(offer(&["a.png", "b.png"]), Offer::Choices);
+        // Several kinds with some formats in common.
+        assert_eq!(offer(&["a.mp4", "b.mkv"]), Offer::Choices);
+        // Nothing selected.
+        assert_eq!(offer(&[]), Offer::Nothing);
+        // Several kinds with none in common: the kinds present, most first.
+        assert_eq!(
+            offer(&["a.png", "b.mp3", "c.mp3"]),
+            Offer::Mixed(vec![("MP3".into(), 2), ("PNG".into(), 1)])
+        );
+        // One kind Kiln has nothing for, known or not.
+        assert_eq!(offer(&["a.xyz"]), Offer::Unsupported("XYZ".into()));
+        assert_eq!(offer(&["noext"]), Offer::Unsupported("Other".into()));
+        // The Alt wheel has something for any files.
+        assert_eq!(
+            super::offer(WheelKind::Actions, &kiln, &p(&["a.png", "b.mp3"])),
+            Offer::Choices
+        );
+    }
+
+    #[test]
+    fn five_hundred_mixed_files_get_a_sentence_not_a_wheel() {
+        let kiln = Kiln::new();
+        let exts = ["png", "mp3", "docx", "mp4", "pdf", "md"];
+        let paths: Vec<PathBuf> = (0..500)
+            .map(|i| PathBuf::from(format!("f{i}.{}", exts[i % exts.len()])))
+            .collect();
+        let o = offer(WheelKind::Convert, &kiln, &paths);
+        let Offer::Mixed(kinds) = &o else {
+            panic!("{o:?}");
+        };
+        assert_eq!(kinds.iter().map(|k| k.1).sum::<usize>(), 500);
+        let s = offer_sentence(WheelKind::Convert, &o).unwrap();
+        assert!(
+            s.starts_with("These files have no format in common: "),
+            "{s}"
+        );
+        assert!(s.ends_with("Select one kind at a time."), "{s}");
+    }
+
+    #[test]
+    fn the_sentence_lists_four_kinds_and_counts_the_rest() {
+        let kinds: Vec<(String, usize)> = ["A", "B", "C", "D", "E", "F"]
+            .iter()
+            .map(|c| (c.to_string(), 2))
+            .collect();
+        assert_eq!(
+            offer_sentence(WheelKind::Convert, &Offer::Mixed(kinds)).unwrap(),
+            "These files have no format in common: A (2), B (2), C (2), D (2), 2 more. Select one kind at a time."
+        );
+        assert_eq!(
+            offer_sentence(WheelKind::Convert, &Offer::Unsupported("XYZ".into())).unwrap(),
+            "Kiln can't convert XYZ files."
+        );
+        assert_eq!(
+            offer_sentence(WheelKind::Convert, &Offer::Nothing).unwrap(),
+            "Select a file first."
+        );
+        assert_eq!(offer_sentence(WheelKind::Convert, &Offer::Choices), None);
+    }
+
+    #[test]
+    fn tools_have_no_empty_wheel_either() {
+        let kiln = Kiln::new();
+        let paths: Vec<PathBuf> = vec!["a.png".into(), "b.mp3".into()];
+        let o = offer(WheelKind::Tools, &kiln, &paths);
+        if let Offer::Mixed(_) = o {
+            assert!(offer_sentence(WheelKind::Tools, &o)
+                .unwrap()
+                .starts_with("No tool fits all of these files"));
+        } else {
+            // Some tool applies to both: then the wheel has it.
+            assert_eq!(o, Offer::Choices);
+        }
     }
 
     #[test]

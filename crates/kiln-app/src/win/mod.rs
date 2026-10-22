@@ -70,6 +70,7 @@ const TIP_SETTINGS: usize = 1;
 const TIP_HELP: usize = 2;
 const TIP_ADD: usize = 3;
 const TIP_EXPORT_ALL: usize = 4;
+const TIP_CONVERT: usize = 5;
 const TIP_ROWS: usize = 100;
 /// Fires once, when "Added 2 files." has been up long enough for the
 /// footer's idle hint to take its place.
@@ -691,6 +692,9 @@ struct App {
     /// The Add files button, in the empty window or the footer.
     add_hover: bool,
     add_pressed: bool,
+    /// The footer's Convert button.
+    convert_hover: bool,
+    convert_pressed: bool,
     /// The folder files were last added from in this run, where Add files
     /// opens.
     last_add: Option<PathBuf>,
@@ -832,6 +836,27 @@ impl App {
         (self.export_all_count() > 0).then(|| layout::export_all_button(&clear))
     }
 
+    /// The footer's Convert button, while files are listed.
+    fn convert_rect(&self) -> Option<layout::Rect> {
+        let clear = self.layout().clear_button?;
+        Some(layout::convert_button(&clear, self.export_all_count() > 0))
+    }
+
+    /// Why Convert can't be used on the selection now, if it can't.
+    fn convert_block(&self) -> Option<&'static str> {
+        let rows = self.files.selection();
+        let running = rows
+            .iter()
+            .filter(|&&i| {
+                self.files
+                    .entries()
+                    .get(i)
+                    .is_some_and(|e| matches!(e.job, JobState::Running { .. }))
+            })
+            .count();
+        model::convert_block(rows.len(), running)
+    }
+
     /// How many held results Export all would take now: those a row says
     /// are gone and those an export is already moving aren't counted, and
     /// Export all skips them.
@@ -928,6 +953,9 @@ impl App {
     fn focus_button_rect(&self, b: FocusButton) -> Option<layout::Rect> {
         let l = self.layout();
         match b {
+            FocusButton::Convert => self
+                .convert_rect()
+                .filter(|_| self.convert_block().is_none()),
             FocusButton::AddFiles => self.add_button(),
             FocusButton::ExportAll => self.export_button(),
             FocusButton::Clear => l.clear_button,
@@ -947,6 +975,7 @@ impl App {
     /// Enter or Space on the button the keyboard is on: what a click does.
     fn press_button(&mut self, b: FocusButton) {
         match b {
+            FocusButton::Convert => self.convert_selection(true),
             FocusButton::AddFiles => self.add_files(true),
             FocusButton::ExportAll => self.export_everything(),
             FocusButton::Clear => self.clear(),
@@ -2080,14 +2109,19 @@ impl App {
 
     /// Follow a row's link: a failed row's details, a held row's export, or
     /// an exported row's folder.
-    fn follow_link(&mut self, i: usize) {
+    fn follow_link(&mut self, i: usize, keyboard: bool) {
         if self.row_saving(i) {
             return;
         }
         let Some(e) = self.files.entries().get(i) else {
             return;
         };
-        if e.held().is_some() {
+        if matches!(e.job, JobState::Idle) {
+            // A file nothing has been done to: its link asks what to do.
+            let paths = vec![e.path.clone()];
+            let at = self.row_anchor(i).unwrap_or_else(|| self.row_centre(i));
+            self.open_choice(WheelKind::Convert, paths, at, keyboard);
+        } else if e.held().is_some() {
             self.export_row(i);
         } else if e.saved().is_some() {
             self.show_saved(i);
@@ -2267,13 +2301,82 @@ impl App {
     fn open_wheel_for_selection(&mut self, kind: WheelKind) {
         let paths = self.selected_paths();
         if paths.is_empty() {
+            // Nothing to act on is said, not ignored.
+            if kind == WheelKind::Convert {
+                self.alert("Select a file to convert.".to_owned());
+                self.invalidate();
+            }
             return;
         }
-        // From the keyboard there's no pointer to pour from, so the wheel
-        // opens in the middle of the list.
-        let l = self.layout();
-        let at = (l.panel.x + l.panel.w / 2.0, l.panel.y + l.panel.h / 2.0);
-        self.open_wheel(kind, paths, at, true);
+        // The wheel pours beside the file the keyboard is on, so its name
+        // stays readable; with no such row, from the middle of the list.
+        let at = self
+            .files
+            .focus()
+            .or_else(|| self.files.selection().first().copied())
+            .and_then(|i| self.row_anchor(i))
+            .unwrap_or_else(|| {
+                let l = self.layout();
+                (l.panel.x + l.panel.w / 2.0, l.panel.y + l.panel.h / 2.0)
+            });
+        self.open_choice(kind, paths, at, true);
+    }
+
+    /// Where a choice for row `i` pours from: the right end of the row,
+    /// where its link and cross are, so its name stays clear. `None` when
+    /// the row is out of view.
+    fn row_anchor(&self, i: usize) -> Option<(f32, f32)> {
+        let r = self.row_rect(i)?;
+        let hit = layout::row_link(&r);
+        Some((hit.x + hit.w / 2.0, r.y + r.h / 2.0))
+    }
+
+    /// Open `kind`'s wheel for `paths` as the Convert button, a row's
+    /// link, a key or the menu ask for it. A wheel with nothing in it
+    /// never opens: the footer says why, and what to do. Converting a row
+    /// that is converting already isn't offered either.
+    fn open_choice(
+        &mut self,
+        kind: WheelKind,
+        paths: Vec<PathBuf>,
+        at: (f32, f32),
+        keyboard: bool,
+    ) {
+        let busy = kind == WheelKind::Convert
+            && paths.iter().any(|p| {
+                self.files
+                    .index_of(p)
+                    .and_then(|i| self.files.entries().get(i))
+                    .is_some_and(|e| matches!(e.job, JobState::Running { .. }))
+            });
+        let said = if busy {
+            model::convert_block(paths.len(), 1).map(str::to_owned)
+        } else {
+            let offer = wheel::offer(kind, &self.kiln, &paths);
+            wheel::offer_sentence(kind, &offer)
+        };
+        match said {
+            Some(text) => {
+                self.alert(text);
+                self.invalidate();
+            }
+            None => self.open_wheel(kind, paths, at, keyboard),
+        }
+    }
+
+    /// The footer's Convert: the format choice for the selection, poured
+    /// from the button, or the reason it can't be used.
+    fn convert_selection(&mut self, keyboard: bool) {
+        if let Some(why) = self.convert_block() {
+            self.alert(why.to_owned());
+            self.invalidate();
+            return;
+        }
+        let Some(b) = self.convert_rect() else {
+            return;
+        };
+        let paths = self.selected_paths();
+        self.open_choice(WheelKind::Convert, paths, (b.x + b.w / 2.0, b.y), keyboard);
     }
 
     // The right-click menu.
@@ -2403,7 +2506,7 @@ impl App {
             (MenuItem::Wheel(kind), _) => {
                 let paths = self.paths_of(rows);
                 let at = self.row_centre(focus.unwrap_or(rows[0]));
-                self.open_wheel(kind, paths, at, keyboard);
+                self.open_choice(kind, paths, at, keyboard);
             }
             (MenuItem::Export, _) => self.export_rows(rows),
             (MenuItem::Open, [i]) => {
@@ -2871,8 +2974,8 @@ impl App {
                     };
                     // What Retry runs again. A merge takes several files,
                     // so it can't be retried from one row.
-                    entry.last = (!matches!(action, Action::Tool(Tool::Merge)))
-                        .then(|| action.clone());
+                    entry.last =
+                        (!matches!(action, Action::Tool(Tool::Merge))).then(|| action.clone());
                     self.rows[i].settled = None;
                     self.rows[i].job = Some(id);
                 }
@@ -3249,6 +3352,7 @@ impl App {
         self.hover_retry = false;
         (self.clear_hover, self.export_hover, self.add_hover) = (false, false, false);
         (self.clear_pressed, self.export_pressed, self.add_pressed) = (false, false, false);
+        (self.convert_hover, self.convert_pressed) = (false, false);
         self.invalidate();
     }
 
@@ -3765,6 +3869,12 @@ impl App {
             self.export_hover = export;
             self.invalidate();
         }
+        let convert =
+            self.convert_block().is_none() && self.convert_rect().is_some_and(|b| b.contains(x, y));
+        if convert != self.convert_hover {
+            self.convert_hover = convert;
+            self.invalidate();
+        }
         let add = self.add_button().is_some_and(|b| b.contains(x, y));
         if add != self.add_hover {
             self.add_hover = add;
@@ -3804,6 +3914,7 @@ impl App {
         let clear = std::mem::take(&mut self.clear_pressed);
         let export = std::mem::take(&mut self.export_pressed);
         let add = std::mem::take(&mut self.add_pressed);
+        let convert = std::mem::take(&mut self.convert_pressed);
         let setting = self.settings_pressed.take();
         let dialog = self.details.as_mut().and_then(|d| d.pressed.take());
         let sheet = self.sheet.as_mut().and_then(|s| s.pressed.take());
@@ -3841,8 +3952,11 @@ impl App {
             self.invalidate();
             return;
         }
-        if !clear && !export && !add && setting.is_none() && dialog.is_none() {
+        if !clear && !export && !add && !convert && setting.is_none() && dialog.is_none() {
             return;
+        }
+        if convert && self.convert_rect().is_some_and(|b| b.contains(x, y)) {
+            self.convert_selection(false);
         }
         if add && self.add_button().is_some_and(|b| b.contains(x, y)) {
             self.add_files(false);
@@ -3957,6 +4071,18 @@ impl App {
         } else if self.export_button().is_some_and(|b| b.contains(x, y)) {
             self.export_pressed = true;
             unsafe { SetCapture(self.hwnd) };
+        } else if self.convert_rect().is_some_and(|b| b.contains(x, y)) {
+            // Disabled, a press says why and nothing else.
+            match self.convert_block() {
+                None => {
+                    self.convert_pressed = true;
+                    unsafe { SetCapture(self.hwnd) };
+                }
+                Some(why) => {
+                    self.alert(why.to_owned());
+                    self.invalidate();
+                }
+            }
         } else if self.add_button().is_some_and(|b| b.contains(x, y)) {
             self.add_pressed = true;
             unsafe { SetCapture(self.hwnd) };
@@ -3983,7 +4109,7 @@ impl App {
                     } else if retry {
                         self.retry_row(i);
                     } else {
-                        self.follow_link(i);
+                        self.follow_link(i, false);
                     }
                     None
                 }
@@ -4091,6 +4217,7 @@ impl App {
                 shift,
                 !self.files.is_empty(),
                 self.export_button().is_some(),
+                self.convert_block().is_none() && !self.files.is_empty(),
             );
             self.files.keyboard_used();
             self.invalidate();
@@ -4173,7 +4300,7 @@ impl App {
                     if self.row_state(i) == RowState::Running {
                         self.cancel_row(i);
                     } else {
-                        self.follow_link(i);
+                        self.follow_link(i, true);
                     }
                 }
             }
@@ -4251,12 +4378,25 @@ impl App {
                 w.paths = ev.paths.clone();
                 w.hover
             });
+        let before = self.files.len();
         self.add(ev.paths.clone(), false);
         match chosen {
             Some(spot) => self.choose(spot),
             None => self.close_wheel(),
         }
         self.drag_paths.clear();
+        // A plain drop teaches the keys once; the tip stands in the footer
+        // until something replaces it.
+        let added = self.files.len().saturating_sub(before);
+        if chosen.is_none() && ways_in::show_drop_tip(added, self.settings.drop_tip_shown) {
+            self.settings.drop_tip_shown = true;
+            if let Err(e) = self.settings_store.save_picks(&self.settings) {
+                self.alert(e);
+            } else {
+                self.alert(ways_in::drop_tip(&self.settings.keys));
+            }
+            self.invalidate();
+        }
     }
 
     // Accessibility.
@@ -4314,6 +4454,7 @@ impl App {
             empty: &empty,
             empty_status: &empty_status,
             export_all: export_all.as_deref(),
+            convert_block: self.convert_block(),
             wheel: self
                 .wheel
                 .as_ref()
@@ -4476,6 +4617,7 @@ impl App {
             (Id::HelpButton, Verb::Invoke) => self.open_help(),
             (Id::SettingsButton, Verb::Invoke) => self.open_settings(),
             // Like the other UI Automation actions on the list, not a click.
+            (Id::ConvertButton, Verb::Invoke) => self.convert_selection(true),
             (Id::AddFiles, Verb::Invoke) => self.add_files(true),
             (Id::ExportAll, Verb::Invoke) => self.export_everything(),
             (Id::Clear, Verb::Invoke) => self.clear(),
@@ -4510,7 +4652,7 @@ impl App {
             (Id::RowLink(p), Verb::Invoke) => {
                 if let Some(i) = row(self, p) {
                     self.files.click(i);
-                    self.follow_link(i);
+                    self.follow_link(i, true);
                 }
             }
             (Id::WheelItem(spot), Verb::Invoke | Verb::Select) => self.choose(*spot),
@@ -4717,6 +4859,9 @@ impl App {
             empty_status: &empty_status,
             add_hover: self.add_hover,
             add_pressed: self.add_pressed,
+            convert_hover: self.convert_hover,
+            convert_pressed: self.convert_pressed,
+            convert_enabled: self.convert_block().is_none(),
             clear_hover: self.clear_hover,
             clear_pressed: self.clear_pressed,
             wheel: Self::wheel_view(self.wheel.as_ref(), &self.settings.keys).map(|wv| WheelView {
@@ -4857,6 +5002,7 @@ impl App {
         }
         let l = self.layout();
         let mut tools = vec![(TIP_SETTINGS, l.settings_button), (TIP_HELP, l.help_button)];
+        tools.extend(self.convert_rect().map(|b| (TIP_CONVERT, b)));
         tools.extend(self.add_button().map(|b| (TIP_ADD, b)));
         tools.extend(self.export_button().map(|b| (TIP_EXPORT_ALL, b)));
         // Rows, cut to the part of the list that shows.
@@ -4891,6 +5037,7 @@ impl App {
         match id {
             TIP_SETTINGS => help::SETTINGS_TIP.to_owned(),
             TIP_HELP => help::HELP_TIP.to_owned(),
+            TIP_CONVERT => self.convert_block().unwrap_or(help::CONVERT_TIP).to_owned(),
             TIP_ADD => help::ADD_FILES_TIP.to_owned(),
             TIP_EXPORT_ALL => help::EXPORT_ALL_TIP.to_owned(),
             _ if id >= TIP_ROWS => {
@@ -5146,6 +5293,8 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         sticky,
         add_hover: false,
         add_pressed: false,
+        convert_hover: false,
+        convert_pressed: false,
         last_add: None,
         added: None,
         alert: None,
@@ -5605,6 +5754,8 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             app.export_pressed = false;
             app.add_hover = false;
             app.add_pressed = false;
+            app.convert_hover = false;
+            app.convert_pressed = false;
             app.invalidate();
             Some(LRESULT(0))
         }
