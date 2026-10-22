@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use kiln_core::{
     about, Availability, Facts, FileCheck, Kiln, Kind, Look, Suggested, Suggestion, Tool,
@@ -21,6 +21,9 @@ pub enum JobState {
         action: Action,
         /// `None` while the engine can't say how far along it is.
         fraction: Option<f32>,
+        /// When the job started, for the time left. `None` where it is
+        /// not known.
+        started: Option<Instant>,
     },
     Done {
         action: Action,
@@ -88,6 +91,118 @@ pub enum Tone {
     Result,
     /// Errors, in brick.
     Crack,
+}
+
+/// The first seconds of a job say nothing about how long it will take.
+const LEFT_AFTER: Duration = Duration::from_secs(3);
+
+/// How much longer a job that has run for `elapsed` and is `fraction`
+/// done will take, going by its pace so far. `None` too early to say.
+pub fn time_left(elapsed: Duration, fraction: f32) -> Option<Duration> {
+    if elapsed < LEFT_AFTER || !(0.02..1.0).contains(&fraction) {
+        return None;
+    }
+    Some(elapsed.mul_f32((1.0 - fraction) / fraction))
+}
+
+/// A time left, roughly, as a person would say it: "a few seconds",
+/// "about 40 sec", "about 2 min", "about 1 h 20 min".
+pub fn left_text(left: Duration) -> String {
+    let secs = left.as_secs();
+    match secs {
+        0..=7 => "a few seconds".to_owned(),
+        8..=44 => format!("about {} sec", (secs + 2) / 5 * 5),
+        45..=89 => "about 1 min".to_owned(),
+        90..=3599 => format!("about {} min", (secs + 30) / 60),
+        _ => {
+            let mins = (secs + 30) / 60;
+            match mins % 60 {
+                0 => format!("about {} h", mins / 60),
+                m => format!("about {} h {m} min", mins / 60),
+            }
+        }
+    }
+}
+
+/// A running row's second line: what it is doing, how far along, and how
+/// long is left, or "Working…" where the engine can't say how far:
+/// "Converting to WEBM  ·  38%  ·  about 2 min".
+pub fn progress_line(doing: &str, fraction: Option<f32>, left: Option<Duration>) -> String {
+    match fraction {
+        None => format!("{doing}  ·  Working…"),
+        Some(f) => {
+            let mut s = format!("{doing}  ·  {}%", (f.clamp(0.0, 1.0) * 100.0) as u32);
+            if let Some(l) = left {
+                s.push_str(&format!("  ·  {}", left_text(l)));
+            }
+            s
+        }
+    }
+}
+
+/// How one job of a batch that goes on ended, for the footer and for
+/// assistive tools to hear once: "photo.jpg is ready.".
+pub fn job_outcome(name: &str, ok: bool, cancelled: bool) -> String {
+    match (ok, cancelled) {
+        (true, _) => format!("{name} is ready."),
+        (false, true) => format!("{name} was cancelled."),
+        (false, false) => format!("{name} couldn't be converted."),
+    }
+}
+
+/// How a batch of jobs is getting on, for the footer: "12 of 50 done."
+pub fn batch_progress(done: usize, total: usize) -> String {
+    format!("{done} of {total} done.")
+}
+
+/// What the taskbar button shows for the work under way.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TaskbarProgress {
+    /// Nothing is running.
+    None,
+    /// Running, with no way to say how far.
+    Indeterminate,
+    /// This far along, of 1.0.
+    Fraction(f32),
+}
+
+/// The taskbar's progress for `total` jobs of which `done` have finished
+/// and `running` are under way with the fractions they have reported.
+pub fn taskbar_progress(total: usize, done: usize, running: &[Option<f32>]) -> TaskbarProgress {
+    if total == 0 || (running.is_empty() && done >= total) {
+        return TaskbarProgress::None;
+    }
+    if running.iter().all(Option::is_none) && done == 0 {
+        return TaskbarProgress::Indeterminate;
+    }
+    let part: f32 = running
+        .iter()
+        .map(|f| f.unwrap_or(0.0).clamp(0.0, 1.0))
+        .sum();
+    TaskbarProgress::Fraction(((done as f32 + part) / total as f32).clamp(0.0, 1.0))
+}
+
+/// What the finish of work says when Kiln is not in front: the title and
+/// the sentence, naming the result when there is one.
+pub fn finish_notice(
+    ok: usize,
+    failed: usize,
+    cancelled: usize,
+    first: Option<&str>,
+) -> Option<(String, String)> {
+    if ok + failed == 0 {
+        // Cancelled by the person themselves: nothing to tell them.
+        let _ = cancelled;
+        return None;
+    }
+    let text = match (ok, failed, first) {
+        (1, 0, Some(name)) => format!("{name} is ready."),
+        (n, 0, _) => format!("{n} files are ready."),
+        (0, 1, _) => "A file couldn't be converted. Open Kiln to see why.".to_owned(),
+        (0, n, _) => format!("{n} files couldn't be converted. Open Kiln to see why."),
+        (n, f, _) => format!("{n} ready, {f} couldn't be converted."),
+    };
+    Some(("Kiln".to_owned(), text))
 }
 
 /// "Converting to JPG", "Trimming".
@@ -565,7 +680,16 @@ impl Entry {
                     _ => Tone::Crack,
                 },
             ),
-            JobState::Running { action, .. } => (doing(action), Tone::Muted),
+            JobState::Running {
+                action,
+                fraction,
+                started,
+            } => {
+                let left = started
+                    .zip(*fraction)
+                    .and_then(|(t, f)| time_left(t.elapsed(), f));
+                (progress_line(&doing(action), *fraction, left), Tone::Muted)
+            }
             JobState::Done {
                 action: Action::File(FileAction::Move),
                 ..
@@ -1668,6 +1792,111 @@ mod tests {
     }
 
     #[test]
+    fn a_running_row_says_how_far_and_how_long() {
+        let sec = Duration::from_secs;
+        // Too early to say how long.
+        assert_eq!(time_left(sec(2), 0.5), None);
+        assert_eq!(time_left(sec(30), 0.0), None);
+        assert_eq!(time_left(sec(30), 1.0), None);
+        // Half done after a minute: about a minute more.
+        assert_eq!(time_left(sec(60), 0.5), Some(sec(60)));
+        assert_eq!(time_left(sec(60), 0.25), Some(sec(180)));
+        assert_eq!(left_text(sec(3)), "a few seconds");
+        assert_eq!(left_text(sec(33)), "about 35 sec");
+        assert_eq!(left_text(sec(60)), "about 1 min");
+        assert_eq!(left_text(sec(120)), "about 2 min");
+        assert_eq!(left_text(sec(3000)), "about 50 min");
+        assert_eq!(left_text(sec(5400)), "about 1 h 30 min");
+        assert_eq!(left_text(sec(7200)), "about 2 h");
+        assert_eq!(left_text(sec(4800)), "about 1 h 20 min");
+        assert_eq!(
+            progress_line("Converting to WEBM", Some(0.38), Some(sec(120))),
+            "Converting to WEBM  ·  38%  ·  about 2 min"
+        );
+        assert_eq!(
+            progress_line("Converting to WEBM", Some(0.38), None),
+            "Converting to WEBM  ·  38%"
+        );
+        // A helper that can't say how far.
+        assert_eq!(
+            progress_line("Converting to WEBM", None, None),
+            "Converting to WEBM  ·  Working…"
+        );
+    }
+
+    #[test]
+    fn a_row_line_follows_the_job() {
+        let mut e = row("a.mp4");
+        e.job = JobState::Running {
+            action: Action::Convert("webm".into()),
+            fraction: None,
+            started: None,
+        };
+        assert_eq!(e.line().0, "Converting to WEBM  ·  Working…");
+        e.job = JobState::Running {
+            action: Action::Convert("webm".into()),
+            fraction: Some(0.5),
+            started: Some(Instant::now() - Duration::from_secs(60)),
+        };
+        let line = e.line().0;
+        assert!(
+            line.starts_with("Converting to WEBM  ·  50%  ·  about "),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn each_finish_is_said_in_a_sentence() {
+        assert_eq!(job_outcome("a.png", true, false), "a.png is ready.");
+        assert_eq!(
+            job_outcome("a.png", false, false),
+            "a.png couldn't be converted."
+        );
+        assert_eq!(job_outcome("a.png", false, true), "a.png was cancelled.");
+    }
+
+    #[test]
+    fn a_batch_and_the_taskbar_count_what_is_done() {
+        assert_eq!(batch_progress(12, 50), "12 of 50 done.");
+        assert_eq!(taskbar_progress(0, 0, &[]), TaskbarProgress::None);
+        assert_eq!(taskbar_progress(3, 3, &[]), TaskbarProgress::None);
+        assert_eq!(
+            taskbar_progress(2, 0, &[None, None]),
+            TaskbarProgress::Indeterminate
+        );
+        // One of four done, two half done: 2 of 4.
+        assert_eq!(
+            taskbar_progress(4, 1, &[Some(0.5), Some(0.5), None]),
+            TaskbarProgress::Fraction(0.5)
+        );
+        assert_eq!(
+            taskbar_progress(4, 1, &[None]),
+            TaskbarProgress::Fraction(0.25)
+        );
+    }
+
+    #[test]
+    fn finishing_while_away_names_the_result() {
+        let n =
+            |ok, failed, cancelled, first| finish_notice(ok, failed, cancelled, first).map(|t| t.1);
+        assert_eq!(
+            n(1, 0, 0, Some("photo.jpg")).as_deref(),
+            Some("photo.jpg is ready.")
+        );
+        assert_eq!(n(12, 0, 0, None).as_deref(), Some("12 files are ready."));
+        assert_eq!(
+            n(0, 1, 0, None).as_deref(),
+            Some("A file couldn't be converted. Open Kiln to see why.")
+        );
+        assert_eq!(
+            n(3, 2, 0, None).as_deref(),
+            Some("3 ready, 2 couldn't be converted.")
+        );
+        // Only cancelled: nothing to announce.
+        assert_eq!(n(0, 0, 0, None), None);
+    }
+
+    #[test]
     fn a_file_that_cannot_work_says_so_and_offers_nothing() {
         let (dir, kiln) = setup();
         let w = |name: &str, bytes: &[u8]| {
@@ -2127,8 +2356,12 @@ mod tests {
         e.job = JobState::Running {
             action: jpg.clone(),
             fraction: Some(0.5),
+            started: None,
         };
-        assert_eq!(e.line(), ("Converting to JPG".to_owned(), Tone::Muted));
+        assert_eq!(
+            e.line(),
+            ("Converting to JPG  ·  50%".to_owned(), Tone::Muted)
+        );
         e.job = JobState::Done {
             action: jpg,
             outputs: vec![dir.path().join("a.jpg")],
@@ -2371,6 +2604,7 @@ mod tests {
         e.job = JobState::Running {
             action: jpg.clone(),
             fraction: None,
+            started: None,
         };
         lines.push(e.line().0);
         e.job = JobState::Done {
@@ -2394,7 +2628,7 @@ mod tests {
         assert_eq!(
             lines,
             [
-                "Converting to JPG",
+                "Converting to JPG  ·  Working…",
                 "Ready: photo.jpg",
                 "Saved to Out.",
                 "Couldn't convert the file."
@@ -2821,6 +3055,7 @@ mod tests {
         running.job = JobState::Running {
             action: Action::Convert("jpg".into()),
             fraction: None,
+            started: None,
         };
         let mut list = FileList {
             entries: vec![

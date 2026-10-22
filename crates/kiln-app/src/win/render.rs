@@ -142,6 +142,9 @@ pub struct View<'a> {
     pub convert_hover: bool,
     pub convert_pressed: bool,
     pub convert_enabled: bool,
+    /// What the footer's button says: Convert, or Cancel while the
+    /// selection holds a file that is converting.
+    pub convert_label: &'a str,
     pub clear_hover: bool,
     pub clear_pressed: bool,
     pub wheel: Option<WheelView<'a>>,
@@ -1041,15 +1044,16 @@ impl Draw<'_> {
         match &e.job {
             JobState::Running { fraction, .. } => {
                 self.progress(r, *fraction, v.heat, p, a)?;
-                if hovered || v.selected.contains(&i) {
-                    let b = layout::row_cancel(r);
-                    let hot = hovered && v.hover_cancel;
-                    if hot {
-                        self.hover_back(&b, shape::RADIUS_CONTROL, p);
-                    }
-                    let c = if hot { p.text } else { muted };
-                    self.icon("cross", b.x, b.y, 1.0, c, a);
-                }
+                // Cancel is always there to see, as a word.
+                let area = layout::row_cancel_text(r);
+                self.row_link_label(
+                    "Cancel",
+                    &area,
+                    hovered && v.hover_cancel,
+                    selected || hovered,
+                    p,
+                    a,
+                );
             }
             JobState::Done { .. } => {
                 // The finished line fades as the result settles.
@@ -1193,7 +1197,13 @@ impl Draw<'_> {
         };
         self.label(text, &self.text.caption, &status, p.text_muted, 1.0);
         if v.convert_enabled {
-            self.button("Convert", &convert, v.convert_hover, v.convert_pressed, p);
+            self.button(
+                v.convert_label,
+                &convert,
+                v.convert_hover,
+                v.convert_pressed,
+                p,
+            );
         } else {
             // Disabled: the label is muted and the edge flat.
             self.button_face(&convert, false, false, false, p);

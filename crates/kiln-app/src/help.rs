@@ -18,6 +18,7 @@ pub const STOP_TIP: &str = "Cancel";
 pub const EXPORT_TIP: &str = "Export (Ctrl+S)";
 pub const ADD_FILES_TIP: &str = "Add files (Ctrl+O)";
 pub const CONVERT_TIP: &str = "Convert the selected files (Enter)";
+pub const CANCEL_ALL_TIP: &str = "Cancel the converting files (Space)";
 pub const EXPORT_ALL_TIP: &str = "Export all (Ctrl+Shift+S)";
 
 /// One part of the overlay, under its heading.

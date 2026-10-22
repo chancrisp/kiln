@@ -104,6 +104,13 @@ const WM_KILN_FACTS: u32 = WM_APP + 7;
 const WM_KILN_EXPORTED: u32 = WM_APP + 8;
 /// Posted from a thread pool thread when Windows' Text size changes.
 const WM_KILN_TEXT_SCALE: u32 = WM_APP + 9;
+/// The notification area's message for Kiln's finish notice: lparam's low
+/// word says what happened to it.
+const WM_KILN_NOTIFY: u32 = WM_APP + 11;
+/// The notice was clicked, timed out, or was hidden.
+const NIN_BALLOONHIDE: u32 = 0x403;
+const NIN_BALLOONTIMEOUT: u32 = 0x404;
+const NIN_BALLOONUSERCLICK: u32 = 0x405;
 /// How long a row's second line takes to cross over to what Kiln found.
 const FACTS_MS: u32 = 160;
 /// Most files the options sheet reads for its estimate.
@@ -579,6 +586,8 @@ struct Batch {
     ok: usize,
     failed: usize,
     cancelled: usize,
+    /// How many jobs the batch started, and how many are still to finish.
+    groups: usize,
     pending: usize,
     /// Result files the batch left held, for the footer's export hint.
     held: usize,
@@ -692,6 +701,16 @@ struct App {
     /// Whether this run has said that a helper app is missing, once, so
     /// it isn't said for every file.
     helper_notice: bool,
+    /// The taskbar button's progress, made the first time work starts.
+    taskbar: Option<system::Taskbar>,
+    /// What the taskbar shows now, so a change of under a part in a
+    /// thousand isn't sent again.
+    taskbar_shown: Option<(u8, u32)>,
+    /// How work since Kiln was last idle went: ready, failed, cancelled,
+    /// and the first result's name, for the finish notice.
+    tally: (usize, usize, usize, Option<String>),
+    /// The row a clicked finish notice selects.
+    notice_row: Option<PathBuf>,
     /// The Add files button, in the empty window or the footer.
     add_hover: bool,
     add_pressed: bool,
@@ -845,19 +864,34 @@ impl App {
         Some(layout::convert_button(&clear, self.export_all_count() > 0))
     }
 
-    /// Why Convert can't be used on the selection now, if it can't.
-    fn convert_block(&self) -> Option<&'static str> {
-        let rows = self.files.selection();
-        let running = rows
-            .iter()
-            .filter(|&&i| {
+    /// The selected rows that are converting now.
+    fn selected_running(&self) -> Vec<usize> {
+        self.files
+            .selection()
+            .into_iter()
+            .filter(|&i| {
                 self.files
                     .entries()
                     .get(i)
                     .is_some_and(|e| matches!(e.job, JobState::Running { .. }))
             })
-            .count();
-        model::convert_block(rows.len(), running)
+            .collect()
+    }
+
+    /// Whether the footer's button reads Cancel: the selection holds a
+    /// file that is converting. It then stops those files, from the
+    /// pointer, the keyboard or an assistive tool.
+    fn footer_cancel(&self) -> bool {
+        !self.selected_running().is_empty()
+    }
+
+    /// Why the footer's button can't be used on the selection now, if it
+    /// can't. Cancel can always be used.
+    fn convert_block(&self) -> Option<&'static str> {
+        if self.footer_cancel() {
+            return None;
+        }
+        model::convert_block(self.files.selection().len(), 0)
     }
 
     /// How many held results Export all would take now: those a row says
@@ -2436,6 +2470,12 @@ impl App {
     /// The footer's Convert: the format choice for the selection, poured
     /// from the button, or the reason it can't be used.
     fn convert_selection(&mut self, keyboard: bool) {
+        if self.footer_cancel() {
+            for i in self.selected_running() {
+                self.cancel_row(i);
+            }
+            return;
+        }
         if let Some(why) = self.convert_block() {
             self.alert(why.to_owned());
             self.invalidate();
@@ -3006,6 +3046,7 @@ impl App {
                 ok: 0,
                 failed: 0,
                 cancelled: 0,
+                groups: groups.len(),
                 pending: groups.len(),
                 held: 0,
             },
@@ -3042,6 +3083,7 @@ impl App {
                     entry.job = JobState::Running {
                         action: action.clone(),
                         fraction: None,
+                        started: Some(Instant::now()),
                     };
                     // What Retry runs again. A merge takes several files,
                     // so it can't be retried from one row.
@@ -3060,11 +3102,8 @@ impl App {
                 },
             );
         }
-        let n = paths.len();
-        self.say(format!(
-            "Working on {n} file{}.",
-            if n == 1 { "" } else { "s" }
-        ));
+        self.say(self.working_status());
+        self.sync_taskbar();
         self.held_changed();
         self.animate();
     }
@@ -3119,6 +3158,7 @@ impl App {
                         }
                     }
                 }
+                self.sync_taskbar();
             }
             JobEvent::Finished(id, result) => {
                 let Some(job) = self.jobs.remove(&id) else {
@@ -3177,13 +3217,111 @@ impl App {
                             self.alert = Some(self.status.clone());
                         }
                         self.batches.remove(&job.batch);
+                    } else if !self.alerting() {
+                        // Each finish is said once, with how far the batch is.
+                        let name = job
+                            .paths
+                            .first()
+                            .and_then(|p| p.file_name())
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        let cancelled = matches!(&result, Err(e) if e.cancelled);
+                        let said = model::job_outcome(&name, result.is_ok(), cancelled);
+                        self.say(format!("{said} {}", self.working_status()));
                     }
                 }
+                self.tally_finish(&job, &result);
+                self.sync_taskbar();
                 self.held_changed();
                 self.animate();
             }
         }
         self.invalidate();
+    }
+
+    /// Show how far the work has got on the taskbar button.
+    fn sync_taskbar(&mut self) {
+        let total: usize = self.batches.values().map(|b| b.groups).sum();
+        let done: usize = self.batches.values().map(|b| b.groups - b.pending).sum();
+        let running: Vec<Option<f32>> = self
+            .files
+            .entries()
+            .iter()
+            .filter_map(|e| match &e.job {
+                JobState::Running { fraction, .. } => Some(*fraction),
+                _ => None,
+            })
+            .collect();
+        let now = model::taskbar_progress(total, done, &running);
+        let key = match now {
+            model::TaskbarProgress::None => (0, 0),
+            model::TaskbarProgress::Indeterminate => (1, 0),
+            model::TaskbarProgress::Fraction(f) => (2, (f * 1000.0) as u32),
+        };
+        if self.taskbar_shown == Some(key) {
+            return;
+        }
+        self.taskbar_shown = Some(key);
+        let hwnd = self.hwnd;
+        self.taskbar
+            .get_or_insert_with(system::Taskbar::new)
+            .set(hwnd, now);
+    }
+
+    /// Count a finished job towards the finish notice, and when the last
+    /// one is in, tell the person if Kiln isn't in front: the taskbar
+    /// button flashes (unless Windows has animations off) and a notice
+    /// names the result.
+    fn tally_finish(
+        &mut self,
+        job: &JobInfo,
+        result: &std::result::Result<Vec<PathBuf>, JobError>,
+    ) {
+        match result {
+            Ok(outputs) => {
+                self.tally.0 += 1;
+                if self.tally.3.is_none() {
+                    self.tally.3 = outputs
+                        .first()
+                        .and_then(|p| p.file_name())
+                        .map(|n| n.to_string_lossy().into_owned());
+                    self.notice_row = job.paths.first().cloned();
+                }
+            }
+            Err(e) if e.cancelled => self.tally.2 += 1,
+            Err(_) => {
+                self.tally.1 += 1;
+                if self.notice_row.is_none() {
+                    self.notice_row = job.paths.first().cloned();
+                }
+            }
+        }
+        if !self.jobs.is_empty() {
+            return;
+        }
+        let (ok, failed, cancelled, first) = std::mem::take(&mut self.tally);
+        if system::in_front(self.hwnd) {
+            self.notice_row = None;
+            return;
+        }
+        if let Some((title, text)) = model::finish_notice(ok, failed, cancelled, first.as_deref()) {
+            if motion::animations() {
+                system::flash_until_front(self.hwnd);
+            }
+            system::notify(self.hwnd, WM_KILN_NOTIFY, &title, &text);
+        }
+    }
+
+    /// What the footer says while jobs run: how many of them are done,
+    /// and how to stop the selected one.
+    fn working_status(&self) -> String {
+        let total: usize = self.batches.values().map(|b| b.groups).sum();
+        let pending: usize = self.batches.values().map(|b| b.pending).sum();
+        let mut line = model::batch_progress(total - pending, total);
+        if self.footer_cancel() {
+            line.push_str(" Space cancels the selected file.");
+        }
+        line
     }
 
     /// The row for `path`, if it's waiting on job `id`: a row removed and
@@ -3256,6 +3394,7 @@ impl App {
                 self.files.entries_mut()[i].job = JobState::Running {
                     action: action.clone(),
                     fraction: None,
+                    started: Some(Instant::now()),
                 };
                 self.rows[i].settled = None;
                 self.rows[i].job = None;
@@ -4543,6 +4682,7 @@ impl App {
             empty_status: &empty_status,
             export_all: export_all.as_deref(),
             convert_block: self.convert_block(),
+            convert_cancel: self.footer_cancel(),
             wheel: self
                 .wheel
                 .as_ref()
@@ -4950,6 +5090,11 @@ impl App {
             convert_hover: self.convert_hover,
             convert_pressed: self.convert_pressed,
             convert_enabled: self.convert_block().is_none(),
+            convert_label: if self.footer_cancel() {
+                "Cancel"
+            } else {
+                "Convert"
+            },
             clear_hover: self.clear_hover,
             clear_pressed: self.clear_pressed,
             wheel: Self::wheel_view(self.wheel.as_ref(), &self.settings.keys).map(|wv| WheelView {
@@ -5125,6 +5270,7 @@ impl App {
         match id {
             TIP_SETTINGS => help::SETTINGS_TIP.to_owned(),
             TIP_HELP => help::HELP_TIP.to_owned(),
+            TIP_CONVERT if self.footer_cancel() => help::CANCEL_ALL_TIP.to_owned(),
             TIP_CONVERT => self.convert_block().unwrap_or(help::CONVERT_TIP).to_owned(),
             TIP_ADD => help::ADD_FILES_TIP.to_owned(),
             TIP_EXPORT_ALL => help::EXPORT_ALL_TIP.to_owned(),
@@ -5380,6 +5526,10 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         destroyed: false,
         sticky,
         helper_notice: false,
+        taskbar: None,
+        taskbar_shown: None,
+        tally: (0, 0, 0, None),
+        notice_row: None,
         add_hover: false,
         add_pressed: false,
         convert_hover: false,
@@ -5676,7 +5826,9 @@ fn sync_kind(msg: u32, timer: usize, said: bool) -> SyncKind {
         WM_KEYDOWN | WM_SYSKEYDOWN | WM_LBUTTONDOWN | WM_LBUTTONUP | WM_LBUTTONDBLCLK
         | WM_CONTEXTMENU | WM_MOUSEWHEEL | WM_SETFOCUS | WM_KILLFOCUS | WM_ACTIVATE
         | WM_COPYDATA | WM_SIZE | WM_DPICHANGED | WM_KILN_DROP | WM_KILN_EXPORTED
-        | WM_KILN_MOVED | WM_KILN_FACTS | WM_KILN_PROBE | WM_KILN_UPDATE => SyncKind::Now,
+        | WM_KILN_MOVED | WM_KILN_FACTS | WM_KILN_PROBE | WM_KILN_UPDATE | WM_KILN_NOTIFY => {
+            SyncKind::Now
+        }
         m if m == uia::WM_KILN_A11Y => SyncKind::Now,
         _ => SyncKind::Soon,
     }
@@ -5974,6 +6126,24 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             app.on_moved(*m);
             Some(LRESULT(0))
         }
+        // The finish notice: a click opens Kiln on the result; anything
+        // else means it has gone.
+        WM_KILN_NOTIFY => {
+            match (lparam.0 & 0xFFFF) as u32 {
+                NIN_BALLOONUSERCLICK => {
+                    system::notify_done(hwnd);
+                    system::bring_forward(hwnd);
+                    if let Some(i) = app.notice_row.take().and_then(|p| app.files.index_of(&p)) {
+                        app.files.click(i);
+                        app.scroll_to_row(i);
+                        app.invalidate();
+                    }
+                }
+                NIN_BALLOONTIMEOUT | NIN_BALLOONHIDE => system::notify_done(hwnd),
+                _ => {}
+            }
+            Some(LRESULT(0))
+        }
         WM_KILN_EXPORTED => {
             let ex = unsafe { Box::from_raw(lparam.0 as *mut Exported) };
             app.on_exported(*ex);
@@ -6063,6 +6233,7 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
         }
         WM_DESTROY => {
             app.destroyed = true;
+            system::notify_done(hwnd);
             // UI Automation lets go of the tree first.
             app.uia.shutdown(hwnd);
             // Stop the inspect thread with the window, without waiting

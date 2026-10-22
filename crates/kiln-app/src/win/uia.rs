@@ -377,6 +377,7 @@ fn control_type(role: Role) -> UIA_CONTROLTYPE_ID {
         Role::TabItem => UIA_TabItemControlTypeId,
         Role::Spinner => UIA_SpinnerControlTypeId,
         Role::RadioButton => UIA_RadioButtonControlTypeId,
+        Role::ProgressBar => UIA_ProgressBarControlTypeId,
         // A pane that says it's a dialog: there's no dialog control type.
         Role::Dialog => UIA_PaneControlTypeId,
     }
@@ -388,6 +389,7 @@ fn automation_id(id: &Id) -> String {
     match id {
         Id::Row(_) => format!("Row.{:016x}", id.key()),
         Id::RowCancel(_) => format!("RowCancel.{:016x}", id.key()),
+        Id::RowProgress(_) => format!("RowProgress.{:016x}", id.key()),
         Id::RowRetry(_) => format!("RowRetry.{:016x}", id.key()),
         Id::RowLink(_) => format!("RowLink.{:016x}", id.key()),
         _ => format!("{id:?}"),
@@ -535,6 +537,7 @@ impl IRawElementProviderFragmentRoot_Impl for Root_Impl {
     ISelectionProvider,
     ISelectionItemProvider,
     IValueProvider,
+    IRangeValueProvider,
     IScrollItemProvider
 )]
 struct Element {
@@ -602,6 +605,7 @@ impl IRawElementProviderSimple_Impl for Element_Impl {
             UIA_SelectionPatternId => self.pattern::<ISelectionProvider>(p.selection),
             UIA_SelectionItemPatternId => self.pattern::<ISelectionItemProvider>(p.selection_item),
             UIA_ValuePatternId => self.pattern::<IValueProvider>(p.value),
+            UIA_RangeValuePatternId => self.pattern::<IRangeValueProvider>(p.range_value),
             UIA_ScrollItemPatternId => self.pattern::<IScrollItemProvider>(p.scroll_item),
             _ => none(),
         }
@@ -774,6 +778,37 @@ impl IValueProvider_Impl for Element_Impl {
 
     fn IsReadOnly(&self) -> Result<BOOL> {
         self.with(|_, n, _| Ok(n.states.disabled.into()))
+    }
+}
+
+impl IRangeValueProvider_Impl for Element_Impl {
+    fn SetValue(&self, _val: f64) -> Result<()> {
+        // Progress is read, never set.
+        Err(not_enabled())
+    }
+
+    fn Value(&self) -> Result<f64> {
+        self.with(|_, n, _| Ok(n.range.unwrap_or(0.0)))
+    }
+
+    fn IsReadOnly(&self) -> Result<BOOL> {
+        Ok(true.into())
+    }
+
+    fn Maximum(&self) -> Result<f64> {
+        Ok(100.0)
+    }
+
+    fn Minimum(&self) -> Result<f64> {
+        Ok(0.0)
+    }
+
+    fn LargeChange(&self) -> Result<f64> {
+        Ok(10.0)
+    }
+
+    fn SmallChange(&self) -> Result<f64> {
+        Ok(1.0)
     }
 }
 

@@ -629,12 +629,14 @@ mod tests {
         let converting = entry(JobState::Running {
             action: Action::Convert("jpg".into()),
             fraction: Some(0.5),
+            started: None,
         });
         assert_eq!(converting.row_state(false, there), Running);
         // A Move can't be stopped, so it offers no Stop.
         let moving = entry(JobState::Running {
             action: Action::File(FileAction::Move),
             fraction: None,
+            started: None,
         });
         assert_eq!(moving.row_state(false, there), Plain);
     }

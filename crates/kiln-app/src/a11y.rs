@@ -37,6 +37,8 @@ pub enum Role {
     TabItem,
     Spinner,
     RadioButton,
+    /// A running row's progress, a range from 0 to 100.
+    ProgressBar,
     /// A panel over a scrim that keeps the keys until it closes.
     Dialog,
 }
@@ -58,6 +60,8 @@ pub enum Id {
     List,
     Row(PathBuf),
     RowCancel(PathBuf),
+    /// A running row's progress, with its percent as a range value.
+    RowProgress(PathBuf),
     /// "Retry", on a cancelled or failed row.
     RowRetry(PathBuf),
     /// "Show details", "Export", or an exported row's "Saved to" line.
@@ -123,6 +127,8 @@ pub struct Patterns {
     pub selection_item: bool,
     pub value: bool,
     pub scroll_item: bool,
+    /// A range value, such as a percent done.
+    pub range_value: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -137,6 +143,8 @@ pub struct Node {
     pub states: States,
     /// A spinner's value as it reads: "1080p".
     pub value: Option<String>,
+    /// A progress bar's value, 0 to 100.
+    pub range: Option<f64>,
     /// More about it: a row's folder, a setting's hint.
     pub help: Option<String>,
     /// How a running row is getting on: "45%".
@@ -158,6 +166,7 @@ impl Node {
             rect,
             states: States::default(),
             value: None,
+            range: None,
             help: None,
             status: None,
             live: false,
@@ -285,6 +294,7 @@ impl Node {
             ),
             value: self.role == Role::Spinner,
             scroll_item: self.role == Role::ListItem,
+            range_value: self.role == Role::ProgressBar,
         }
     }
 }
@@ -532,6 +542,9 @@ pub struct Input<'a> {
     pub export_all: Option<&'a str>,
     /// Why the footer's Convert is disabled; `None` when it can be used.
     pub convert_block: Option<&'a str>,
+    /// The selection holds a file that is converting: the button reads
+    /// Cancel and stops it.
+    pub convert_cancel: bool,
     pub wheel: Option<WheelIn<'a>>,
     pub settings: Option<SettingsIn<'a>>,
     pub details: Option<DetailsIn<'a>>,
@@ -554,6 +567,9 @@ pub fn row_name(e: &Entry, instead: Option<&str>) -> String {
         (None, JobState::Failed { message, .. }) => {
             message.split_whitespace().collect::<Vec<_>>().join(" ")
         }
+        // A running row says what it is doing; how far along is its
+        // status, told at a gentler pace than the line changes.
+        (None, JobState::Running { action, .. }) => crate::model::doing(action),
         (None, _) => e.line().0,
     };
     // The row's dots read as pauses.
@@ -753,11 +769,14 @@ fn main(input: &Input) -> Vec<Node> {
     }
     out.extend(status);
     // Disabled, it says why instead of the key.
-    let mut convert_node = Node::new(Id::ConvertButton, Role::Button, "Convert", convert)
+    let (convert_name, convert_tip) = if input.convert_cancel {
+        ("Cancel", crate::help::CANCEL_ALL_TIP)
+    } else {
+        ("Convert", crate::help::CONVERT_TIP)
+    };
+    let mut convert_node = Node::new(Id::ConvertButton, Role::Button, convert_name, convert)
         .focusable()
-        .help(Some(
-            input.convert_block.unwrap_or(crate::help::CONVERT_TIP),
-        ));
+        .help(Some(input.convert_block.unwrap_or(convert_tip)));
     convert_node.states.disabled = input.convert_block.is_some();
     out.push(convert_node);
     out.push(
@@ -807,6 +826,23 @@ fn row(r: &RowIn, rect: Rect, offscreen: bool) -> Node {
             format!("{} {}", crate::help::STOP_TIP, e.name),
             layout::row_cancel(&rect),
         ));
+        // How far along, as a value a screen reader can read and watch.
+        if let Some(p) = r.progress {
+            let line = Rect::new(
+                rect.x,
+                rect.bottom() - layout::PROGRESS_HEIGHT,
+                rect.w,
+                layout::PROGRESS_HEIGHT,
+            );
+            let mut bar = Node::new(
+                Id::RowProgress(path.clone()),
+                Role::ProgressBar,
+                format!("Progress {}", e.name),
+                line,
+            );
+            bar.range = Some(f64::from(p));
+            children.push(bar);
+        }
     }
     if let Some(link) = r.link {
         children.push(Node::new(
@@ -1205,6 +1241,7 @@ mod tests {
             empty_status: "",
             export_all: None,
             convert_block: None,
+            convert_cancel: false,
             wheel: None,
             settings: None,
             details: None,
@@ -1378,6 +1415,7 @@ mod tests {
             JobState::Running {
                 action: Action::Convert("jpg".into()),
                 fraction: Some(0.45),
+                started: None,
             },
         )];
         let t = tree(&input(&lines, rows(&es)));
@@ -1390,6 +1428,31 @@ mod tests {
             (Role::Button, "Cancel a.png")
         );
         assert!(cancel.patterns().invoke);
+        // The percent is a range value an assistive tool can read.
+        let bar = row
+            .children
+            .iter()
+            .find(|c| c.role == Role::ProgressBar)
+            .expect("a progress bar");
+        assert_eq!(bar.name, "Progress a.png");
+        assert_eq!(bar.range, Some(45.0));
+        assert!(bar.patterns().range_value && !bar.patterns().invoke);
+    }
+
+    #[test]
+    fn the_footer_button_reads_cancel_while_a_selected_file_converts() {
+        let lines = empty_lines(&Settings::default());
+        let es = [entry("a.png", JobState::Idle)];
+        let mut i = input(&lines, rows(&es));
+        let t = tree(&i);
+        let b = t.find(&Id::ConvertButton).unwrap();
+        assert_eq!(b.name, "Convert");
+        i.convert_cancel = true;
+        let t = tree(&i);
+        let b = t.find(&Id::ConvertButton).unwrap();
+        assert_eq!(b.name, "Cancel");
+        assert_eq!(b.help.as_deref(), Some(crate::help::CANCEL_ALL_TIP));
+        assert!(!b.states.disabled);
     }
 
     #[test]
@@ -1896,6 +1959,7 @@ mod tests {
                 JobState::Running {
                     action: Action::Convert("jpg".into()),
                     fraction: Some(0.5),
+                    started: None,
                 },
             ),
         ];
@@ -1961,6 +2025,7 @@ mod tests {
                 JobState::Running {
                     action: Action::Convert("mp4".into()),
                     fraction: Some(f),
+                    started: None,
                 },
             )
         };

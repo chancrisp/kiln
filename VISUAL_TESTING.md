@@ -35,7 +35,7 @@ window between them as well.
 - [ ] Dropping files adds one row each, fading in over about 180 ms. Nothing bounces.
 - [ ] Format chips are monospace, uppercase and slightly tracked (PNG, MP4, DOCX).
 - [ ] Rows show the name in bone, then in stone the number of conversions (or what the file is and the suggestion), the size, then the folder's last part.
-- [ ] Hovering a row shows a native tooltip: the whole line when the row cuts it short, then the full folder path on its own line. The cancel cross says "Cancel" and a held row's Export link says "Export (Ctrl+S)".
+- [ ] Hovering a row shows a native tooltip: the whole line when the row cuts it short, then the full folder path on its own line. A running row's Cancel says "Cancel" and a held row's Export link says "Export (Ctrl+S)".
 - [ ] A file with no conversions says "No formats for this type".
 - [ ] Dropping the same file twice reports it as already in the list. Dropping a folder reports it as skipped.
 - [ ] Hover tints a row; every selected row has the 18% celadon fill, clipped to the panel's rounded corners.
@@ -80,7 +80,10 @@ window between them as well.
 ## Jobs
 
 - [ ] A running row shows "Converting to WEBM" and a thin celadon line along its bottom that brightens at its leading edge. The glow breathes slowly; nothing flickers. No spinners anywhere.
-- [ ] Hovering or selecting a running row shows a cross; clicking it cancels the job and the row says "Cancelled.".
+- [ ] A running row shows a **Cancel** button at the right of its second line without hovering; clicking it cancels the job and the row says "Cancelled." with a Retry link. There is no cross.
+- [ ] A running row reads "Converting to WEBM  ·  38%  ·  about 2 min" (the time appears after a few seconds), or "Converting to WEBM  ·  Working…" when no progress is known. The progress line is 4 px thick.
+- [ ] With a running file selected, the footer's button reads Cancel, can be reached with Tab and pressed with Enter or Space, and its tooltip says "Cancel the converting files (Space)". The footer reads "3 of 50 done. Space cancels the selected file."
+- [ ] While work runs, the taskbar button shows progress. With Kiln behind another window when the last job ends, the taskbar button flashes and a notification says "photo.jpg is ready."; clicking it brings Kiln forward on that row. With Windows animations off there is no flash.
 - [ ] When a job finishes, the output name appears in bone, fading in over about 200 ms.
 - [ ] A failed job shows one plain line in brick and, when the helper app said more, a "Show details" link. Clicking it, or pressing Space on the row, opens the details over a scrim. Escape, Enter or Close dismisses it.
 - [ ] A failed row never shows a file path or the helper's own words, and ends with a next step ("Try opening it in another app.", "Try again."). Where trying again can help, or after a cancel, a Retry link sits beside Show details (or alone) and runs the job again; a damaged file gets none. The right-click menu has Retry too.

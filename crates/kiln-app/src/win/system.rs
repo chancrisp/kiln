@@ -567,3 +567,130 @@ pub fn shutdown_reason(hwnd: HWND, reason: Option<&str>) {
         };
     }
 }
+
+/// The taskbar button's progress, through `ITaskbarList3`.
+pub struct Taskbar(Option<windows::Win32::UI::Shell::ITaskbarList3>);
+
+impl Taskbar {
+    pub fn new() -> Self {
+        use windows::Win32::UI::Shell::{ITaskbarList3, TaskbarList};
+        let list: Option<ITaskbarList3> =
+            unsafe { CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER) }.ok();
+        if let Some(l) = &list {
+            unsafe {
+                let _ = l.HrInit();
+            }
+        }
+        Taskbar(list)
+    }
+
+    /// Show `progress` on the window's taskbar button.
+    pub fn set(&self, hwnd: HWND, progress: crate::model::TaskbarProgress) {
+        use crate::model::TaskbarProgress;
+        use windows::Win32::UI::Shell::{TBPF_INDETERMINATE, TBPF_NOPROGRESS, TBPF_NORMAL};
+        let Some(l) = &self.0 else {
+            return;
+        };
+        unsafe {
+            let _ = match progress {
+                TaskbarProgress::None => l.SetProgressState(hwnd, TBPF_NOPROGRESS),
+                TaskbarProgress::Indeterminate => l.SetProgressState(hwnd, TBPF_INDETERMINATE),
+                TaskbarProgress::Fraction(f) => {
+                    let _ = l.SetProgressState(hwnd, TBPF_NORMAL);
+                    l.SetProgressValue(hwnd, (f.clamp(0.0, 1.0) * 1000.0) as u64, 1000)
+                }
+            };
+        }
+    }
+}
+
+/// Whether the window is the one in front, and not minimised.
+pub fn in_front(hwnd: HWND) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, IsIconic};
+    unsafe { GetForegroundWindow() == hwnd && !IsIconic(hwnd).as_bool() }
+}
+
+/// Flash the window's taskbar button until the window is brought forward.
+pub fn flash_until_front(hwnd: HWND) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        FlashWindowEx, FLASHWINFO, FLASHW_TIMERNOFG, FLASHW_TRAY,
+    };
+    let info = FLASHWINFO {
+        cbSize: std::mem::size_of::<FLASHWINFO>() as u32,
+        hwnd,
+        dwFlags: FLASHW_TRAY | FLASHW_TIMERNOFG,
+        uCount: 3,
+        dwTimeout: 0,
+    };
+    unsafe {
+        let _ = FlashWindowEx(&info);
+    }
+}
+
+/// The id of Kiln's one notification icon.
+const NOTIFY_ID: u32 = 1;
+
+fn copy_wide<const N: usize>(into: &mut [u16; N], text: &str) {
+    for (slot, c) in into.iter_mut().zip(text.encode_utf16().take(N - 1)) {
+        *slot = c;
+    }
+}
+
+/// Show a notification with `title` and `text`. It lives in the
+/// notification area only while it shows; `callback` is the message the
+/// window gets when it is clicked or goes away.
+pub fn notify(hwnd: HWND, callback: u32, title: &str, text: &str) {
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::Shell::{
+        Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD,
+        NIM_DELETE, NOTIFYICONDATAW,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::LoadIconW;
+    let instance = unsafe { GetModuleHandleW(None) }.unwrap_or_default();
+    let icon = unsafe { LoadIconW(Some(instance.into()), PCWSTR(1 as _)) }.unwrap_or_default();
+    let mut data = NOTIFYICONDATAW {
+        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: hwnd,
+        uID: NOTIFY_ID,
+        uFlags: NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_INFO,
+        uCallbackMessage: callback,
+        hIcon: icon,
+        dwInfoFlags: NIIF_INFO,
+        ..Default::default()
+    };
+    copy_wide(&mut data.szTip, "Kiln");
+    copy_wide(&mut data.szInfoTitle, title);
+    copy_wide(&mut data.szInfo, text);
+    unsafe {
+        // One at a time: a new one replaces the old.
+        let _ = Shell_NotifyIconW(NIM_DELETE, &data);
+        let _ = Shell_NotifyIconW(NIM_ADD, &data);
+    }
+}
+
+/// Take the notification icon away.
+pub fn notify_done(hwnd: HWND) {
+    use windows::Win32::UI::Shell::{Shell_NotifyIconW, NIM_DELETE, NOTIFYICONDATAW};
+    let data = NOTIFYICONDATAW {
+        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: hwnd,
+        uID: NOTIFY_ID,
+        ..Default::default()
+    };
+    unsafe {
+        let _ = Shell_NotifyIconW(NIM_DELETE, &data);
+    }
+}
+
+/// Bring the window forward from where a notification was clicked.
+pub fn bring_forward(hwnd: HWND) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
+    };
+    unsafe {
+        if IsIconic(hwnd).as_bool() {
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+        }
+        let _ = SetForegroundWindow(hwnd);
+    }
+}

@@ -51,7 +51,7 @@ pub const CHIP_MIN_WIDTH: f32 = 48.0;
 pub const BUTTON_HEIGHT: f32 = 32.0;
 pub const BUTTON_WIDTH: f32 = 72.0;
 /// Height of the progress line at the bottom of a job row.
-pub const PROGRESS_HEIGHT: f32 = 2.0;
+pub const PROGRESS_HEIGHT: f32 = 4.0;
 /// Smallest window, in DIPs.
 pub const MIN_WINDOW: (f32, f32) = (480.0, 360.0);
 pub const DEFAULT_WINDOW: (f32, f32) = (720.0, 480.0);
@@ -197,9 +197,25 @@ pub const LINK_WIDTH: f32 = 104.0;
 /// Height of the link's hit area: WCAG 2.5.8's 24 DIPs, on its own.
 pub const LINK_HIT: f32 = 24.0;
 
-/// The cancel control on a running row, in the row's coordinates.
+/// Width of the "Cancel" button on a running row.
+pub const CANCEL_WIDTH: f32 = 56.0;
+
+/// The Cancel button on a running row, in the row's coordinates: a text
+/// button at the right end of the second line, where the row's links sit.
 pub fn row_cancel(row: &Rect) -> Rect {
-    Rect::new(row.right() - 16.0 - 24.0, row.y + 16.0, 24.0, 24.0)
+    Rect::new(
+        row.right() - 16.0 - CANCEL_WIDTH,
+        row.y + 26.0,
+        CANCEL_WIDTH,
+        LINK_HIT,
+    )
+}
+
+/// Where Cancel's text is drawn: the second line, right-aligned in its
+/// hit area.
+pub fn row_cancel_text(row: &Rect) -> Rect {
+    let hit = row_cancel(row);
+    Rect::new(hit.x, row.y + 28.0, hit.w, 20.0)
 }
 
 /// Where a click hits the "Show details" or "Export" link: 24 DIPs tall
