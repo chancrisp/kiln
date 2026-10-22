@@ -22,7 +22,8 @@ use windows::core::{w, Result, BOOL, HSTRING, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE};
 use windows::Win32::Graphics::Gdi::{
-    ClientToScreen, CreateSolidBrush, InvalidateRect, ScreenToClient, UpdateWindow, ValidateRect,
+    ClientToScreen, CreateSolidBrush, DeleteObject, FillRect, GetDC, InvalidateRect, ReleaseDC,
+    ScreenToClient, UpdateWindow, ValidateRect,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Ole::{
@@ -698,6 +699,8 @@ struct App {
     /// What the footer says whenever it has nothing more pressing: why
     /// results are saved next to each file, when there's no holding folder.
     sticky: Option<&'static str>,
+    /// Whether the first frame has been drawn.
+    painted_once: bool,
     /// Whether this run has said that a helper app is missing, once, so
     /// it isn't said for every file.
     helper_notice: bool,
@@ -2229,6 +2232,26 @@ impl App {
         failed.is_empty()
     }
 
+    /// Open Explorer on a row's saved result, or else on the file itself.
+    fn show_row(&mut self, i: usize) {
+        if self
+            .files
+            .entries()
+            .get(i)
+            .is_some_and(|e| e.saved().is_some())
+        {
+            return self.show_saved(i);
+        }
+        let Some(path) = self.files.entries().get(i).map(|e| e.path.clone()) else {
+            return;
+        };
+        let folder = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        if system::show_in_folder(&folder, std::slice::from_ref(&path)).is_err() {
+            self.alert(format!("Couldn't open {}.", folder.display()));
+            self.invalidate();
+        }
+    }
+
     /// Open Explorer on an exported row's results.
     fn show_saved(&mut self, i: usize) {
         let Some((folder, files)) = self.files.entries().get(i).and_then(|e| e.saved()) else {
@@ -2718,7 +2741,11 @@ impl App {
             (MenuItem::Open, [i]) => {
                 self.open_held(*i);
             }
-            (MenuItem::ShowInFolder, [i]) => self.show_saved(*i),
+            (MenuItem::ShowInFolder, [i]) => self.show_row(*i),
+            (MenuItem::CopyPath, _) => {
+                let paths = self.paths_of(rows);
+                self.file_action(FileAction::CopyPath, paths);
+            }
             (MenuItem::Retry, [i]) => self.retry_row(*i),
             (MenuItem::Stop, _) => {
                 for &i in rows {
@@ -3645,6 +3672,24 @@ impl App {
         self.apply_theme();
     }
 
+    /// Fill the client area with the ground colour, before the first
+    /// Direct2D frame is ready.
+    fn fill_ground(&self) {
+        use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
+        unsafe {
+            let dc = GetDC(Some(self.hwnd));
+            if dc.is_invalid() {
+                return;
+            }
+            let mut r = windows::Win32::Foundation::RECT::default();
+            let _ = GetClientRect(self.hwnd, &mut r);
+            let brush = CreateSolidBrush(COLORREF(self.palette.ground.colorref()));
+            FillRect(dc, &r, brush);
+            let _ = DeleteObject(brush.into());
+            ReleaseDC(Some(self.hwnd), dc);
+        }
+    }
+
     /// Close the Settings panel. Back from it, the helper apps are looked
     /// for again, as one may have been installed or chosen meanwhile, and
     /// every row's formats follow.
@@ -3850,10 +3895,12 @@ impl App {
                 self.invalidate();
                 return;
             }
-            Control::OutputChoose => match system::pick_folder(hwnd, "Start exports in") {
-                Some(p) => self.settings.output_folder = Some(p),
-                None => return,
-            },
+            Control::OutputChoose => {
+                match system::pick_folder(hwnd, "Folder shown first when saving") {
+                    Some(p) => self.settings.output_folder = Some(p),
+                    None => return,
+                }
+            }
             Control::OutputReset => self.settings.output_folder = None,
             Control::Theme(t) => {
                 self.settings.theme = t;
@@ -5764,6 +5811,7 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         close_when_saved: false,
         destroyed: false,
         sticky,
+        painted_once: false,
         helper_notice: false,
         taskbar: None,
         taskbar_shown: None,
@@ -6079,7 +6127,15 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
     let hwnd = app.hwnd;
     match msg {
         WM_PAINT => {
+            // The first frame takes a while to build (Direct2D, fonts,
+            // icons). Until it is on screen the window would show the
+            // blank white Windows gives a new surface, so it is filled
+            // with the theme's ground colour first, by GDI, at once.
+            if !app.painted_once {
+                app.fill_ground();
+            }
             app.paint();
+            app.painted_once = true;
             unsafe {
                 let _ = ValidateRect(Some(hwnd), None);
             }

@@ -129,14 +129,18 @@ pub struct Layout {
 pub fn layout(w: f32, h: f32, rows: usize) -> Layout {
     let p = PANEL_PADDING;
     let header = Rect::new(0.0, 0.0, w, HEADER_HEIGHT);
-    let icon = Rect::new(p, p, 24.0, 24.0);
+    // Content stays in a column of a readable width, centred in a wide
+    // window, so a row's link is never a thousand pixels from its name.
+    let col_w = (w - 2.0 * p).clamp(0.0, MAX_CONTENT_WIDTH);
+    let col_x = ((w - col_w) / 2.0).max(p);
+    let icon = Rect::new(col_x, p, 24.0, 24.0);
     let wordmark = Rect::new(icon.right() + 12.0, 12.0, 160.0, 32.0);
-    let settings_button = Rect::new((w - p - 32.0).max(0.0), 12.0, 32.0, 32.0);
+    let settings_button = Rect::new((col_x + col_w - 32.0).max(0.0), 12.0, 32.0, 32.0);
     let help_button = Rect::new((settings_button.x - 8.0 - 32.0).max(0.0), 12.0, 32.0, 32.0);
     let body = Rect::new(
-        p,
+        col_x,
         HEADER_HEIGHT + p,
-        (w - 2.0 * p).max(0.0),
+        col_w,
         (h - HEADER_HEIGHT - 2.0 * p).max(0.0),
     );
 
@@ -349,6 +353,9 @@ pub fn rows_per_page(panel_h: f32) -> isize {
     ((panel_h / ROW_HEIGHT).floor() as isize - 1).max(1)
 }
 
+/// The widest the content column grows in a wide window.
+pub const MAX_CONTENT_WIDTH: f32 = 880.0;
+
 /// Width of the footer's "Undo" link, after rows were removed.
 pub const UNDO_WIDTH: f32 = 48.0;
 
@@ -439,21 +446,19 @@ pub struct EmptyState {
     pub status: Rect,
     pub keys: Rect,
     pub privacy: Rect,
-    pub tagline: Rect,
 }
 
 /// The empty window's group, centred in the drop panel.
 pub fn empty_state(panel: &Rect) -> EmptyState {
     // Each part's height and the gap after it.
-    const PARTS: [(f32, f32); 8] = [
+    const PARTS: [(f32, f32); 7] = [
         (48.0, 16.0),         // vessel
         (24.0, 4.0),          // headline
         (20.0, 12.0),         // instruction
         (BUTTON_HEIGHT, 8.0), // button
         (16.0, 8.0),          // status
         (16.0, 4.0),          // keys
-        (16.0, 8.0),          // privacy
-        (20.0, 0.0),          // tagline
+        (16.0, 0.0),          // privacy
     ];
     let total: f32 = PARTS.iter().map(|(h, gap)| h + gap).sum();
     let mut y = snap(panel.y + ((panel.h - total) / 2.0).max(0.0));
@@ -476,7 +481,6 @@ pub fn empty_state(panel: &Rect) -> EmptyState {
     let status = line(next(4), 16.0);
     let keys = line(next(5), 16.0);
     let privacy = line(next(6), 16.0);
-    let tagline = line(next(7), 20.0);
     EmptyState {
         vessel,
         headline,
@@ -485,7 +489,6 @@ pub fn empty_state(panel: &Rect) -> EmptyState {
         status,
         keys,
         privacy,
-        tagline,
     }
 }
 
@@ -728,6 +731,8 @@ pub const SETTINGS_ROW: f32 = 40.0;
 pub const WHEEL_KEYS_LABEL: &str = "Keys to hold while dropping";
 /// The label of the setting that saves each result as it is ready.
 pub const AUTOSAVE_LABEL: &str = "Save results next to the original";
+/// The output folder's row: where the folder dialog opens when saving.
+pub const OUTPUT_LABEL: &str = "Folder shown first when saving";
 /// The Quality page's page DPI, which sets how sharp every page drawn as
 /// an image comes out, not only PDF's. It wraps onto two lines in the
 /// second column, as the sheet's knob of the same name doesn't need to.
@@ -747,8 +752,8 @@ pub const STEP_WIDTH: f32 = 96.0;
 pub const CHEVRON_ZONE: f32 = 28.0;
 /// The Check for updates button.
 pub const UPDATE_BUTTON_WIDTH: f32 = 136.0;
-/// The Forget picks button, wider than Choose to fit its label.
-pub const FORGET_BUTTON_WIDTH: f32 = 104.0;
+/// The Reset suggestions button, wider than Choose to fit its label.
+pub const FORGET_BUTTON_WIDTH: f32 = 136.0;
 /// Rows on the fullest page. Every page keeps this height, so switching
 /// pages never moves the panel.
 const SETTINGS_ROWS: usize = 5;
@@ -899,10 +904,12 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
                 (right - x0).max(0.0),
                 SETTINGS_HINT,
             );
+            // A long label: in two lines, in the row's height.
             rows.push(SettingsRow {
                 hint: Some(crate::settings::START_EXPORTS_HINT),
                 hint_rect: Some(hint_rect),
-                ..row("Start exports in", 0, Some(v))
+                label_rect: Rect::new(panel.x + p, row_y(0), SETTINGS_LABEL, SETTINGS_ROW),
+                ..row(OUTPUT_LABEL, 0, Some(v))
             });
 
             for (k, t) in ThemeChoice::ALL.into_iter().enumerate() {
@@ -1350,10 +1357,10 @@ mod tests {
         // Fonts multiply by the factor, in pixels at any display scale.
         let caption = crate::theme::type_scale::CAPTION;
         for (dpi, scale, px) in [
-            (96.0, 1.0, 12.0),
-            (96.0, 1.5, 18.0),
-            (96.0, 2.25, 27.0),
-            (120.0, 2.25, 33.75),
+            (96.0, 1.0, 13.0),
+            (96.0, 1.5, 19.5),
+            (96.0, 2.25, 29.25),
+            (120.0, 2.25, 36.5625),
         ] {
             let zoom = text_zoom(scale, min_window(scale));
             assert!(
@@ -1417,7 +1424,6 @@ mod tests {
             ("status".into(), e.status),
             ("keys".into(), e.keys),
             ("privacy".into(), e.privacy),
-            ("tagline".into(), e.tagline),
         ]);
 
         // The list, with every row control and the footer.
@@ -1769,7 +1775,7 @@ mod tests {
                 assert_eq!(hint.right(), s.panel.right() - 16.0);
                 assert!(hint.h >= 16.0);
                 // "Word, Excel and PowerPoint files, and PDF output." is
-                // about 290 DIPs in 12 px Segoe UI.
+                // about 315 DIPs in 13 px Segoe UI.
                 assert!(hint.w >= 400.0, "{} at {w}x{h}", row.label);
                 for (c, r) in &s.controls {
                     assert!(apart(&hint, r), "{} hint overlaps {c:?}", row.label);
@@ -1790,9 +1796,13 @@ mod tests {
                         ..SettingsShape::default()
                     },
                 );
-                let hint = s.rows[0].hint_rect.expect("Start exports in has a hint");
+                let hint = s.rows[0]
+                    .hint_rect
+                    .expect("the output folder row has a hint");
                 assert_grid(&hint, "hint");
-                assert!(hint.y >= s.rows[0].label_rect.bottom());
+                // The label takes two lines beside the value; the hint sits
+                // to its right, under the value.
+                assert!(hint.x >= s.rows[0].label_rect.right());
                 assert!(hint.bottom() <= s.rows[1].label_rect.y);
                 for (c, r) in &s.controls {
                     assert!(apart(&hint, r), "hint overlaps {c:?} at {w}x{h}");
@@ -1922,8 +1932,7 @@ mod tests {
     fn settings_labels_fit_at_the_smallest_window() {
         // DirectWrite widths in 14 px Segoe UI: every label on one line in
         // its rect, except two, which take two lines.
-        const BODY: [(&str, f32); 8] = [
-            ("Start exports in", 93.2),
+        const BODY: [(&str, f32); 7] = [
             ("Theme", 42.0),
             ("Suggestions", 75.3),
             ("Resolution", 65.0),
@@ -2011,7 +2020,6 @@ mod tests {
                 e.status,
                 e.keys,
                 e.privacy,
-                e.tagline,
             ];
             for (k, r) in order.iter().enumerate() {
                 assert_grid(r, "empty state part");
@@ -2083,10 +2091,59 @@ mod tests {
     }
 
     #[test]
+    fn a_wide_window_keeps_its_content_in_a_readable_column() {
+        for rows in [0, 3] {
+            // At the default size nothing changes.
+            let narrow = layout(720.0, 480.0, rows);
+            assert_eq!(
+                (narrow.body.x, narrow.body.w),
+                (PANEL_PADDING, 720.0 - 2.0 * PANEL_PADDING)
+            );
+            // On an ultrawide the column is capped and centred, with the
+            // header's buttons at its right end and the footer's links
+            // within reach of the names.
+            let wide = layout(3000.0, 1200.0, rows);
+            assert_eq!(wide.body.w, MAX_CONTENT_WIDTH);
+            assert_eq!(wide.body.x + wide.body.w / 2.0, 1500.0);
+            assert_eq!(wide.settings_button.right(), wide.body.right());
+            assert_eq!(wide.icon.x, wide.body.x);
+            if rows > 0 {
+                let row = wide.rows[0];
+                assert_eq!((row.x, row.w), (wide.body.x, MAX_CONTENT_WIDTH));
+                assert!(wide.footer.unwrap().right() <= wide.body.right());
+                // The row's links sit within the column.
+                assert!(row_link(&row).right() <= wide.body.right());
+            }
+        }
+    }
+
+    #[test]
     fn a_page_of_the_list_is_a_screenful_less_one() {
         assert_eq!(rows_per_page(ROW_HEIGHT * 8.0), 7);
         assert_eq!(rows_per_page(ROW_HEIGHT * 1.0), 1);
         assert_eq!(rows_per_page(0.0), 1);
+    }
+
+    #[test]
+    fn the_key_buttons_never_overlap_at_any_window_size() {
+        for (w, h) in [MIN_WINDOW, (720.0, 480.0), (1600.0, 1000.0)] {
+            let s = settings(w, h, SettingsShape::default());
+            let keys: Vec<Rect> = s
+                .controls
+                .iter()
+                .filter(|(c, _)| matches!(c, Control::Key(_)))
+                .map(|(_, r)| *r)
+                .collect();
+            assert_eq!(keys.len(), 3);
+            for pair in keys.windows(2) {
+                assert!(apart(&pair[0], &pair[1]), "{pair:?} at {w}x{h}");
+            }
+            for r in &keys {
+                assert!(r.x >= s.panel.x && r.right() <= s.panel.right(), "{r:?}");
+                // Wide enough to stack the caption over its key.
+                assert!(r.w >= 56.0 && r.h >= 32.0, "{r:?} at {w}x{h}");
+            }
+        }
     }
 
     #[test]
@@ -2096,7 +2153,7 @@ mod tests {
         assert_eq!(
             labels,
             [
-                "Start exports in",
+                OUTPUT_LABEL,
                 "Theme",
                 "Keys to hold while dropping",
                 "Suggestions",
@@ -2137,7 +2194,7 @@ mod tests {
         let off = general.controls[keys + 2].1;
         let forget = general.controls[keys + 3].1;
         assert_eq!(forget.w, FORGET_BUTTON_WIDTH);
-        assert_eq!(forget.w, 104.0);
+        assert_eq!(forget.w, 136.0);
         assert_eq!(forget.x, off.right() + 8.0);
         // The fourth row fits the panel height every page keeps.
         assert_eq!(general.panel, page(SettingsTab::Quality).panel);

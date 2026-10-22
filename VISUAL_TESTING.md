@@ -137,4 +137,10 @@ window between them as well.
 - [ ] Page Up and Page Down move a screenful through 500 rows (the pixels change); Shift extends the selection; Ctrl+Home and Ctrl+End go to the first and last row.
 - [ ] Delete on three rows says "3 files removed." with an Undo link; Undo (or Ctrl+Z) brings them back in place, selected. Delete on one row says only the count. A removed running row comes back idle.
 - [ ] With Narrator, a row reads as "photo.png. 64 by 48 photo. Suggested JPG… File size 9.3 KB. Folder files." and its buttons say their file ("Cancel photo.png"). In Help, Narrator doesn't read lines scrolled out of view.
-
+- [ ] The window never flashes white on start, in dark or in light, at any scale.
+- [ ] At the smallest window (480 x 360), in dark and light, Settings > General shows the three key buttons (Convert / SHIFT, Tools / CTRL, Actions / ALT) with nothing overlapping, and every label fits.
+- [ ] In a window much wider than 880 px the header, list and footer sit in one centred column; each row's Convert link is beside its name, and Settings and Help sit at the column's right end.
+- [ ] Muted text (second lines, the footer line, Settings labels) is readable on the panel and on a selected row in both themes; button outlines and the lines between rows are visible but quiet.
+- [ ] Captions are 13 px. The wheel's group names (Images, Video, ...) stay inside their slots, and Settings and Help fit at the smallest window.
+- [ ] Settings reads "Folder shown first when saving" and "Reset suggestions" (Narrator: "Reset learned suggestions"). The empty window has one instruction and the privacy line, no tagline; Help ends with "About Kiln".
+- [ ] Right-clicking a row offers Show in folder (the file, or its saved result) and Copy path; with several rows selected it offers Copy path only, and the clipboard holds one path per line.

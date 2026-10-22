@@ -34,12 +34,13 @@ Code asks for a role (`palette.accent`), never a raw token.
 |---|---|---|
 | kiln-soot | `#1C1B19` | window ground |
 | kiln-clay | `#2A2825` | panels and surfaces |
-| kiln-ash | `#3B3834` | borders, dividers, disabled fills |
+| kiln-ash | `#3B3834` | fills: progress track, chips, a hovered button |
+| kiln-flint | `#7C756B` | outlines of buttons and controls, panel borders, rules between rows |
 | kiln-bone | `#EDE6DA` | primary text |
-| kiln-stone | `#9A8F80` | secondary text and labels |
+| kiln-stone | `#A89E8F` | secondary text and labels |
 | kiln-celadon | `#7FB5A0` | the single accent |
 | kiln-brick-light | `#D99D93` | errors only, used sparingly |
-| kiln-stone-light | `#B3AB9F` | muted text on a selected or hovered row |
+| kiln-stone-light | `#C4BCB0` | muted text on a selected or hovered row |
 
 Light mode inverts the neutrals, keeps celadon for washes and fills, and
 deepens the colours that must read on its pale ground.
@@ -48,18 +49,21 @@ deepens the colours that must read on its pale ground.
 |---|---|
 | ground (bone ground) | `#F3EFE7` |
 | surface (slip) | `#E8E2D7` |
-| line (bisque) | `#D6CEC1` |
+| line (bisque), a fill | `#D6CEC1` |
+| edge (taupe), outlines and rules | `#837A6E` |
 | text (soot) | `#1C1B19` |
-| muted text (umber) | `#6B6257` |
-| muted text on a wash (umber deep) | `#645C52` |
+| muted text (umber) | `#5C5449` |
+| muted text on a wash (umber deep) | `#544C42` |
 | strong accent (celadon deep) | `#467966` |
 | errors (brick deep) | `#984335` |
 
 - The strong accent draws every celadon line that must be seen: the focus
   ring, a chosen segment's edge, a selected row's edge, progress and the
   suggestion dot. In dark it is celadon itself.
-- Every text pair reaches 4.5:1 and every one of those cues 3:1, in both
-  themes. `theme::contrast_report` lists each pair, and a test holds it.
+- Muted text reaches 5.5:1 on the panel and on a selected or hovered row,
+  all other text 4.5:1, and every cue and every button, panel and row outline
+  3:1, in both themes. The outlines have their own colour, apart from the
+  fills the same neutral serves. `theme::contrast_report` lists each pair, and a test holds it.
 - The theme follows the Windows app mode unless Settings says Dark or Light.
 - Under a Windows contrast theme Kiln draws in the theme's own colours
   (window, window text, highlight, highlight text, grey text, hot light).
@@ -75,10 +79,11 @@ test enforces this.
 | App name, wheel centre, dialog titles | Fraunces SemiBold (bundled, Latin subset, 32 KB, OFL) | 22 |
 | Empty-state headline | Segoe UI Variable, falling back to Segoe UI | 16 |
 | UI text | Segoe UI Variable, falling back to Segoe UI | 14 |
-| Captions, status, secondary lines | Segoe UI Variable, falling back to Segoe UI | 12 |
-| Format codes | Cascadia Mono, falling back to Consolas; uppercase, 0.06em tracking | 12 |
+| Captions, status, secondary lines | Segoe UI Variable, falling back to Segoe UI | 13 |
+| Format codes | Cascadia Mono, falling back to Consolas; uppercase, 0.06em tracking | 13 |
+| The wheel's group names | Segoe UI Variable, falling back to Segoe UI | 12 |
 
-- The scale is 12, 14, 16, 22 and 32. Use at most four sizes in any one view.
+- The scale is 12, 13, 14, 16, 22 and 32. Use at most four sizes in any one view. 12 is only the wheel's group names, which have to fit a ring band 64 DIPs wide.
 - The serif appears in exactly three places: the app name, the wheel's centre label and dialog titles.
 - Format codes (PNG, MP4, DOCX) always use the monospace style. This is a signature element, so use it wherever a format is shown.
 
@@ -87,8 +92,9 @@ test enforces this.
 - Everything sits on a 4 px grid.
   - Padding inside panels is always 16 px.
   - Rows are 56 px tall, controls 32 px, and the header 56 px.
+  - Content runs in a column at most 880 px wide, centred in a wider window, so a row's link is never far from its name. Below that width it fills the window.
 - Corners are 6 px on controls and 12 px on panels. The wheel is circular.
-- Borders are 1 px in kiln-ash and drawn inside their shape, so neighbours never double up. A segmented control has one outer border and hairline dividers.
+- Borders are 1 px in kiln-flint (taupe in light) and drawn inside their shape, so neighbours never double up. A segmented control has one outer border and hairline dividers.
 - The keyboard focus ring is a 1.5 px strong-celadon line drawn 3 px outside the control. In the list it sits 2 px inside the focused row. It shows after keyboard input, stays when Escape clears the selection, and hides after a click in the list until the next key.
 - A selected row has the celadon wash and a 1 px strong-celadon edge on its left.
 - Layout is in DIPs, and Direct2D scales it. The layout tests check the grid at several window sizes.
@@ -112,7 +118,7 @@ test enforces this.
 - **Pour.** The wheel opens over 160 ms, scaling from 55% to full size with opacity, like glaze spreading from the pointer.
 - **Items.** Items are segments clockwise from the top. Each shows its icon, then its label. Format codes are in monospace and tool names in UI text.
 - **Centre.** It shows the wheel's name in the serif, the key that opens it below in muted UI text, then the source type in muted monospace (PNG, or MIXED). The title reads `Convert · Shift`, broken across the two lines, and follows the wheel keys.
-- **Other ways in.** Right-clicking a row, the Menu key or Shift+F10 opens a native Windows menu: the wheels that have anything for the row, then Export… and Open or Show in folder, then Remove. Items that don't apply are left out. A wheel chosen there pours over the row.
+- **Other ways in.** Right-clicking a row, the Menu key or Shift+F10 opens a native Windows menu: the wheels that have anything for the row, then Export… and Open, Cancel or Retry as the row allows, Show in folder for one file (its saved result, or else the file itself) and Copy path for any number, then Remove. Items that don't apply are left out. A wheel chosen there pours over the row.
 - **Hover.** Hovering fills the segment with celadon at 18% and draws a 1.5 px celadon arc on its outer edge. The icon and label keep their colour.
 - **Escape.** Escape, or releasing the key mid-drag, fades the wheel out over 120 ms.
 - **Choosing.** Dropping on an item, clicking it or pressing Enter pulses it once over 180 ms. Then the job starts and the wheel fades.
@@ -149,7 +155,7 @@ test enforces this.
 - One panel with three tabs: **General**, **Quality** and **Helper apps**. The tabs are a segmented control. The chosen tab's fill slides to it over 160 ms, and the page crossfades over 120 ms. Every page keeps the panel's height, so switching never moves it.
 - Every stepper and segmented group has its own label. When two share a line, the second sits in its own labelled column.
 - Changes save straight away. There is no Apply button.
-- Labels say what they change: **Sound quality**, **Sharpness (DPI)**, **Keys to hold while dropping**. A label too long for its column wraps onto a second line, and every label fits at the smallest window.
+- Labels say what they change: **Sound quality**, **Sharpness (DPI)**, **Keys to hold while dropping**, **Folder shown first when saving** (where the save dialog opens). The suggestions row has **Reset suggestions**, spoken as "Reset learned suggestions". A label too long for its column wraps onto a second line, and every label fits at the smallest window.
 - On **Helper apps**, each app's name has a muted line under it saying what it's for, as in "E-books.". A missing app gets a **Get it** link that opens its official download page in the browser; if the browser can't open, the panel's note line says so. Kiln itself never downloads anything.
 
 ## The file list
@@ -201,7 +207,7 @@ test enforces this.
 
 ## Help and tooltips
 
-- A **?** button sits in the header beside Settings. It, or F1 anywhere but a panel or dialog, opens help over a scrim, drawn like the details dialog: the ways in (drop, Add files, paste, right-click, holding a key while dropping), how results wait until they're exported, and a table of every keyboard shortcut. The shortcuts follow the keys chosen in Settings.
+- A **?** button sits in the header beside Settings. It, or F1 anywhere but a panel or dialog, opens help over a scrim, drawn like the details dialog: the ways in (drop, Add files, paste, right-click, holding a key while dropping), how results wait until they're exported, a table of every keyboard shortcut and, last, **About Kiln**: what Kiln does, in a line, and that nothing is uploaded. The shortcuts follow the keys chosen in Settings.
 - The text scrolls with the wheel or touchpad, the arrows, Page Up, Page Down, Home and End. Focus sits on Close. Escape, Enter, a click outside or Close dismisses it.
 - Icon-only controls have native Windows tooltips: "Settings (Ctrl+,)", "Help (F1)", "Convert the selected files (Enter)", "Add files (Ctrl+O)", "Export all (Ctrl+Shift+S)", a row's "Cancel" and "Export (Ctrl+S)". There are none while a wheel, panel or dialog is up.
 
@@ -209,7 +215,7 @@ test enforces this.
 
 - Be short, calm and specific: "Converted 3 files to JPG.", not "Success! 🎉".
 - Never use exclamation marks.
-- Menus say "convert". "Fire" appears only in the onboarding tagline, "Fire raw files into finished ones."
+- Menus say "convert". "Fire" appears only in the tagline, "Fire raw files into finished ones.", at the end of Help; the empty window keeps one instruction.
 - Error messages name the problem and the next step: "Needs FFmpeg, which isn't installed. Settings > Helper apps says where to get it."
 - Say what happened, not how Kiln feels about it: "Moved 2 files to Pictures.", "Cancelled." A footer line that says something failed also says where the reason is: "Couldn't convert the file to FLAC. The row says why."
 - Never put a file path or a library's words on a row or in the footer; they belong in Show details.

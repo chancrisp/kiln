@@ -23,6 +23,8 @@ pub struct Text {
     pub heading: IDWriteTextFormat,
     pub caption: IDWriteTextFormat,
     pub caption_center: IDWriteTextFormat,
+    /// The wheel's group names, a size below the captions to fit the band.
+    pub ring_heading: IDWriteTextFormat,
     /// Captions that may take two lines, centred on their box's height.
     pub caption_wrap: IDWriteTextFormat,
     pub code: IDWriteTextFormat,
@@ -164,6 +166,7 @@ impl Text {
                 type_scale::CAPTION,
                 true,
             )?,
+            ring_heading: make(ui, None, DWRITE_FONT_WEIGHT_NORMAL, type_scale::SMALL, true)?,
             code: make(
                 mono,
                 None,

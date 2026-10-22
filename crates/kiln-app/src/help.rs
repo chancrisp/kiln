@@ -66,7 +66,7 @@ pub fn help_content(keys: &KeyMap, holding: bool) -> Vec<HelpSection> {
                 ),
                 line(
                     "Right-click",
-                    "Right-click a file in the list to convert it, use a tool on it or a file action.",
+                    "Right-click a file in the list to convert it, use a tool on it or a file action, show it in its folder or copy its path.",
                 ),
                 line(held(WheelKind::Convert), "Choose a format to convert to."),
                 line(held(WheelKind::Tools), "Choose a tool."),
@@ -147,6 +147,13 @@ pub fn help_content(keys: &KeyMap, holding: bool) -> Vec<HelpSection> {
                 line("Page Up, Page Down", "Scroll long text."),
                 line("Ctrl+C", "Copy the details."),
                 line("Escape", "Close the panel."),
+            ],
+        },
+        HelpSection {
+            title: "About Kiln",
+            lines: vec![
+                line("", crate::ways_in::TAGLINE),
+                line("", "Everything converts on this PC. Nothing is uploaded."),
             ],
         },
     ]
@@ -272,7 +279,8 @@ mod tests {
                 "Results",
                 "Keyboard shortcuts",
                 "In a wheel",
-                "In panels"
+                "In panels",
+                "About Kiln"
             ]
         );
         assert_eq!(

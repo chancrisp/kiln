@@ -818,7 +818,7 @@ impl Draw<'_> {
             let c = if hover { p.text } else { p.text_muted };
             self.icon(icon, b.x + 4.0, b.y + 4.0, 1.0, c, 1.0);
         }
-        self.hline(0.0, l.header.w, l.header.bottom() - 1.0, p.line, 1.0);
+        self.hline(0.0, l.header.w, l.header.bottom() - 1.0, p.edge, 1.0);
         Ok(())
     }
 
@@ -834,7 +834,7 @@ impl Draw<'_> {
                 effects::DROP_WASH * v.drag,
             );
         }
-        let edge = blend(p, p.line, p.accent_strong, v.drag);
+        let edge = blend(p, p.edge, p.accent_strong, v.drag);
         self.border(
             &panel,
             shape::RADIUS_PANEL,
@@ -844,8 +844,8 @@ impl Draw<'_> {
         );
 
         // The centred group: the headline, how else to add files, the
-        // button, what the status says, the keys to hold, the privacy note
-        // and, last, the tagline.
+        // button, what the status says, the keys to hold and, last, the
+        // privacy note.
         let e = layout::empty_state(&panel);
         let lines = v.empty;
         let vessel = blend(p, p.text_muted, p.accent, v.drag);
@@ -875,13 +875,6 @@ impl Draw<'_> {
         for (text, r) in [(lines.keys.as_str(), &e.keys), (lines.privacy, &e.privacy)] {
             self.label(text, &self.text.caption_center, r, p.text_muted, 1.0);
         }
-        self.label(
-            lines.tagline,
-            &self.text.body_center,
-            &e.tagline,
-            p.text_muted,
-            1.0,
-        );
         Ok(())
     }
 
@@ -931,7 +924,7 @@ impl Draw<'_> {
                 effects::DROP_WASH * v.drag,
             );
         }
-        let edge = blend(p, p.line, p.accent_strong, v.drag);
+        let edge = blend(p, p.edge, p.accent_strong, v.drag);
         self.border(
             &panel,
             shape::RADIUS_PANEL,
@@ -982,7 +975,7 @@ impl Draw<'_> {
             p.text_muted
         };
         if i > 0 {
-            self.hline(r.x, r.right(), r.y - 0.5, p.line, a);
+            self.hline(r.x, r.right(), r.y - 0.5, p.edge, a);
         }
 
         // Format chip: monospace, uppercase, tracked.
@@ -1260,7 +1253,7 @@ impl Draw<'_> {
             (true, _, true) => (p.accent, 2.0),
             (true, _, false) => (p.accent_strong, shape::BORDER),
             (false, true, true) => (p.text, shape::BORDER),
-            _ => (p.line, shape::BORDER),
+            _ => (p.edge, shape::BORDER),
         };
         self.border(b, shape::RADIUS_CONTROL, edge, 1.0, width);
     }
@@ -1367,7 +1360,7 @@ impl Draw<'_> {
             return;
         };
         let group = Rect::new(first.1.x, first.1.y, last.1.right() - first.1.x, first.1.h);
-        self.border(&group, shape::RADIUS_CONTROL, p.line, 1.0, shape::BORDER);
+        self.border(&group, shape::RADIUS_CONTROL, p.edge, 1.0, shape::BORDER);
         for (_, r) in &segs[1..] {
             unsafe {
                 self.rt.DrawLine(
@@ -1620,7 +1613,7 @@ impl Draw<'_> {
                         let r = Rect::new(name.0, name.1, name.2, name.3);
                         self.label(
                             slot.heading.unwrap_or_default(),
-                            &self.text.caption_center,
+                            &self.text.ring_heading,
                             &r,
                             p.text_muted,
                             1.0,
@@ -1734,7 +1727,7 @@ impl Draw<'_> {
         // A scrim, not a shadow: it quiets the window behind the dialog.
         self.scrim(w, h, 1.0, p);
         self.fill(&d.panel, shape::RADIUS_PANEL, p.surface, 1.0);
-        self.border(&d.panel, shape::RADIUS_PANEL, p.line, 1.0, shape::BORDER);
+        self.border(&d.panel, shape::RADIUS_PANEL, p.edge, 1.0, shape::BORDER);
         self.label(dv.title, &self.text.display, &d.title, p.text, 1.0);
 
         let body = d.body;
@@ -1788,7 +1781,7 @@ impl Draw<'_> {
         let d = layout::help(w, h);
         self.scrim(w, h, 1.0, p);
         self.fill(&d.panel, shape::RADIUS_PANEL, p.surface, 1.0);
-        self.border(&d.panel, shape::RADIUS_PANEL, p.line, 1.0, shape::BORDER);
+        self.border(&d.panel, shape::RADIUS_PANEL, p.edge, 1.0, shape::BORDER);
         self.label(help::TITLE, &self.text.display, &d.title, p.text, 1.0);
 
         let body = d.body;
@@ -1831,7 +1824,7 @@ impl Draw<'_> {
         let l = sv.layout;
         self.scrim(w, h, 1.0, p);
         self.fill(&l.panel, shape::RADIUS_PANEL, p.surface, 1.0);
-        self.border(&l.panel, shape::RADIUS_PANEL, p.line, 1.0, shape::BORDER);
+        self.border(&l.panel, shape::RADIUS_PANEL, p.edge, 1.0, shape::BORDER);
         self.label("Settings", &self.text.display, &l.title, p.text, 1.0);
         self.tabs(sv, p);
         // A new page fades in where the last one was.
@@ -1983,14 +1976,14 @@ impl Draw<'_> {
                     Some(chosen)
                 }
                 Control::ForgetPicks if sv.has_habits => {
-                    self.button("Forget picks", r, hover, pressed, p);
+                    self.button("Reset suggestions", r, hover, pressed, p);
                     None
                 }
                 Control::ForgetPicks => {
                     // Disabled: the label goes muted, with no hover or press;
                     // under a contrast theme, the theme's grey text.
                     self.button_face(r, false, false, false, p);
-                    let text = "Forget picks";
+                    let text = "Reset suggestions";
                     let c = if p.high_contrast {
                         p.line
                     } else {
@@ -2011,12 +2004,24 @@ impl Draw<'_> {
                 }
                 Control::Key(wheel) => {
                     self.button_face(r, hover, pressed, false, p);
-                    let name = Rect::new(r.x + 12.0, r.y, r.w - 12.0, r.h);
-                    self.label(wheel.title(), &self.text.body, &name, p.text, 1.0);
                     let code = sv.keys.key_for(*wheel).code();
                     let (_, cw) = self.text.code_layout(code, r.w, r.h)?;
-                    let cr = Rect::new(r.right() - 12.0 - cw.ceil(), r.y, cw.ceil(), r.h);
-                    self.code(code, &cr, p.text_muted, 1.0)?;
+                    let label_w = self.text.measure(wheel.title(), &self.text.body);
+                    if r.w >= 12.0 + label_w + 8.0 + cw.ceil() + 12.0 {
+                        // The name on the left, the key on the right.
+                        let name = Rect::new(r.x + 12.0, r.y, r.w - 12.0, r.h);
+                        self.label(wheel.title(), &self.text.body, &name, p.text, 1.0);
+                        let cr = Rect::new(r.right() - 12.0 - cw.ceil(), r.y, cw.ceil(), r.h);
+                        self.code(code, &cr, p.text_muted, 1.0)?;
+                    } else {
+                        // Too narrow for both side by side, as at the
+                        // smallest window: one above the other, so the
+                        // two never overlap.
+                        let name = Rect::new(r.x + 12.0, r.y + 1.0, (r.w - 24.0).max(0.0), 16.0);
+                        self.label(wheel.title(), &self.text.caption, &name, p.text, 1.0);
+                        let cr = Rect::new(r.x + 12.0, r.y + 15.0, (r.w - 24.0).max(0.0), 16.0);
+                        self.code(code, &cr, p.text_muted, 1.0)?;
+                    }
                     None
                 }
                 Control::Tab(_) | Control::CheckUpdates | Control::Close => continue,
@@ -2056,7 +2061,7 @@ impl Draw<'_> {
             self.set_base(scale_at(1.0, 0.0, rise));
             let l = sv.layout;
             self.fill(&l.panel, shape::RADIUS_PANEL, p.surface, 1.0);
-            self.border(&l.panel, shape::RADIUS_PANEL, p.line, 1.0, shape::BORDER);
+            self.border(&l.panel, shape::RADIUS_PANEL, p.edge, 1.0, shape::BORDER);
             self.label(sv.title, &self.text.display, &l.title, p.text, 1.0);
             self.label(sv.target, &self.text.caption, &l.target, p.text_muted, 1.0);
             self.label(

@@ -64,7 +64,10 @@ pub enum MenuItem {
     /// Save one held result under a name of its own.
     ExportAs,
     Open,
+    /// Opens Explorer on a saved result, or else on the file's own folder.
     ShowInFolder,
+    /// Puts the selected files' paths on the clipboard.
+    CopyPath,
     /// Cancels a running job and keeps its row.
     Stop,
     /// Starts the same job again on a cancelled or failed row.
@@ -98,6 +101,7 @@ impl MenuItem {
             MenuItem::ExportAs => ("Export as…", String::new()),
             MenuItem::Open => ("Open", String::new()),
             MenuItem::ShowInFolder => ("Show in folder", String::new()),
+            MenuItem::CopyPath => ("Copy path", String::new()),
             MenuItem::Stop => ("Cancel", String::new()),
             MenuItem::Retry => ("Retry", String::new()),
             MenuItem::Remove => ("Remove", "Delete".to_owned()),
@@ -120,8 +124,8 @@ impl MenuItem {
 /// The menu for the rows `selection` (one state per selected row), given
 /// the wheels that have anything for them. Items that don't apply are
 /// left out, never greyed: the wheels, then Export and Open for a held
-/// result, Show in folder for a saved one, Cancel for a running one or
-/// Retry for a cancelled or failed one, then
+/// result, Cancel for a running one or Retry for a cancelled or failed
+/// one, Show in folder for one row and Copy path for any, then
 /// Remove, with a separator between groups that are there. Empty without a
 /// selection.
 pub fn menu_items(selection: &[RowState], wheels: &[WheelKind]) -> Vec<MenuItem> {
@@ -142,15 +146,18 @@ pub fn menu_items(selection: &[RowState], wheels: &[WheelKind]) -> Vec<MenuItem>
         results.push(MenuItem::ExportAs);
         results.push(MenuItem::Open);
     }
-    if one(RowState::Saved) {
-        results.push(MenuItem::ShowInFolder);
-    }
     if selection.contains(&RowState::Running) {
         results.push(MenuItem::Stop);
     }
     if one(RowState::Retryable) {
         results.push(MenuItem::Retry);
     }
+    // Where the file is, for any selection: Show in folder for one row (its
+    // saved result, if it has one), Copy path for any number.
+    if selection.len() == 1 {
+        results.push(MenuItem::ShowInFolder);
+    }
+    results.push(MenuItem::CopyPath);
     let mut items = vec![];
     for group in [open, results, vec![MenuItem::Remove]] {
         if group.is_empty() {
@@ -273,9 +280,10 @@ pub struct EmptyLines {
     /// Which keys to hold while dropping, as they are set now.
     pub keys: String,
     pub privacy: &'static str,
-    /// Last, and muted.
-    pub tagline: &'static str,
 }
+
+/// What Kiln does, in one line: the last thing Help says.
+pub const TAGLINE: &str = "Fire raw files into finished ones.";
 
 pub fn empty_lines(settings: &Settings) -> EmptyLines {
     EmptyLines {
@@ -284,7 +292,6 @@ pub fn empty_lines(settings: &Settings) -> EmptyLines {
         button: ADD_FILES,
         keys: settings.keys.hint(),
         privacy: "Everything converts on this PC. Nothing is uploaded.",
-        tagline: "Fire raw files into finished ones.",
     }
 }
 
@@ -323,6 +330,9 @@ mod tests {
                 Wheel(Tools),
                 Wheel(Actions),
                 Separator,
+                ShowInFolder,
+                CopyPath,
+                Separator,
                 Remove
             ]
         );
@@ -332,9 +342,20 @@ mod tests {
     fn a_wheel_with_nothing_for_the_row_is_left_out() {
         assert_eq!(
             menu_items(&[Plain], &[Actions, Convert]),
-            [Wheel(Convert), Wheel(Actions), Separator, Remove]
+            [
+                Wheel(Convert),
+                Wheel(Actions),
+                Separator,
+                ShowInFolder,
+                CopyPath,
+                Separator,
+                Remove
+            ]
         );
-        assert_eq!(menu_items(&[Plain], &[]), [Remove]);
+        assert_eq!(
+            menu_items(&[Plain], &[]),
+            [ShowInFolder, CopyPath, Separator, Remove]
+        );
     }
 
     #[test]
@@ -348,6 +369,8 @@ mod tests {
                 Export,
                 ExportAs,
                 Open,
+                ShowInFolder,
+                CopyPath,
                 Separator,
                 Remove
             ]
@@ -358,38 +381,93 @@ mod tests {
     fn a_saved_row_offers_show_in_folder() {
         assert_eq!(
             menu_items(&[Saved], &[Actions]),
-            [Wheel(Actions), Separator, ShowInFolder, Separator, Remove]
+            [
+                Wheel(Actions),
+                Separator,
+                ShowInFolder,
+                CopyPath,
+                Separator,
+                Remove
+            ]
         );
-        assert_eq!(menu_items(&[Saved], &[]), [ShowInFolder, Separator, Remove]);
+        assert_eq!(
+            menu_items(&[Saved], &[]),
+            [ShowInFolder, CopyPath, Separator, Remove]
+        );
+    }
+
+    #[test]
+    fn any_file_can_be_shown_or_have_its_path_copied() {
+        // One row of any state: Show in folder and Copy path.
+        for state in [Plain, Held, Saved, Retryable, Running] {
+            let items = menu_items(&[state], &[]);
+            assert!(items.contains(&ShowInFolder), "{state:?}");
+            assert!(items.contains(&CopyPath), "{state:?}");
+        }
+        // Several rows: only Copy path, which takes every path.
+        let items = menu_items(&[Plain, Plain], &[]);
+        assert_eq!(items, [CopyPath, Separator, Remove]);
     }
 
     #[test]
     fn several_rows_export_together_but_open_one_at_a_time() {
         assert_eq!(
             menu_items(&[Held, Plain], &[Convert]),
-            [Wheel(Convert), Separator, Export, Separator, Remove]
+            [
+                Wheel(Convert),
+                Separator,
+                Export,
+                CopyPath,
+                Separator,
+                Remove
+            ]
         );
-        assert_eq!(menu_items(&[Saved, Saved], &[]), [Remove]);
+        assert_eq!(
+            menu_items(&[Saved, Saved], &[]),
+            [CopyPath, Separator, Remove]
+        );
         assert!(menu_items(&[], &ALL).is_empty());
         // A cancelled row, or one that stopped, offers Retry; two rows don't.
         assert_eq!(
             menu_items(&[Retryable], &[Convert]),
-            [Wheel(Convert), Separator, Retry, Separator, Remove]
+            [
+                Wheel(Convert),
+                Separator,
+                Retry,
+                ShowInFolder,
+                CopyPath,
+                Separator,
+                Remove
+            ]
         );
-        assert_eq!(menu_items(&[Retryable, Retryable], &[]), [Remove]);
+        assert_eq!(
+            menu_items(&[Retryable, Retryable], &[]),
+            [CopyPath, Separator, Remove]
+        );
     }
 
     #[test]
     fn a_running_row_offers_stop_above_remove() {
         assert_eq!(
             menu_items(&[Running], &[Actions]),
-            [Wheel(Actions), Separator, Stop, Separator, Remove]
+            [
+                Wheel(Actions),
+                Separator,
+                Stop,
+                ShowInFolder,
+                CopyPath,
+                Separator,
+                Remove
+            ]
         );
-        assert_eq!(menu_items(&[Running], &[]), [Stop, Separator, Remove]);
+        assert_eq!(
+            menu_items(&[Running], &[]),
+            [Stop, ShowInFolder, CopyPath, Separator, Remove]
+        );
         // Any running row in the selection can be stopped.
         assert_eq!(
             menu_items(&[Held, Running], &[]),
-            [Export, Stop, Separator, Remove]
+            [Export, Stop, CopyPath, Separator, Remove]
         );
     }
 
@@ -567,7 +645,6 @@ mod tests {
             l.keys,
             "Hold Shift while dropping to convert, Ctrl for tools, or Alt for file actions."
         );
-        assert_eq!(l.tagline, "Fire raw files into finished ones.");
         settings.keys.assign(Convert, Modifier::Alt);
         assert_eq!(
             empty_lines(&settings).keys,

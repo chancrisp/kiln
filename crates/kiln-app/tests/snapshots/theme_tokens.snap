@@ -3,50 +3,54 @@ kiln-soot = #1C1B19
 kiln-clay = #2A2825
 kiln-ash = #3B3834
 kiln-bone = #EDE6DA
-kiln-stone = #9A8F80
+kiln-stone = #A89E8F
 kiln-celadon = #7FB5A0
 kiln-brick-light = #D99D93
-kiln-stone-light = #B3AB9F
+kiln-stone-light = #C4BCB0
 kiln-bone-ground = #F3EFE7
 kiln-slip = #E8E2D7
 kiln-bisque = #D6CEC1
-kiln-umber = #6B6257
+kiln-umber = #5C5449
 kiln-celadon-deep = #467966
 kiln-brick-deep = #984335
-kiln-umber-deep = #645C52
+kiln-umber-deep = #544C42
+kiln-flint = #7C756B
+kiln-taupe = #837A6E
 
 [palette.dark]
 ground = #1C1B19
 surface = #2A2825
 line = #3B3834
+edge = #7C756B
 text = #EDE6DA
-text_muted = #9A8F80
-muted_on_wash = #B3AB9F
+text_muted = #A89E8F
+muted_on_wash = #C4BCB0
 accent = #7FB5A0
 accent_strong = #7FB5A0
 on_accent = #1C1B19
 crack = #D99D93
 grain_light = #EDE6DA
 grain_dark = #1C1B19
-link = #9A8F80
+link = #A89E8F
 
 [palette.light]
 ground = #F3EFE7
 surface = #E8E2D7
 line = #D6CEC1
+edge = #837A6E
 text = #1C1B19
-text_muted = #6B6257
-muted_on_wash = #645C52
+text_muted = #5C5449
+muted_on_wash = #544C42
 accent = #7FB5A0
 accent_strong = #467966
 on_accent = #1C1B19
 crack = #984335
 grain_light = #F3EFE7
-grain_dark = #6B6257
-link = #6B6257
+grain_dark = #5C5449
+link = #5C5449
 
 [type]
-scale = [12.0, 14.0, 16.0, 22.0, 32.0]
+scale = [12.0, 13.0, 14.0, 16.0, 22.0, 32.0]
 code_tracking_em = 0.06
 display = "Fraunces 72pt SuperSoft SemiBold"
 ui = ["Segoe UI Variable Text", "Segoe UI"]

@@ -38,19 +38,22 @@ pub mod tokens {
     pub const CLAY: Rgb = Rgb::hex(0x2A2825);
     pub const ASH: Rgb = Rgb::hex(0x3B3834);
     pub const BONE: Rgb = Rgb::hex(0xEDE6DA);
-    pub const STONE: Rgb = Rgb::hex(0x9A8F80);
+    pub const STONE: Rgb = Rgb::hex(0xA89E8F);
     pub const CELADON: Rgb = Rgb::hex(0x7FB5A0);
     /// Brick lightened, same hue, so errors read on dark surfaces and on
     /// a selected row (4.5:1). The original brick, #B5503F, gave 2.1:1.
     pub const BRICK_LIGHT: Rgb = Rgb::hex(0xD99D93);
     /// Stone lightened, same hue: muted text on a selected or hovered row.
-    pub const STONE_LIGHT: Rgb = Rgb::hex(0xB3AB9F);
+    pub const STONE_LIGHT: Rgb = Rgb::hex(0xC4BCB0);
+    /// Ash lightened, same hue: the outline of a button or control and the
+    /// rule between rows, 3:1 against the panel.
+    pub const FLINT: Rgb = Rgb::hex(0x7C756B);
 
     // Light mode inverts the neutrals.
     pub const BONE_GROUND: Rgb = Rgb::hex(0xF3EFE7);
     pub const SLIP: Rgb = Rgb::hex(0xE8E2D7);
     pub const BISQUE: Rgb = Rgb::hex(0xD6CEC1);
-    pub const UMBER: Rgb = Rgb::hex(0x6B6257);
+    pub const UMBER: Rgb = Rgb::hex(0x5C5449);
     /// Celadon darkened, same hue: on light surfaces the accent that marks
     /// something by itself (focus, chosen edges, the dot, progress) needs
     /// 3:1, which the shared celadon can't give.
@@ -58,7 +61,9 @@ pub mod tokens {
     /// Brick darkened, same hue, for errors on light surfaces.
     pub const BRICK_DEEP: Rgb = Rgb::hex(0x984335);
     /// Umber darkened, same hue: muted text on a selected or hovered row.
-    pub const UMBER_DEEP: Rgb = Rgb::hex(0x645C52);
+    pub const UMBER_DEEP: Rgb = Rgb::hex(0x544C42);
+    /// Bisque darkened, same hue: the same outline on the light panel.
+    pub const TAUPE: Rgb = Rgb::hex(0x837A6E);
 }
 
 /// What each colour is for. Code asks for roles, never raw tokens.
@@ -69,8 +74,11 @@ pub struct Palette {
     pub ground: Rgb,
     /// Panels and surfaces.
     pub surface: Rgb,
-    /// Borders, dividers, disabled fills.
+    /// Fills: the track of a progress line, a chip, a hovered button.
     pub line: Rgb,
+    /// Outlines of buttons and controls, panel borders and the rules
+    /// between rows: at least 3:1 against the panel.
+    pub edge: Rgb,
     pub text: Rgb,
     pub text_muted: Rgb,
     /// Muted text on a selected or hovered row, whose wash sits between
@@ -103,6 +111,7 @@ pub const DARK: Palette = Palette {
     ground: tokens::SOOT,
     surface: tokens::CLAY,
     line: tokens::ASH,
+    edge: tokens::FLINT,
     text: tokens::BONE,
     text_muted: tokens::STONE,
     muted_on_wash: tokens::STONE_LIGHT,
@@ -121,6 +130,7 @@ pub const LIGHT: Palette = Palette {
     ground: tokens::BONE_GROUND,
     surface: tokens::SLIP,
     line: tokens::BISQUE,
+    edge: tokens::TAUPE,
     text: tokens::SOOT,
     text_muted: tokens::UMBER,
     muted_on_wash: tokens::UMBER_DEEP,
@@ -155,6 +165,7 @@ pub fn theme_from_system(c: SysColors) -> Palette {
         ground: c.window,
         surface: c.window,
         line: c.gray_text,
+        edge: c.gray_text,
         text: c.window_text,
         text_muted: c.window_text,
         muted_on_wash: c.window_text,
@@ -202,6 +213,8 @@ pub fn contrast(a: Rgb, b: Rgb) -> f32 {
 
 /// What a pair must reach: 4.5:1 for text, 3:1 for a cue that isn't text.
 pub const TEXT: Option<f32> = Some(4.5);
+/// Muted text is small and quiet, so it gets more than the minimum.
+pub const MUTED: Option<f32> = Some(5.5);
 pub const NON_TEXT: Option<f32> = Some(3.0);
 
 /// One measured pair: what it is, foreground, background (composited
@@ -233,20 +246,25 @@ pub fn contrast_report(p: &Palette) -> Vec<ContrastPair> {
     let pairs: Vec<(&'static str, Rgb, Rgb, Option<f32>)> = vec![
         ("Body text: file name, row label", p.text, s, TEXT),
         ("Body text on selected row", p.text, wash, TEXT),
-        ("Muted second line (12 px caption)", muted, s, TEXT),
-        ("Muted second line on selected row", mow, wash, TEXT),
-        ("Muted second line on hovered row", mow, hover, TEXT),
-        ("Empty-state tagline and hint (muted)", muted, s, TEXT),
-        ("Footer status line (muted, 12 px)", muted, g, TEXT),
+        ("Muted second line (13 px caption)", muted, s, MUTED),
+        ("Muted second line on selected row", mow, wash, MUTED),
+        ("Muted second line on hovered row", mow, hover, MUTED),
+        ("Empty-state hint (muted)", muted, s, MUTED),
+        ("Footer status line (muted, 13 px)", muted, g, MUTED),
         ("Header wordmark (text)", p.text, g, TEXT),
         ("Format chip code (text on line fill)", p.text, p.line, TEXT),
         ("Wheel labels and icons (text on dish)", p.text, s, TEXT),
         ("Wheel label on lit segment", p.text, wash, TEXT),
         ("Wheel label at pulse peak", p.text, pulse, TEXT),
-        ("Wheel centre source line (muted on ground)", muted, g, TEXT),
+        (
+            "Wheel centre source line (muted on ground)",
+            muted,
+            g,
+            MUTED,
+        ),
         ("Outer-ring group icon (muted)", muted, s, NON_TEXT),
-        ("Settings row labels (muted)", muted, s, TEXT),
-        ("Unselected tab label (muted)", muted, s, TEXT),
+        ("Settings row labels (muted)", muted, s, MUTED),
+        ("Unselected tab label (muted)", muted, s, MUTED),
         ("Tab label, hovered", p.text, p.line, TEXT),
         ("Selected tab or segment label", p.text, wash, TEXT),
         ("Button label (Clear, Close, Choose)", p.text, s, TEXT),
@@ -264,12 +282,12 @@ pub fn contrast_report(p: &Palette) -> Vec<ContrastPair> {
             primary_hover,
             TEXT,
         ),
-        ("Error line (crack red, 12 px)", p.crack, s, TEXT),
+        ("Error line (crack red, 13 px)", p.crack, s, TEXT),
         ("Error line on selected row", p.crack, wash, TEXT),
         ("Error line on hovered row", p.crack, hover, TEXT),
-        ("\"Show details\" link (muted, 12 px)", p.link, s, TEXT),
-        ("\"Show details\" link on selected row", mow, wash, TEXT),
-        ("Details dialog engine output (muted mono)", muted, s, TEXT),
+        ("\"Show details\" link (muted, 13 px)", p.link, s, MUTED),
+        ("\"Show details\" link on selected row", mow, wash, MUTED),
+        ("Details dialog engine output (muted mono)", muted, s, MUTED),
         ("Gear icon (muted on header ground)", muted, g, NON_TEXT),
         ("Cancel × (muted on row)", muted, s, NON_TEXT),
         ("Cancel × on selected row", mow, wash, NON_TEXT),
@@ -351,11 +369,18 @@ pub fn contrast_report(p: &Palette) -> Vec<ContrastPair> {
             NON_TEXT,
         ),
         (
-            "Button and control border (line) vs surface (advisory: labels identify buttons)",
-            p.line,
+            "Button and control border (edge) vs surface",
+            p.edge,
             s,
-            None,
+            NON_TEXT,
         ),
+        (
+            "Button and control border (edge) vs ground",
+            p.edge,
+            g,
+            NON_TEXT,
+        ),
+        ("Rule between rows (edge) vs surface", p.edge, s, NON_TEXT),
         ("Link underline (muted 80%)", underline, s, NON_TEXT),
         ("Scroll thumb (muted 80%)", thumb, s, NON_TEXT),
     ];
@@ -367,12 +392,14 @@ pub fn contrast_report(p: &Palette) -> Vec<ContrastPair> {
 
 /// Type scale in DIPs. A single view uses at most four of these.
 pub mod type_scale {
-    pub const CAPTION: f32 = 12.0;
+    /// The wheel's group names, in a ring band 64 DIPs wide.
+    pub const SMALL: f32 = 12.0;
+    pub const CAPTION: f32 = 13.0;
     pub const BODY: f32 = 14.0;
     pub const LEAD: f32 = 16.0;
     pub const TITLE: f32 = 22.0;
     pub const DISPLAY: f32 = 32.0;
-    pub const ALL: [f32; 5] = [CAPTION, BODY, LEAD, TITLE, DISPLAY];
+    pub const ALL: [f32; 6] = [SMALL, CAPTION, BODY, LEAD, TITLE, DISPLAY];
 
     /// Letter spacing for format codes, as a fraction of the font size.
     pub const CODE_TRACKING_EM: f32 = 0.06;
@@ -549,6 +576,8 @@ pub fn describe() -> String {
         ("kiln-celadon-deep", tokens::CELADON_DEEP),
         ("kiln-brick-deep", tokens::BRICK_DEEP),
         ("kiln-umber-deep", tokens::UMBER_DEEP),
+        ("kiln-flint", tokens::FLINT),
+        ("kiln-taupe", tokens::TAUPE),
     ];
     s.push_str("[tokens]\n");
     for (name, c) in tok {
@@ -560,6 +589,7 @@ pub fn describe() -> String {
             ("ground", p.ground),
             ("surface", p.surface),
             ("line", p.line),
+            ("edge", p.edge),
             ("text", p.text),
             ("text_muted", p.text_muted),
             ("muted_on_wash", p.muted_on_wash),
@@ -649,6 +679,7 @@ mod tests {
                 p.ground,
                 p.surface,
                 p.line,
+                p.edge,
                 p.text,
                 p.text_muted,
                 p.muted_on_wash,
@@ -722,6 +753,8 @@ mod tests {
             (Rgb::hex(0xB5503F), tokens::BRICK_DEEP),
             (tokens::STONE, tokens::STONE_LIGHT),
             (tokens::UMBER, tokens::UMBER_DEEP),
+            (tokens::ASH, tokens::FLINT),
+            (tokens::BISQUE, tokens::TAUPE),
         ] {
             let (h0, _) = hue_sat(from);
             let (h1, _) = hue_sat(to);
@@ -745,7 +778,9 @@ mod tests {
         // Pairs the Phase 1 audit measured, before this change.
         let close = |a: f32, b: f32| (a - b).abs() < 0.01;
         assert!(close(contrast(tokens::BONE, tokens::CLAY), 11.85));
-        assert!(close(contrast(tokens::STONE, tokens::CLAY), 4.63));
+        // Stone as the audit had it (#9A8F80); ticket 07 lightened it.
+        assert!(close(contrast(Rgb::hex(0x9A8F80), tokens::CLAY), 4.63));
+        assert!(contrast(tokens::STONE, tokens::CLAY) >= 5.5);
         assert!(close(contrast(tokens::CELADON, tokens::SLIP), 1.81));
         // The selected row's wash, composited as Direct2D draws it.
         assert_eq!(
@@ -796,7 +831,7 @@ mod tests {
         for failed in [
             "Muted second line on selected row",
             "Muted second line on hovered row",
-            "Error line (crack red, 12 px)",
+            "Error line (crack red, 13 px)",
             "Error line on selected row",
             "\"Show details\" link on selected row",
             "Focus ring (accent, 1.5 DIP) vs panel",
@@ -884,7 +919,7 @@ mod tests {
         for p in [DARK, LIGHT] {
             for bg in [p.ground, p.surface] {
                 assert!(contrast(p.text, bg) >= 7.0, "{} text", p.name);
-                assert!(contrast(p.text_muted, bg) >= 4.5, "{} muted text", p.name);
+                assert!(contrast(p.text_muted, bg) >= 5.5, "{} muted text", p.name);
             }
             assert!(
                 contrast(p.on_accent, p.accent) >= 4.5,

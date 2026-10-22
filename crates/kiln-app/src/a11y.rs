@@ -754,7 +754,6 @@ fn main(input: &Input) -> Vec<Node> {
             text(Id::DropLine(1), input.empty_status, e.status),
             text(Id::DropLine(2), &lines.keys, e.keys),
             text(Id::DropLine(3), lines.privacy, e.privacy),
-            text(Id::DropLine(4), lines.tagline, e.tagline),
         ];
         out.push(
             Node::new(Id::DropPanel, Role::Group, lines.headline, l.panel)
@@ -1049,7 +1048,7 @@ fn settings(s: &SettingsIn) -> Node {
             )
             .selected(on == s.autosave),
             Control::ForgetPicks => {
-                let mut n = Node::new(Id::Setting(c), Role::Button, "Forget picks", r);
+                let mut n = Node::new(Id::Setting(c), Role::Button, "Reset learned suggestions", r);
                 n.states.disabled = !s.has_habits;
                 n
             }
@@ -1813,7 +1812,7 @@ mod tests {
         assert!(tabs.children[0].states.selected && tabs.children[0].states.focused);
         assert!(tabs.children[0].patterns().selection_item);
 
-        let output = named(dialog, Role::Group, "Start exports in");
+        let output = named(dialog, Role::Group, "Folder shown first when saving");
         assert!(output.help.is_some());
         named(output, Role::Text, "Next to each file");
         named(output, Role::Button, "Choose");
@@ -1827,7 +1826,7 @@ mod tests {
         let suggestions = named(dialog, Role::Group, "Suggestions");
         assert!(named(suggestions, Role::RadioButton, "On").states.selected);
         assert!(
-            named(suggestions, Role::Button, "Forget picks")
+            named(suggestions, Role::Button, "Reset learned suggestions")
                 .states
                 .disabled
         );
