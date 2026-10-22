@@ -343,6 +343,32 @@ pub fn add_files_button(clear: &Rect, export_all: bool) -> Rect {
     )
 }
 
+/// How many rows a Page Up or Page Down moves in a list `panel_h` tall:
+/// a screenful less one, so the row last seen is still in view.
+pub fn rows_per_page(panel_h: f32) -> isize {
+    ((panel_h / ROW_HEIGHT).floor() as isize - 1).max(1)
+}
+
+/// Width of the footer's "Undo" link, after rows were removed.
+pub const UNDO_WIDTH: f32 = 48.0;
+
+/// The status area is wide enough for the Undo link beside its text.
+const UNDO_MIN_STATUS: f32 = 220.0;
+
+/// Where the "Undo" link sits: at the right end of the footer's status
+/// line, 24 DIPs tall. `None` when the status is too narrow to hold it
+/// beside the words (Ctrl+Z still undoes).
+pub fn undo_link(status: &Rect) -> Option<Rect> {
+    (status.w >= UNDO_MIN_STATUS).then(|| {
+        Rect::new(
+            status.right() - UNDO_WIDTH,
+            status.y + (status.h - LINK_HIT) / 2.0,
+            UNDO_WIDTH,
+            LINK_HIT,
+        )
+    })
+}
+
 /// Width of the footer's Convert button.
 pub const FOOTER_CONVERT_WIDTH: f32 = 80.0;
 
@@ -742,6 +768,42 @@ pub struct SettingsShape {
     pub engine_custom: [bool; 4],
     /// Engines Kiln can't find anywhere, which get a Get it link.
     pub engine_missing: [bool; 4],
+}
+
+/// Where Tab, or Shift+Tab with `back`, goes in a settings panel from
+/// control `from`: the next enabled control, but with the page tabs as one
+/// stop. Tab leaves the strip for the first control after it, and coming
+/// back into it lands on the page that is showing (`selected`); the arrow
+/// keys move between the tabs themselves. `None` when nothing is enabled.
+pub fn settings_tab_stop(
+    controls: &[Control],
+    enabled: &[bool],
+    selected: SettingsTab,
+    from: Option<usize>,
+    back: bool,
+) -> Option<usize> {
+    let n = controls.len();
+    let on_tabs = from.is_some_and(|i| matches!(controls[i], Control::Tab(_)));
+    let mut f = from;
+    for _ in 0..n {
+        f = crate::wheel::step(f, if back { -1 } else { 1 }, n);
+        let i = f?;
+        if !enabled[i] {
+            continue;
+        }
+        match controls[i] {
+            // Still in the strip: it is one stop.
+            Control::Tab(_) if on_tabs => continue,
+            Control::Tab(_) => {
+                return controls
+                    .iter()
+                    .position(|c| *c == Control::Tab(selected))
+                    .or(f)
+            }
+            _ => return f,
+        }
+    }
+    from
 }
 
 /// The control Settings opens with the keyboard focus on: its first tab,
@@ -1964,6 +2026,67 @@ mod tests {
             assert!((mid - (panel.x + panel.w / 2.0)).abs() <= GRID);
             assert_eq!(e.button.h, BUTTON_HEIGHT);
         }
+    }
+
+    #[test]
+    fn the_settings_tab_strip_is_one_tab_stop() {
+        let s = settings(480.0, 360.0, SettingsShape::default());
+        let controls: Vec<Control> = s.controls.iter().map(|(c, _)| *c).collect();
+        let on = vec![true; controls.len()];
+        let tabs: Vec<usize> = (0..controls.len())
+            .filter(|&i| matches!(controls[i], Control::Tab(_)))
+            .collect();
+        assert_eq!(tabs.len(), 3);
+        let first_after = tabs[2] + 1;
+        // Tab from any tab leaves the strip; Shift+Tab from the first
+        // control after it lands on the page showing, not the last tab.
+        for &t in &tabs {
+            assert_eq!(
+                settings_tab_stop(&controls, &on, SettingsTab::Quality, Some(t), false),
+                Some(first_after)
+            );
+        }
+        assert_eq!(
+            settings_tab_stop(
+                &controls,
+                &on,
+                SettingsTab::Quality,
+                Some(first_after),
+                true
+            ),
+            Some(tabs[1])
+        );
+        // Going round from the last control reaches the strip once.
+        assert_eq!(
+            settings_tab_stop(
+                &controls,
+                &on,
+                SettingsTab::General,
+                Some(controls.len() - 1),
+                false
+            ),
+            Some(tabs[0])
+        );
+        // Disabled controls are passed over.
+        let mut some_off = on.clone();
+        some_off[first_after] = false;
+        assert_eq!(
+            settings_tab_stop(
+                &controls,
+                &some_off,
+                SettingsTab::General,
+                Some(tabs[0]),
+                false
+            ),
+            Some(first_after + 1)
+        );
+    }
+
+    #[test]
+    fn a_page_of_the_list_is_a_screenful_less_one() {
+        assert_eq!(rows_per_page(ROW_HEIGHT * 8.0), 7);
+        assert_eq!(rows_per_page(ROW_HEIGHT * 1.0), 1);
+        assert_eq!(rows_per_page(0.0), 1);
     }
 
     #[test]

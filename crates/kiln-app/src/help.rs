@@ -105,6 +105,7 @@ pub fn help_content(keys: &KeyMap, holding: bool) -> Vec<HelpSection> {
                 line("Up, Down, Home, End", "Move through the files."),
                 line("Shift+Up, Shift+Down", "Select more files."),
                 line("Shift+Home, Shift+End", "Select to the first or last file."),
+                line("Page Up, Page Down", "Move a screenful at a time."),
                 line("Ctrl+A", "Select every file."),
                 line("Escape", "Clear the selection."),
                 line(
@@ -115,6 +116,7 @@ pub fn help_content(keys: &KeyMap, holding: bool) -> Vec<HelpSection> {
                     "Delete or Backspace",
                     "Remove the selected files from the list.",
                 ),
+                line("Ctrl+Z", "Bring back files you just removed."),
                 line(
                     "Tab, Shift+Tab",
                     "Move between the list and the buttons. Enter or Space presses a button.",
@@ -206,10 +208,50 @@ pub fn place<'a>(
     (out, y)
 }
 
+/// Where each line of help sits, as (section, line, rectangle in the
+/// body before scrolling), for telling assistive tools which lines show.
+pub fn line_places(
+    sections: &[HelpSection],
+    width: f32,
+    height: impl Fn(&str, f32) -> f32,
+) -> Vec<(usize, usize, crate::layout::Rect)> {
+    let (placed, _) = place(sections, width, height);
+    let mut out = vec![];
+    let (mut section, mut line) = (None::<usize>, 0);
+    for p in &placed {
+        match p {
+            Placed::Heading(..) => {
+                section = Some(section.map_or(0, |k| k + 1));
+                line = 0;
+            }
+            Placed::Keys(..) => {}
+            Placed::What(_, r) => {
+                if let Some(k) = section {
+                    out.push((k, line, *r));
+                }
+                line += 1;
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::settings::Modifier;
+
+    #[test]
+    fn every_line_of_help_has_a_place_in_order() {
+        let h = help_content(&KeyMap::default(), true);
+        let places = line_places(&h, 400.0, |_, _| 18.0);
+        let lines: usize = h.iter().map(|s| s.lines.len()).sum();
+        assert_eq!(places.len(), lines);
+        assert_eq!(places[0].0, 0);
+        assert_eq!(places.last().map(|p| p.0), Some(h.len() - 1));
+        // Lines run down the page without overlapping.
+        assert!(places.windows(2).all(|w| w[1].2.y >= w[0].2.y + w[0].2.h));
+    }
 
     fn find<'a>(sections: &'a [HelpSection], title: &str) -> &'a HelpSection {
         sections.iter().find(|s| s.title == title).unwrap()
@@ -285,10 +327,12 @@ mod tests {
                 "Up, Down, Home, End",
                 "Shift+Up, Shift+Down",
                 "Shift+Home, Shift+End",
+                "Page Up, Page Down",
                 "Ctrl+A",
                 "Escape",
                 "Space",
                 "Delete or Backspace",
+                "Ctrl+Z",
                 "Tab, Shift+Tab",
                 "Ctrl+,",
                 "F1"

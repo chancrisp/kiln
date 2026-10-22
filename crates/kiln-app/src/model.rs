@@ -624,7 +624,8 @@ pub enum FocusButton {
 }
 
 /// Where Tab goes from `at`, or Shift+Tab with `back`; `None` is the list.
-/// With files `listed` the order runs from the list through the footer's
+/// The order is the reading order: the header's Help and Settings, the
+/// list, then the footer. With files `listed` the footer runs from the list through the footer's
 /// Convert (while it is `convert`, enabled, as a disabled control isn't
 /// a stop), Add files, Export all (where `export_all` shows) and Clear,
 /// then the header's Help and Settings, and round to the list. The empty window
@@ -639,22 +640,24 @@ pub fn tab_stop(
 ) -> Option<FocusButton> {
     use FocusButton::*;
     let order: Vec<Option<FocusButton>> = if listed {
-        [None]
+        [Some(Help), Some(Settings), None]
             .into_iter()
             .chain(convert.then_some(Some(Convert)))
             .chain([Some(AddFiles)])
             .chain(export_all.then_some(Some(ExportAll)))
-            .chain([Some(Clear), Some(Help), Some(Settings)])
+            .chain([Some(Clear)])
             .collect()
     } else {
-        vec![Some(AddFiles), Some(Help), Some(Settings)]
+        vec![Some(Help), Some(Settings), Some(AddFiles)]
     };
     let n = order.len();
     match order.iter().position(|&x| x == at) {
         Some(i) if back => order[(i + n - 1) % n],
         Some(i) => order[(i + 1) % n],
-        // From somewhere not in the order: the empty window's start, or
-        // a button that has just gone.
+        // From somewhere not in the order: a button that has just gone
+        // hands the focus back to the list; the empty window, which has no
+        // list, starts at its first stop or, going back, its last.
+        None if listed => None,
         None if back => order[n - 1],
         None => order[0],
     }
@@ -702,6 +705,25 @@ pub struct Entry {
 }
 
 impl Entry {
+    /// The row as it comes back after Remove is undone: a result that was
+    /// saved or moved is still so, but anything else (a job that was
+    /// stopped, a result that was discarded) is a file waiting to be
+    /// converted again.
+    pub fn restored(mut self) -> Entry {
+        let kept = matches!(
+            &self.job,
+            JobState::Done { saved: Some(_), .. }
+                | JobState::Done {
+                    action: Action::File(_),
+                    ..
+                }
+        );
+        if !kept {
+            self.job = JobState::Idle;
+        }
+        self
+    }
+
     /// Whether the row offers Retry: what it was doing is known, and it
     /// was cancelled or failed in a way that trying again can fix (a
     /// damaged file would fail the same way, so it gets no Retry).
@@ -907,6 +929,42 @@ impl Entry {
         parts.join("  ·  ")
     }
 
+    /// The row's second line as labelled parts, for a screen reader to
+    /// read apart: "1600 by 1200 photo. Suggested JPG, about 890 KB. File
+    /// size 3.9 MB. Folder files."
+    pub fn spoken_detail(&self) -> String {
+        let mut parts: Vec<String> = vec![];
+        let described = (self.check == FileCheck::Ok)
+            .then(|| self.facts.as_ref().and_then(describe))
+            .flatten();
+        match described {
+            Some(d) => parts.push(d.replace(" × ", " by ")),
+            // What is known without facts: how many formats, or what is
+            // wrong with the file.
+            None => {
+                let plain = self.plain_detail();
+                if let Some(first) = plain.split("  ·  ").next() {
+                    parts.push(first.to_owned());
+                }
+            }
+        }
+        if self.check == FileCheck::Ok {
+            if let Some(s) = &self.suggestion {
+                let label = match &s.action {
+                    Suggested::Convert(ext) => ext.to_ascii_uppercase(),
+                    Suggested::Tool(t) => t.label().to_owned(),
+                };
+                parts.push(match s.estimate {
+                    Some(bytes) => format!("Suggested {label}, about {}", about(bytes)),
+                    None => format!("Suggested {label}"),
+                });
+            }
+            parts.push(format!("File size {}", human_size(self.size)));
+        }
+        parts.push(format!("Folder {}", self.folder_name()));
+        parts.join(". ")
+    }
+
     /// The secondary line before facts arrive: how many formats the file
     /// converts to, in the place of what it is, then its size and folder.
     pub fn plain_detail(&self) -> String {
@@ -1026,6 +1084,19 @@ pub struct Added {
     pub skipped: usize,
 }
 
+/// Removing at least this many rows at once can be undone, and says so.
+pub const UNDO_FROM: usize = 2;
+
+/// The footer after rows were removed: "500 files removed."
+pub fn removed_line(count: usize) -> String {
+    format!("{count} files removed.")
+}
+
+/// The footer after Remove was undone: "500 files are back."
+pub fn restored_line(count: usize) -> String {
+    format!("{count} files are back.")
+}
+
 /// The footer while more than one row is selected: "3 selected".
 pub fn selected_line(selected: usize) -> Option<String> {
     (selected > 1).then(|| format!("{selected} selected"))
@@ -1106,14 +1177,16 @@ impl FileList {
         self.focus_visible = false;
     }
 
-    /// Rows were just added: the last one is selected and takes the
-    /// focus, whose ring shows when a key added them (Ctrl+O, Ctrl+V) and
-    /// hides when the pointer did (a drop, the Add files button).
-    pub fn added(&mut self, keys: bool) {
-        let Some(last) = self.entries.len().checked_sub(1) else {
+    /// Rows were just added from row `first` on: that first new row is
+    /// selected and takes the focus, so the list shows where the new files
+    /// start and Enter converts them. The ring shows when a key added them
+    /// (Ctrl+O, Ctrl+V) and hides when the pointer did (a drop, the Add
+    /// files button).
+    pub fn added(&mut self, first: usize, keys: bool) {
+        if first >= self.entries.len() {
             return;
-        };
-        self.click(last);
+        }
+        self.click(first);
         self.focus_visible = keys;
     }
 
@@ -1499,6 +1572,29 @@ impl FileList {
                 (e.targets, e.missing) = offers(kiln, available, &e.path);
             }
         }
+    }
+
+    /// Put `entry` back as row `i` (or last, if the list is shorter now),
+    /// after an undo. Rows from there on move down one.
+    pub fn insert(&mut self, i: usize, entry: Entry) {
+        let i = i.min(self.entries.len());
+        self.entries.insert(i, entry);
+        let shift = |k: usize| if k >= i { k + 1 } else { k };
+        self.selected = self.selected.iter().map(|&k| shift(k)).collect();
+        self.focus = self.focus.map(shift);
+        self.anchor = self.anchor.map(shift);
+    }
+
+    /// Select exactly `rows`, the focus on the last and the anchor on the
+    /// first.
+    pub fn select_only(&mut self, rows: &[usize]) {
+        self.selected = rows
+            .iter()
+            .copied()
+            .filter(|&i| i < self.entries.len())
+            .collect();
+        self.anchor = self.selected.iter().next().copied();
+        self.focus = self.selected.iter().next_back().copied();
     }
 
     pub fn clear(&mut self) {
@@ -2058,6 +2154,94 @@ mod tests {
     }
 
     #[test]
+    fn removed_rows_come_back_where_they_were_and_selected() {
+        let mut list = list_of(6);
+        // Remove rows 1, 2 and 4, as the app does, one at a time.
+        let mut gone: Vec<(usize, Entry)> = [1usize, 2, 4]
+            .iter()
+            .map(|&i| (i, list.entries()[i].clone()))
+            .collect();
+        gone.sort_by_key(|(i, _)| *i);
+        for name in ["1.png", "2.png", "4.png"] {
+            let at = list
+                .index_of(Path::new("photos").join(name).as_path())
+                .unwrap();
+            list.remove(at);
+        }
+        assert_eq!(list.len(), 3);
+        let mut back = vec![];
+        for (i, e) in gone {
+            list.insert(i, e.restored());
+            back.push(i);
+        }
+        let names: Vec<&str> = list.entries().iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["0.png", "1.png", "2.png", "3.png", "4.png", "5.png"]
+        );
+        list.select_only(&back);
+        assert_eq!(list.selection(), [1, 2, 4]);
+        assert_eq!(removed_line(500), "500 files removed.");
+        assert_eq!(restored_line(500), "500 files are back.");
+    }
+
+    #[test]
+    fn a_restored_row_forgets_a_job_that_was_stopped_but_keeps_a_save() {
+        let mut running = row("a.png");
+        running.job = JobState::Running {
+            action: Action::Convert("jpg".into()),
+            fraction: None,
+            started: None,
+        };
+        assert_eq!(running.restored().job, JobState::Idle);
+        let saved = JobState::Done {
+            action: Action::Convert("jpg".into()),
+            outputs: vec![PathBuf::from(r"C:\Out\a.jpg")],
+            saved: Some(Saved::Folder(PathBuf::from(r"C:\Out"))),
+        };
+        let mut e = row("a.png");
+        e.job = saved.clone();
+        assert_eq!(e.restored().job, saved);
+        // A held result may have been discarded with it: back to idle.
+        let mut held = row("a.png");
+        held.job = JobState::Done {
+            action: Action::Convert("jpg".into()),
+            outputs: vec![PathBuf::from("held.jpg")],
+            saved: None,
+        };
+        assert_eq!(held.restored().job, JobState::Idle);
+    }
+
+    #[test]
+    fn a_row_reads_as_labelled_parts() {
+        let mut e = row("photo.png");
+        e.targets = vec!["JPG".into(), "PDF".into()];
+        // Before facts: what Kiln knows, the size and the folder, apart.
+        assert_eq!(
+            e.spoken_detail(),
+            "Converts to 2 formats. File size 3.1 MB. Folder photos"
+        );
+        // With facts and a suggestion, the sizes are read as "by".
+        e.facts = Some(picture(facts("png", Kind::Image), 1600, 1200, Look::Photo));
+        e.suggestion = Some(Suggestion {
+            action: Suggested::Convert("jpg".into()),
+            estimate: Some(890_000),
+            reason: String::new(),
+        });
+        assert_eq!(
+            e.spoken_detail(),
+            "1600 by 1200 photo. Suggested JPG, about 890 KB. File size 3.1 MB. Folder photos"
+        );
+        // A file ruled out says why, then where it is.
+        e.check = FileCheck::Empty;
+        assert!(
+            e.spoken_detail().starts_with("Empty file (0 bytes). "),
+            "{}",
+            e.spoken_detail()
+        );
+    }
+
+    #[test]
     fn a_file_that_cannot_work_says_so_and_offers_nothing() {
         let (dir, kiln) = setup();
         let w = |name: &str, bytes: &[u8]| {
@@ -2355,20 +2539,21 @@ mod tests {
 
     #[test]
     fn rows_added_by_a_key_show_the_focus_ring() {
-        // Ctrl+O or Ctrl+V: the last new row takes the focus, ring and all.
-        let mut list = list_of(3);
+        // Ctrl+O or Ctrl+V: the first new row takes the focus, ring and all,
+        // so the list shows where the new files start and Enter converts.
+        let mut list = list_of(5);
         list.pointer_used();
         list.click(0);
-        list.added(true);
-        assert_eq!(list.selection(), [2]);
-        assert_eq!(list.visible_focus(), Some(2));
+        list.added(3, true);
+        assert_eq!(list.selection(), [3]);
+        assert_eq!(list.visible_focus(), Some(3));
         // A drop or the Add files button: the focus moves, the ring hides.
-        list.added(false);
-        assert_eq!(list.focus(), Some(2));
+        list.added(4, false);
+        assert_eq!(list.focus(), Some(4));
         assert_eq!(list.visible_focus(), None);
         // Nothing listed, nothing to focus.
         let mut empty = FileList::default();
-        empty.added(true);
+        empty.added(0, true);
         assert_eq!(empty.focus(), None);
     }
 
@@ -3627,17 +3812,17 @@ mod tests {
                 None
             ]
         );
-        // The empty window: its Add files, Help and Settings, round.
+        // The empty window: Help, Settings, then its Add files, round.
         assert_eq!(
             walk(false, false, false)[..4],
-            [Some(AddFiles), Some(Help), Some(Settings), Some(AddFiles)]
+            [Some(Help), Some(Settings), Some(AddFiles), Some(Help)]
         );
-        assert_eq!(tab_stop(None, true, false, false, false), Some(Settings));
+        assert_eq!(tab_stop(None, true, false, false, false), Some(AddFiles));
         // A button that's gone starts the path again.
         assert_eq!(tab_stop(Some(ExportAll), false, true, false, false), None);
         assert_eq!(
             tab_stop(Some(Clear), false, false, false, false),
-            Some(AddFiles)
+            Some(Help)
         );
     }
 
@@ -3656,8 +3841,8 @@ mod tests {
         );
         // Disabled, it isn't a stop at all.
         assert_eq!(tab_stop(None, false, true, false, false), Some(AddFiles));
-        // The empty window has no Convert.
-        assert_eq!(tab_stop(None, false, false, false, true), Some(AddFiles));
+        // The empty window has no Convert, and starts at the header.
+        assert_eq!(tab_stop(None, false, false, false, true), Some(Help));
     }
 
     #[test]

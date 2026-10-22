@@ -175,6 +175,15 @@ test enforces this.
 - **No false success.** Before an engine runs, the same check runs again, so a DOCX of random bytes fails with the damaged-file sentence instead of LibreOffice treating it as text and writing a PDF.
 - **Folders.** Dropping or adding a folder adds its files and those of the folders directly inside it, but not hidden or system items and not folders two levels down. `Added 12 files from Holiday.` is followed by `Skipped 2 items: Thumbs.db (hidden), old (folder inside a folder).` (three names, then "and N more"). More than 200 files from folders asks first: `That's 1240 files. Add them all?` Drop, Add files, Ctrl+V, Open with and Send to all go through the same step.
 
+## Keyboard and assistive tools
+
+- **Adding files puts the keyboard on them.** After Add files, Ctrl+V, a drop, Open with or Send to, the list shows the *first* new row, selected, with the keyboard on it, so Enter converts instead of reopening the dialog. (It used to jump to the last row.)
+- **Tab follows the reading order:** Help, Settings, the list, then the footer (Convert while it can be used, Add files, Export all, Clear), and round. The empty window goes Help, Settings, Add files. In Settings the page tabs are one Tab stop: Left and Right move between them, Tab leaves the strip, and Shift+Tab comes back to the page that is showing.
+- **The list handles Page Up and Page Down** (a screenful less one row; with Shift they extend the selection), and Home and End (Ctrl+Home and Ctrl+End too).
+- **Remove can be undone.** Removing two or more rows says `500 files removed.` with an **Undo** link at the right of the footer line (Ctrl+Z does the same, and there is always room for it). Undo brings the rows back where they were, selected; a job that was stopped by the removal comes back as a file waiting to be converted, and a result that had been saved or moved stays so. The link goes when the footer says something else.
+- **A row is read as labelled parts**, each a sentence: `photo.png. 64 by 48 photo. Suggested JPG, about 4.2 KB. File size 9.3 KB. Folder files.` A running row reads what it is doing (its progress is a separate range value); a failed row reads its whole sentence. A row's Cancel, Retry, Export, Show details and Show in folder buttons carry its file name (`Cancel photo.png`).
+- **Help lines that are scrolled out of its panel are reported off screen** to assistive tools, so Narrator doesn't read what can't be seen.
+
 ## Progress and results
 
 - **Progress** is a 4 px line along the bottom of the job row, filled with celadon. Its leading edge glows slightly brighter, like a glaze taking heat. This is the only gradient in Kiln. While a job runs, the glow breathes slowly over 2.4 s, like coals. When the helper app can't report progress, the whole line holds a low glow that breathes the same way. There are no spinners.

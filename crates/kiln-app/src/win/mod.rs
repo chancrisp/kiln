@@ -703,6 +703,9 @@ struct App {
     helper_notice: bool,
     /// The taskbar button's progress, made the first time work starts.
     taskbar: Option<system::Taskbar>,
+    /// Rows just removed, with where they were, so Undo can bring them
+    /// back, and what the footer said then (Undo shows while it still does).
+    undo: Option<(Vec<(usize, model::Entry)>, String)>,
     /// Results that were ready before the one-time question about saving
     /// next to the original was answered: the files they came from and the
     /// held results.
@@ -860,6 +863,15 @@ impl App {
     fn export_button(&self) -> Option<layout::Rect> {
         let clear = self.layout().clear_button?;
         (self.export_all_count() > 0).then(|| layout::export_all_button(&clear))
+    }
+
+    /// Where the Undo link is now, while the footer offers it.
+    fn undo_link_rect(&self) -> Option<layout::Rect> {
+        self.undo_offer()?;
+        let l = self.layout();
+        let (footer, clear) = (l.footer?, l.clear_button?);
+        let convert = layout::convert_button(&clear, self.export_all_count() > 0);
+        layout::undo_link(&layout::footer_status(&footer, &convert))
     }
 
     /// The footer's Convert button, while files are listed.
@@ -1104,7 +1116,10 @@ impl App {
                 .path
                 .parent()
                 .map(Path::to_path_buf);
-            self.files.added(keys);
+            // The list shows where the new files start, with that row
+            // selected, and the keyboard is on it: Enter converts.
+            self.button_focus = None;
+            self.files.added(self.files.len() - r.added, keys);
             self.scroll_to_selection();
         }
         self.animate();
@@ -1226,10 +1241,68 @@ impl App {
     /// Take the rows for `paths` out of the list, stopping their jobs, and
     /// say the new count once.
     fn remove_rows(&mut self, paths: &[PathBuf]) {
+        // Kept so that a removal of several rows can be undone.
+        let mut gone: Vec<(usize, model::Entry)> = paths
+            .iter()
+            .filter_map(|p| {
+                let i = self.files.index_of(p)?;
+                Some((i, self.files.entries()[i].clone()))
+            })
+            .collect();
+        gone.sort_by_key(|(i, _)| *i);
         for path in paths {
             self.remove_row(path);
         }
-        self.say(status_line(self.files.len(), 0, 0, 0));
+        if gone.len() >= model::UNDO_FROM {
+            let line = model::removed_line(gone.len());
+            self.say(line.clone());
+            self.undo = Some((gone, line));
+        } else {
+            self.undo = None;
+            self.say(status_line(self.files.len(), 0, 0, 0));
+        }
+    }
+
+    /// The rows the footer's Undo link would bring back, while it shows:
+    /// the footer still says they were removed.
+    fn undo_offer(&self) -> Option<&str> {
+        self.undo
+            .as_ref()
+            .filter(|(_, said)| *said == self.status)
+            .map(|(_, said)| said.as_str())
+    }
+
+    /// Bring back the rows just removed, where they were, selected.
+    fn undo_remove(&mut self) {
+        let Some((gone, _)) = self.undo.take() else {
+            return;
+        };
+        let now = Instant::now();
+        let mut back = vec![];
+        let mut paths = vec![];
+        for (i, entry) in gone {
+            // Already listed again, by an add meanwhile: leave that be.
+            if self.files.index_of(&entry.path).is_some() {
+                continue;
+            }
+            let i = i.min(self.files.len());
+            paths.push(entry.path.clone());
+            self.files.insert(i, entry.restored());
+            self.rows.insert(
+                i,
+                RowTimes {
+                    added: now,
+                    settled: None,
+                    job: None,
+                },
+            );
+            back.push(i);
+        }
+        self.files.select_only(&back);
+        self.inspect(paths);
+        self.say(model::restored_line(back.len()));
+        self.scroll_to_selection();
+        self.invalidate();
     }
 
     /// Take `path`'s row out of the list, stopping its job. The caller
@@ -3945,8 +4018,14 @@ impl App {
                     }
                 }
             }
-            VK_TAB | VK_DOWN | VK_RIGHT | VK_UP | VK_LEFT => {
-                let back = (key == VK_TAB && shift) || key == VK_UP || key == VK_LEFT;
+            // Tab goes round the controls with the page tabs as one stop;
+            // the arrow keys step through every control.
+            VK_TAB => {
+                let controls: Vec<Control> = l.controls.iter().map(|(c, _)| *c).collect();
+                ui.focus = layout::settings_tab_stop(&controls, &enabled, ui.tab, ui.focus, shift);
+            }
+            VK_DOWN | VK_RIGHT | VK_UP | VK_LEFT => {
+                let back = key == VK_UP || key == VK_LEFT;
                 // Disabled controls are skipped.
                 let mut f = ui.focus;
                 for _ in 0..n {
@@ -4403,6 +4482,8 @@ impl App {
         } else if self.export_button().is_some_and(|b| b.contains(x, y)) {
             self.export_pressed = true;
             unsafe { SetCapture(self.hwnd) };
+        } else if self.undo_link_rect().is_some_and(|b| b.contains(x, y)) {
+            self.undo_remove();
         } else if self.convert_rect().is_some_and(|b| b.contains(x, y)) {
             // Disabled, a press says why and nothing else.
             match self.convert_block() {
@@ -4562,7 +4643,8 @@ impl App {
                     self.invalidate();
                     return true;
                 }
-                VK_ESCAPE | VK_UP | VK_DOWN | VK_LEFT | VK_RIGHT | VK_HOME | VK_END => {
+                VK_ESCAPE | VK_UP | VK_DOWN | VK_LEFT | VK_RIGHT | VK_HOME | VK_END | VK_PRIOR
+                | VK_NEXT => {
                     self.button_focus = None;
                     self.files.keyboard_used();
                     self.invalidate();
@@ -4577,7 +4659,15 @@ impl App {
         // Keys that move through or act on the list show its focus ring.
         if matches!(
             key,
-            VK_UP | VK_DOWN | VK_HOME | VK_END | VK_DELETE | VK_BACK | VK_ESCAPE
+            VK_UP
+                | VK_DOWN
+                | VK_HOME
+                | VK_END
+                | VK_PRIOR
+                | VK_NEXT
+                | VK_DELETE
+                | VK_BACK
+                | VK_ESCAPE
         ) || (key == VK_A && ctrl)
         {
             self.files.keyboard_used();
@@ -4588,6 +4678,16 @@ impl App {
             VK_DOWN if shift => self.files.extend(1),
             VK_UP => self.files.step(-1),
             VK_DOWN => self.files.step(1),
+            // A screenful at a time; Shift extends the selection.
+            VK_PRIOR | VK_NEXT => {
+                let page = layout::rows_per_page(self.layout().panel.h);
+                let by = if key == VK_PRIOR { -page } else { page };
+                if shift {
+                    self.files.extend(by);
+                } else {
+                    self.files.step(by);
+                }
+            }
             VK_HOME | VK_END => {
                 let i = match key {
                     VK_HOME => 0,
@@ -4613,6 +4713,7 @@ impl App {
                 self.open_wheel_for_selection(kind);
             }
             VK_OEM_COMMA if ctrl => self.open_settings(),
+            VK_Z if ctrl => self.undo_remove(),
             VK_O if ctrl => self.add_files(true),
             VK_V if ctrl => self.paste(true),
             // Ctrl+S exports the selected rows, Ctrl+Shift+S everything.
@@ -4733,6 +4834,30 @@ impl App {
 
     // Accessibility.
 
+    /// Where help's lines are while it is open, and which of them are
+    /// scrolled out of the panel.
+    fn help_places(&self) -> Vec<a11y::HelpPlace> {
+        let Some(ui) = &self.help else {
+            return vec![];
+        };
+        let (w, h) = self.renderer.size_dips();
+        let body = layout::help(w, h).body;
+        help::line_places(&ui.sections, body.w, |s, width| {
+            self.renderer.help_line_height(s, width)
+        })
+        .into_iter()
+        .map(|(section, line, r)| {
+            let rect = layout::Rect::new(body.x + r.x, body.y + r.y - ui.scroll, r.w, r.h);
+            a11y::HelpPlace {
+                section,
+                line,
+                rect,
+                offscreen: a11y::clipped_out(&rect, &body),
+            }
+        })
+        .collect()
+    }
+
     /// What the window shows, as a tree for UI Automation. `progress`
     /// holds each row's percent as UI Automation is told it.
     fn a11y_tree(&self, progress: &[Option<u32>]) -> a11y::Node {
@@ -4776,6 +4901,7 @@ impl App {
         let update_note = self.update.note();
         let (sheet_rows, sheet_lines) = self.sheet_texts();
         let sheet_layout = self.sheet_layout();
+        let help_places = self.help_places();
         let input = a11y::Input {
             size,
             rows,
@@ -4788,6 +4914,7 @@ impl App {
             export_all: export_all.as_deref(),
             convert_block: self.convert_block(),
             convert_cancel: self.footer_cancel(),
+            undo: self.undo_offer(),
             wheel: self
                 .wheel
                 .as_ref()
@@ -4823,6 +4950,7 @@ impl App {
                 focus: d.focus,
             }),
             help: self.help.as_ref().map(|ui| &ui.sections[..]),
+            help_places: &help_places,
             sheet: match (
                 self.sheet.as_ref().filter(|s| s.is_open()),
                 &sheet_layout,
@@ -4951,6 +5079,7 @@ impl App {
             (Id::HelpButton, Verb::Invoke) => self.open_help(),
             (Id::SettingsButton, Verb::Invoke) => self.open_settings(),
             // Like the other UI Automation actions on the list, not a click.
+            (Id::UndoRemove, Verb::Invoke) => self.undo_remove(),
             (Id::ConvertButton, Verb::Invoke) => self.convert_selection(true),
             (Id::AddFiles, Verb::Invoke) => self.add_files(true),
             (Id::ExportAll, Verb::Invoke) => self.export_everything(),
@@ -5201,6 +5330,7 @@ impl App {
             } else {
                 "Convert"
             },
+            undo: self.undo_offer().is_some(),
             clear_hover: self.clear_hover,
             clear_pressed: self.clear_pressed,
             wheel: Self::wheel_view(self.wheel.as_ref(), &self.settings.keys).map(|wv| WheelView {
@@ -5637,6 +5767,7 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         helper_notice: false,
         taskbar: None,
         taskbar_shown: None,
+        undo: None,
         autosave_waiting: vec![],
         tally: (0, 0, 0, None),
         notice_row: None,

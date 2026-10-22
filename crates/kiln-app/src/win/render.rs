@@ -145,6 +145,8 @@ pub struct View<'a> {
     /// What the footer's button says: Convert, or Cancel while the
     /// selection holds a file that is converting.
     pub convert_label: &'a str,
+    /// Rows were just removed: the footer offers Undo.
+    pub undo: bool,
     pub clear_hover: bool,
     pub clear_pressed: bool,
     pub wheel: Option<WheelView<'a>>,
@@ -408,6 +410,11 @@ impl Renderer {
     /// How tall the details dialog's text runs when wrapped to `width`.
     pub fn details_height(&self, text: &str, width: f32) -> f32 {
         self.text.block_height(text, &self.text.mono_block, width)
+    }
+
+    /// How tall one line of help's text runs wrapped to `width`.
+    pub fn help_line_height(&self, text: &str, width: f32) -> f32 {
+        self.text.block_height(text, &self.text.body_block, width)
     }
 
     /// How tall help's text runs in a body `width` wide, for scrolling it.
@@ -1198,6 +1205,9 @@ impl Draw<'_> {
             v.status
         };
         self.label(text, &self.text.caption, &status, p.text_muted, 1.0);
+        if let (true, Some(link)) = (v.undo, layout::undo_link(&status)) {
+            self.row_link_label("Undo", &link, false, false, p, 1.0);
+        }
         if v.convert_enabled {
             self.button(
                 v.convert_label,

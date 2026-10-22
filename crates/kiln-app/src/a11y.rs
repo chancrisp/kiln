@@ -57,6 +57,8 @@ pub enum Id {
     AddFiles,
     /// The footer's Convert button.
     ConvertButton,
+    /// "Undo", in the footer after rows were removed.
+    UndoRemove,
     List,
     Row(PathBuf),
     RowCancel(PathBuf),
@@ -547,11 +549,34 @@ pub struct Input<'a> {
     /// The selection holds a file that is converting: the button reads
     /// Cancel and stops it.
     pub convert_cancel: bool,
+    /// Rows were just removed and can come back: how the footer says so,
+    /// "500 files removed", for the Undo link's name.
+    pub undo: Option<&'a str>,
     pub wheel: Option<WheelIn<'a>>,
     pub settings: Option<SettingsIn<'a>>,
     pub details: Option<DetailsIn<'a>>,
     pub help: Option<&'a [HelpSection]>,
+    /// Where help's lines are now and whether they show, when it is open:
+    /// a line scrolled out of the panel is off screen. Without it every
+    /// line is taken to show.
+    pub help_places: &'a [HelpPlace],
     pub sheet: Option<SheetIn<'a>>,
+}
+
+/// Where one line of help is, in window coordinates, and whether it is
+/// scrolled out of the panel.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HelpPlace {
+    pub section: usize,
+    pub line: usize,
+    pub rect: Rect,
+    pub offscreen: bool,
+}
+
+/// Whether a line at `rect` is out of the body it is scrolled in: wholly
+/// above or below it.
+pub fn clipped_out(rect: &Rect, body: &Rect) -> bool {
+    rect.bottom() <= body.y || rect.y >= body.bottom()
 }
 
 /// The list's name.
@@ -561,8 +586,9 @@ pub const OPTIONS_NAME: &str = "Options…";
 /// The settings tabs' name.
 pub const TABS_NAME: &str = "Settings pages";
 
-/// A row's name: the file's name, then its second line. A failed row
-/// gives its whole sentence, never the line cut short to fit.
+/// A row's name: the file's name, then its second line as labelled parts
+/// ("File size 3.9 MB. Folder files."), each a sentence. A failed row gives
+/// its whole sentence, never the line cut short to fit.
 pub fn row_name(e: &Entry, instead: Option<&str>) -> String {
     let line = match (instead, &e.job) {
         (Some(s), _) => s.to_owned(),
@@ -572,10 +598,11 @@ pub fn row_name(e: &Entry, instead: Option<&str>) -> String {
         // A running row says what it is doing; how far along is its
         // status, told at a gentler pace than the line changes.
         (None, JobState::Running { action, .. }) => crate::model::doing(action),
+        (None, JobState::Idle) => e.spoken_detail(),
         (None, _) => e.line().0,
     };
-    // The row's dots read as pauses.
-    format!("{}, {}", e.name, line.replace("  ·  ", ", "))
+    // The row's dots read as pauses between sentences.
+    format!("{}. {}", e.name, line.replace("  ·  ", ". "))
 }
 
 /// The element for a header or footer button.
@@ -625,7 +652,7 @@ pub fn tree(input: &Input) -> Node {
     } else if let Some(d) = &input.details {
         vec![details(d, w, h)]
     } else if let Some(sections) = input.help {
-        vec![help(sections, w, h)]
+        vec![help(sections, input.help_places, w, h)]
     } else if let Some(wh) = &input.wheel {
         vec![menu(wh)]
     } else {
@@ -770,6 +797,17 @@ fn main(input: &Input) -> Vec<Node> {
         s.live = true;
     }
     out.extend(status);
+    if let (Some(what), Some(link)) = (
+        input.undo,
+        layout::undo_link(&layout::footer_status(&footer, &convert)),
+    ) {
+        out.push(Node::new(
+            Id::UndoRemove,
+            Role::Button,
+            format!("Undo, {what}"),
+            link,
+        ));
+    }
     // Disabled, it says why instead of the key.
     let (convert_name, convert_tip) = if input.convert_cancel {
         ("Cancel", crate::help::CANCEL_ALL_TIP)
@@ -1122,7 +1160,7 @@ fn details(d: &DetailsIn, w: f32, h: f32) -> Node {
 }
 
 /// Help: each section with its lines, then Close.
-fn help(sections: &[HelpSection], w: f32, h: f32) -> Node {
+fn help(sections: &[HelpSection], places: &[HelpPlace], w: f32, h: f32) -> Node {
     let l = layout::help(w, h);
     let mut children: Vec<Node> = sections
         .iter()
@@ -1138,7 +1176,10 @@ fn help(sections: &[HelpSection], w: f32, h: f32) -> Node {
                     } else {
                         format!("{}: {}", line.keys, line.what)
                     };
-                    text(Id::HelpLine(k, m), &said, l.body)
+                    let place = places.iter().find(|p| (p.section, p.line) == (k, m));
+                    let mut n = text(Id::HelpLine(k, m), &said, place.map_or(l.body, |p| p.rect))?;
+                    n.states.offscreen = place.is_some_and(|p| p.offscreen);
+                    Some(n)
                 })
                 .collect();
             Node::new(Id::HelpSection(k), Role::Group, s.title, l.body).with(lines)
@@ -1252,10 +1293,12 @@ mod tests {
             export_all: None,
             convert_block: None,
             convert_cancel: false,
+            undo: None,
             wheel: None,
             settings: None,
             details: None,
             help: None,
+            help_places: &[],
             sheet: None,
         }
     }
@@ -1399,9 +1442,10 @@ mod tests {
         assert_eq!(list.children.len(), 2);
         let a = &list.children[0];
         assert_eq!(a.role, Role::ListItem);
+        // Labelled parts, each a sentence.
         assert_eq!(
             a.name,
-            format!("a.png, {}", es[0].line().0.replace("  ·  ", ", "))
+            "a.png. Converts to 2 formats. File size 3.1 MB. Folder photos"
         );
         assert_eq!(a.help.as_deref(), Some(r"C:\photos"));
         assert!(a.patterns().selection_item && a.patterns().scroll_item);
@@ -1430,7 +1474,7 @@ mod tests {
         )];
         let t = tree(&input(&lines, rows(&es)));
         sound(&t);
-        let row = named(&t, Role::ListItem, "a.png, Converting to JPG");
+        let row = named(&t, Role::ListItem, "a.png. Converting to JPG");
         assert_eq!(row.status.as_deref(), Some("45%"));
         let cancel = &row.children[0];
         assert_eq!(
@@ -1447,6 +1491,42 @@ mod tests {
         assert_eq!(bar.name, "Progress a.png");
         assert_eq!(bar.range, Some(45.0));
         assert!(bar.patterns().range_value && !bar.patterns().invoke);
+    }
+
+    #[test]
+    fn help_lines_scrolled_out_of_the_panel_are_off_screen() {
+        let lines = empty_lines(&Settings::default());
+        let sections = crate::help::help_content(&KeyMap::default(), true);
+        let body = layout::help(800.0, 600.0).body;
+        let shown = Rect::new(body.x, body.y + 10.0, 100.0, 20.0);
+        let hidden = Rect::new(body.x, body.bottom() + 40.0, 100.0, 20.0);
+        let above = Rect::new(body.x, body.y - 60.0, 100.0, 20.0);
+        assert!(!clipped_out(&shown, &body));
+        assert!(clipped_out(&hidden, &body));
+        assert!(clipped_out(&above, &body));
+        let places = [
+            HelpPlace {
+                section: 0,
+                line: 0,
+                rect: shown,
+                offscreen: false,
+            },
+            HelpPlace {
+                section: 0,
+                line: 1,
+                rect: hidden,
+                offscreen: true,
+            },
+        ];
+        let mut i = input(&lines, vec![]);
+        i.help = Some(&sections);
+        i.help_places = &places;
+        let t = tree(&i);
+        let first = t.find(&Id::HelpLine(0, 0)).unwrap();
+        let second = t.find(&Id::HelpLine(0, 1)).unwrap();
+        assert!(!first.states.offscreen);
+        assert!(second.states.offscreen);
+        assert_eq!(second.rect, hidden);
     }
 
     #[test]
@@ -1524,7 +1604,7 @@ mod tests {
         i.export_all = Some("Export all (1)");
         let t = tree(&i);
         sound(&t);
-        let row = named(&t, Role::ListItem, "a.png, Done, not saved yet: a.jpg");
+        let row = named(&t, Role::ListItem, "a.png. Done, not saved yet: a.jpg");
         assert_eq!(row.children.len(), 1);
         assert_eq!(
             (row.children[0].role, row.children[0].name.as_str()),
@@ -1589,7 +1669,7 @@ mod tests {
         )];
         let t = tree(&input(&lines, rows(&es)));
         sound(&t);
-        let row = named(&t, Role::ListItem, "a.png, Saved where you dropped it.");
+        let row = named(&t, Role::ListItem, "a.png. Saved where you dropped it.");
         assert!(row.children.is_empty());
     }
 
@@ -1608,7 +1688,7 @@ mod tests {
         )];
         let t = tree(&input(&lines, rows(&es)));
         sound(&t);
-        let row = named(&t, Role::ListItem, &format!("a.mov, {message}"));
+        let row = named(&t, Role::ListItem, &format!("a.mov. {message}"));
         assert_eq!(row.children[0].name, "Show details a.mov");
         assert_eq!(row.children[0].role, Role::Button);
     }
