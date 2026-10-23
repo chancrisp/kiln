@@ -44,6 +44,7 @@ use kiln_core::{
 
 use crate::a11y;
 use crate::actions::{self, FileAction};
+use crate::anim::{self, Tween};
 use crate::help::{self, HelpSection};
 use crate::layout::{
     self, Control, DialogButton, SettingsLayout, SettingsShape, SettingsTab, SheetControl,
@@ -84,10 +85,6 @@ const COPIED_TIMER: usize = 3;
 const A11Y_TIMER: usize = 4;
 /// Added to the hint timer's wait, so it fires after the two seconds.
 const HINT_SLACK: Duration = Duration::from_millis(50);
-const FRAME_MS: u32 = 16;
-/// Frame time when only progress lines are glowing: slow enough to stay
-/// cheap, fast enough to look smooth.
-const HEAT_FRAME_MS: u32 = 50;
 
 /// Posted by the worker threads; lparam is a `Box<JobEvent>`.
 const WM_KILN_JOB: u32 = WM_APP + 3;
@@ -128,58 +125,6 @@ const MK_LBUTTON_FLAG: u32 = 0x0001;
 const OPEN_MS: u32 = 160;
 /// The pulse on a chosen item before its job starts.
 const PULSE_MS: u32 = motion::SETTLE_MS;
-
-/// A value that eases toward a target over a fixed duration.
-struct Tween {
-    from: f32,
-    to: f32,
-    start: Instant,
-    ms: u32,
-}
-
-impl Tween {
-    fn new(v: f32) -> Self {
-        Self {
-            from: v,
-            to: v,
-            start: Instant::now(),
-            ms: motion::QUICK_MS,
-        }
-    }
-
-    fn value(&self) -> f32 {
-        let t = motion::progress(self.start.elapsed().as_secs_f32() * 1000.0, self.ms);
-        self.from + (self.to - self.from) * t
-    }
-
-    /// Ease toward `to` over `ms`, or jump there with Animation effects
-    /// off.
-    fn set(&mut self, to: f32, ms: u32) {
-        if (self.to - to).abs() < f32::EPSILON {
-            return;
-        }
-        self.from = self.value();
-        self.to = to;
-        self.ms = motion::ms(ms);
-        self.start = Instant::now();
-    }
-
-    fn running(&self) -> bool {
-        self.start.elapsed() < Duration::from_millis(self.ms as u64)
-    }
-}
-
-/// Eased progress, 0 to 1, of something of `ms` that started at `t`.
-/// With Animation effects off every motion is already done.
-fn eased(t: Instant, ms: u32) -> f32 {
-    motion::progress(t.elapsed().as_secs_f32() * 1000.0, motion::ms(ms))
-}
-
-/// Whether a motion of `ms` that started at `t` is still going. With
-/// Animation effects off, none is.
-fn within(t: Instant, ms: u32) -> bool {
-    t.elapsed() < Duration::from_millis(motion::ms(ms) as u64)
-}
 
 /// The heat of running progress lines now. Every line shares one clock so
 /// they breathe together; with Animation effects off they hold still.
@@ -236,7 +181,7 @@ impl WheelUi {
     }
 
     fn more_open(&self) -> bool {
-        self.more.to > 0.5
+        self.more.target() > 0.5
     }
 
     /// Where the suggestion's dots go.
@@ -253,8 +198,14 @@ impl WheelUi {
             return false;
         }
         match spot {
-            Some(Spot::Inner(i)) if self.wheel.is_more(i) => self.more.set(1.0, OPEN_MS),
-            Some(Spot::Inner(_)) => self.more.set(0.0, motion::QUICK_MS),
+            Some(Spot::Inner(i)) if self.wheel.is_more(i) => {
+                self.more
+                    .set(1.0, OPEN_MS, Instant::now(), motion::animations())
+            }
+            Some(Spot::Inner(_)) => {
+                self.more
+                    .set(0.0, motion::QUICK_MS, Instant::now(), motion::animations())
+            }
             _ => {}
         }
         self.hover = spot;
@@ -937,7 +888,7 @@ impl App {
 
     fn animate(&self) {
         unsafe {
-            SetTimer(Some(self.hwnd), ANIM_TIMER, FRAME_MS, None);
+            SetTimer(Some(self.hwnd), ANIM_TIMER, anim::FRAME_MS, None);
         }
         self.invalidate();
     }
@@ -945,7 +896,7 @@ impl App {
     /// Whether a frame timer is needed: something moves, or a running
     /// line breathes (not with Animation effects off).
     fn animating(&self) -> bool {
-        self.moving() || (self.burning() && motion::animations())
+        anim::frame_ms(self.moving(), self.burning(), motion::animations()).is_some()
     }
 
     /// Whether any job is running, so its progress line glows.
@@ -958,43 +909,47 @@ impl App {
 
     /// Whether anything is in motion that needs full frame rate.
     fn moving(&self) -> bool {
+        let (now, animations) = (Instant::now(), motion::animations());
         let rows = self.rows.iter().any(|r| {
-            within(r.added, motion::SETTLE_MS)
-                || r.settled.is_some_and(|t| within(t, motion::CONFIRM_MS))
-        }) || self
-            .files
-            .entries()
-            .iter()
-            .any(|e| e.facts_at.is_some_and(|t| within(t, FACTS_MS)));
+            anim::within(r.added, motion::SETTLE_MS, now, animations)
+                || r.settled
+                    .is_some_and(|t| anim::within(t, motion::CONFIRM_MS, now, animations))
+        }) || self.files.entries().iter().any(|e| {
+            e.facts_at
+                .is_some_and(|t| anim::within(t, FACTS_MS, now, animations))
+        });
         let wheel = self.wheel.as_ref().is_some_and(|w| {
-            within(w.opened, OPEN_MS)
+            anim::within(w.opened, OPEN_MS, now, animations)
                 || w.closing.is_some()
                 || w.pulse.is_some()
-                || w.more.running()
-                || w.dot_at.is_some_and(|t| within(t, FACTS_MS))
+                || w.more.running(now)
+                || w.dot_at
+                    .is_some_and(|t| anim::within(t, FACTS_MS, now, animations))
         });
-        let sheet = self
-            .sheet
-            .as_ref()
-            .is_some_and(|s| within(s.opened, OPEN_MS) || s.closing.is_some());
-        let settings = self
-            .settings_ui
-            .as_ref()
-            .is_some_and(|ui| ui.tab_marker.running() || within(ui.switched, motion::QUICK_MS));
-        self.drag.running() || rows || wheel || sheet || settings
+        let sheet = self.sheet.as_ref().is_some_and(|s| {
+            anim::within(s.opened, OPEN_MS, now, animations) || s.closing.is_some()
+        });
+        let settings = self.settings_ui.as_ref().is_some_and(|ui| {
+            ui.tab_marker.running(now)
+                || anim::within(ui.switched, motion::QUICK_MS, now, animations)
+        });
+        self.drag.running(now) || rows || wheel || sheet || settings
     }
 
     fn row_anim(&self, i: usize) -> RowAnim {
+        let (now, animations) = (Instant::now(), motion::animations());
         let facts = self
             .files
             .entries()
             .get(i)
             .and_then(|e| e.facts_at)
-            .map_or(1.0, |t| eased(t, FACTS_MS));
+            .map_or(1.0, |t| anim::eased(t, FACTS_MS, now, animations));
         match self.rows.get(i) {
             Some(r) => RowAnim {
-                appear: eased(r.added, motion::SETTLE_MS),
-                settle: r.settled.map_or(1.0, |t| eased(t, motion::CONFIRM_MS)),
+                appear: anim::eased(r.added, motion::SETTLE_MS, now, animations),
+                settle: r
+                    .settled
+                    .map_or(1.0, |t| anim::eased(t, motion::CONFIRM_MS, now, animations)),
                 facts,
             },
             None => RowAnim {
@@ -2504,7 +2459,7 @@ impl App {
             wheel,
             paths,
             hover,
-            more: Tween::new(0.0),
+            more: Tween::new(0.0, Instant::now()),
             opened: Instant::now(),
             closing: None,
             pulse: None,
@@ -2785,7 +2740,8 @@ impl App {
             Spot::Inner(i) if w.wheel.is_more(i) => {
                 // The keyboard can start on More with its ring still shut,
                 // so pour it here rather than through `point`.
-                w.more.set(1.0, OPEN_MS);
+                w.more
+                    .set(1.0, OPEN_MS, Instant::now(), motion::animations());
                 let first = w
                     .marks()
                     .into_iter()
@@ -2873,18 +2829,18 @@ impl App {
     /// Advance the animations: start a pulsed job, drop a faded wheel or
     /// sheet.
     fn tick(&mut self) {
-        if self
-            .sheet
-            .as_ref()
-            .is_some_and(|s| s.closing.is_some_and(|t| !within(t, motion::QUICK_MS)))
-        {
+        let (now, animations) = (Instant::now(), motion::animations());
+        if self.sheet.as_ref().is_some_and(|s| {
+            s.closing
+                .is_some_and(|t| !anim::within(t, motion::QUICK_MS, now, animations))
+        }) {
             self.sheet = None;
         }
         let Some(w) = &mut self.wheel else {
             return;
         };
         if let Some((spot, t)) = w.pulse {
-            if !within(t, PULSE_MS) {
+            if !anim::within(t, PULSE_MS, now, animations) {
                 w.pulse = None;
                 w.closing = Some(Instant::now());
                 let Some(item) = w.wheel.item(spot) else {
@@ -2896,20 +2852,25 @@ impl App {
                 return;
             }
         }
-        if w.closing.is_some_and(|t| !within(t, motion::QUICK_MS)) {
+        if w.closing
+            .is_some_and(|t| !anim::within(t, motion::QUICK_MS, now, animations))
+        {
             self.wheel = None;
         }
     }
 
     fn wheel_view<'a>(w: Option<&'a WheelUi>, keys: &settings::KeyMap) -> Option<WheelView<'a>> {
+        let (now, animations) = (Instant::now(), motion::animations());
         let w = w?;
         Some(WheelView {
             wheel: &w.wheel,
             title: ways_in::wheel_title(w.wheel.kind, keys),
             hover: w.hover,
-            more: w.more.value().clamp(0.0, 1.0),
-            open: eased(w.opened, OPEN_MS),
-            fade: w.closing.map_or(1.0, |t| 1.0 - eased(t, motion::QUICK_MS)),
+            more: w.more.value(now).clamp(0.0, 1.0),
+            open: anim::eased(w.opened, OPEN_MS, now, animations),
+            fade: w.closing.map_or(1.0, |t| {
+                1.0 - anim::eased(t, motion::QUICK_MS, now, animations)
+            }),
             pulse: w.pulse.map(|(s, t)| {
                 let ms = motion::ms(PULSE_MS);
                 let done = if ms == 0 {
@@ -2920,7 +2881,9 @@ impl App {
                 (s, done)
             }),
             marks: w.marks(),
-            dot: w.dot_at.map_or(1.0, |t| eased(t, FACTS_MS)),
+            dot: w
+                .dot_at
+                .map_or(1.0, |t| anim::eased(t, FACTS_MS, now, animations)),
             options: None,
         })
     }
@@ -3837,7 +3800,7 @@ impl App {
         let (output_line, engine_lines, engine_missing) = self.settings_lines();
         self.settings_ui = Some(SettingsUi {
             tab: SettingsTab::General,
-            tab_marker: Tween::new(0.0),
+            tab_marker: Tween::new(0.0, Instant::now()),
             switched: Instant::now() - Duration::from_secs(1),
             hover: None,
             // Focus starts on the first tab, so the keyboard has a place
@@ -3879,7 +3842,12 @@ impl App {
                 if let Some(ui) = &mut self.settings_ui {
                     if ui.tab != t {
                         ui.tab = t;
-                        ui.tab_marker.set(t.index() as f32, OPEN_MS);
+                        ui.tab_marker.set(
+                            t.index() as f32,
+                            OPEN_MS,
+                            Instant::now(),
+                            motion::animations(),
+                        );
                         ui.switched = Instant::now();
                         ui.hover = None;
                         // The tabs come first, so focus stays put.
@@ -4840,7 +4808,8 @@ impl App {
     }
 
     fn dropped(&mut self, ev: &DragEvent) {
-        self.drag.set(0.0, motion::QUICK_MS);
+        self.drag
+            .set(0.0, motion::QUICK_MS, Instant::now(), motion::animations());
         // A drop acts on the list, so the focus goes back to it.
         self.button_focus = None;
         if self.adds_wait() {
@@ -5320,6 +5289,7 @@ impl App {
     }
 
     fn paint(&mut self) {
+        let (now, animations) = (Instant::now(), motion::animations());
         let settings_layout = self.settings_layout();
         let anims: Vec<RowAnim> = (0..self.files.len()).map(|i| self.row_anim(i)).collect();
         let anim = |i: usize| {
@@ -5361,7 +5331,7 @@ impl App {
             hover_link: self.hover_link,
             hover_retry: self.hover_retry,
             scroll: self.scroll,
-            drag: self.drag.value().clamp(0.0, 1.0),
+            drag: self.drag.value(now).clamp(0.0, 1.0),
             heat: heat_now(),
             row_anim: &anim,
             status: wheel_hint.as_deref().unwrap_or(&status),
@@ -5413,15 +5383,17 @@ impl App {
                     hover: s.hover,
                     pressed: s.pressed,
                     focus: s.focus,
-                    open: eased(s.opened, OPEN_MS),
-                    fade: s.closing.map_or(1.0, |t| 1.0 - eased(t, motion::QUICK_MS)),
+                    open: anim::eased(s.opened, OPEN_MS, now, animations),
+                    fade: s.closing.map_or(1.0, |t| {
+                        1.0 - anim::eased(t, motion::QUICK_MS, now, animations)
+                    }),
                 }),
                 _ => None,
             },
             settings: self.settings_ui.as_ref().map(|ui| SettingsView {
                 layout: &settings_layout,
-                tab_marker: ui.tab_marker.value(),
-                page: eased(ui.switched, motion::QUICK_MS),
+                tab_marker: ui.tab_marker.value(now),
+                page: anim::eased(ui.switched, motion::QUICK_MS, now, animations),
                 quality: &self.settings.quality,
                 output: (ui.output_line.0.as_str(), ui.output_line.1),
                 theme: self.settings.theme,
@@ -5782,7 +5754,7 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         hover_cancel: false,
         hover_link: false,
         hover_retry: false,
-        drag: Tween::new(0.0),
+        drag: Tween::new(0.0, Instant::now()),
         drag_paths: vec![],
         wheel: None,
         sheet: None,
@@ -6228,14 +6200,16 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
         }
         WM_TIMER if wparam.0 == ANIM_TIMER => {
             app.tick();
-            if !app.animating() {
-                unsafe {
+            match anim::frame_ms(app.moving(), app.burning(), motion::animations()) {
+                None => unsafe {
                     let _ = KillTimer(Some(hwnd), ANIM_TIMER);
-                }
-            } else if !app.moving() {
-                unsafe {
-                    SetTimer(Some(hwnd), ANIM_TIMER, HEAT_FRAME_MS, None);
-                }
+                },
+                // `animate` already set the timer to the frame rate, so
+                // only the slower heat rate needs setting.
+                Some(anim::FRAME_MS) => {}
+                Some(ms) => unsafe {
+                    SetTimer(Some(hwnd), ANIM_TIMER, ms, None);
+                },
             }
             app.invalidate();
             Some(LRESULT(0))
@@ -6453,13 +6427,15 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             match wparam.0 {
                 DRAG_ENTER => {
                     app.drag_paths = ev.paths.clone();
-                    app.drag.set(1.0, motion::QUICK_MS);
+                    app.drag
+                        .set(1.0, motion::QUICK_MS, Instant::now(), motion::animations());
                     app.animate();
                     app.drag_over(ev);
                 }
                 DRAG_OVER => app.drag_over(ev),
                 DRAG_LEAVE => {
-                    app.drag.set(0.0, motion::QUICK_MS);
+                    app.drag
+                        .set(0.0, motion::QUICK_MS, Instant::now(), motion::animations());
                     app.drag_paths.clear();
                     app.close_wheel();
                     app.animate();

@@ -4,6 +4,7 @@
 
 pub mod a11y;
 pub mod actions;
+pub mod anim;
 pub mod help;
 pub mod icons;
 pub mod layout;
