@@ -114,8 +114,16 @@ pub struct Layout {
     pub body: Rect,
     /// The empty-state drop panel, or the file list panel.
     pub panel: Rect,
-    /// Row rects in panel coordinates, before scrolling. Empty when there
-    /// are no files.
+    /// The list's part of the panel: all of it while there is no
+    /// inspector, else what is left of it beside the inspector and its
+    /// rule.
+    pub list: Rect,
+    /// The inspector's part of the panel, at the panel's right edge, with
+    /// a rule [`INSPECTOR_RULE`] wide between it and the list. `None`
+    /// when there are no files or it isn't shown.
+    pub inspector: Option<Rect>,
+    /// Row rects in panel coordinates, before scrolling, as wide as the
+    /// list. Empty when there are no files.
     pub rows: Vec<Rect>,
     pub footer: Option<Rect>,
     pub clear_button: Option<Rect>,
@@ -125,14 +133,44 @@ pub struct Layout {
     pub help_button: Rect,
 }
 
-/// Lay out a window of `w` x `h` DIPs holding `rows` files.
+/// Whether a window `w` zoomed DIPs wide is wide enough to show the
+/// inspector beside the list. A larger Text size zooms `w` down, so it
+/// folds the inspector away sooner.
+pub fn inspector_fits(w: f32) -> bool {
+    w >= INSPECTOR_FROM
+}
+
+/// Lay out a window of `w` x `h` DIPs holding `rows` files, with the
+/// inspector shown whenever the window is wide enough for it.
 pub fn layout(w: f32, h: f32, rows: usize) -> Layout {
+    layout_with(w, h, rows, inspector_fits(w) as u8 as f32)
+}
+
+/// [`layout`] with the inspector `shown` of the way in, from 0 (folded
+/// away) to 1 (all of it). It slides in from the panel's right edge, so
+/// it is `INSPECTOR_WIDTH * shown` wide and the list gives up what it
+/// takes. With no files there is no inspector, whatever `shown` says.
+pub fn layout_with(w: f32, h: f32, rows: usize, shown: f32) -> Layout {
     let p = PANEL_PADDING;
+    let shown = if shown.is_finite() {
+        shown.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let inspected = rows > 0 && shown > 0.0;
     let header = Rect::new(0.0, 0.0, w, HEADER_HEIGHT);
     // Content stays in a column of a readable width, centred in a wide
     // window, so a row's link is never a thousand pixels from its name.
-    let col_w = (w - 2.0 * p).clamp(0.0, MAX_CONTENT_WIDTH);
-    let col_x = ((w - col_w) / 2.0).max(p);
+    // The inspector's column is wider by most of its own width.
+    let cap = if inspected {
+        MAX_CONTENT_WIDTH_WIDE
+    } else {
+        MAX_CONTENT_WIDTH
+    };
+    let col_w = (w - 2.0 * p).clamp(0.0, cap);
+    // Centred to the 4 DIP grid: the wide column's width leaves a half
+    // grid step at some window widths.
+    let col_x = snap(((w - col_w) / 2.0).max(p));
     let icon = Rect::new(col_x, p, 24.0, 24.0);
     let wordmark = Rect::new(icon.right() + 12.0, 12.0, 160.0, 32.0);
     let settings_button = Rect::new((col_x + col_w - 32.0).max(0.0), 12.0, 32.0, 32.0);
@@ -151,6 +189,8 @@ pub fn layout(w: f32, h: f32, rows: usize) -> Layout {
             wordmark,
             body,
             panel: body,
+            list: body,
+            inspector: None,
             rows: vec![],
             footer: None,
             clear_button: None,
@@ -166,15 +206,21 @@ pub fn layout(w: f32, h: f32, rows: usize) -> Layout {
         body.w,
         (body.h - FOOTER_HEIGHT - GRID).max(0.0),
     );
+    let (list, inspector) = if inspected {
+        let iw = INSPECTOR_WIDTH * shown;
+        let inspector = Rect::new(panel.right() - iw, panel.y, iw, panel.h);
+        let list = Rect::new(
+            panel.x,
+            panel.y,
+            (panel.w - iw - INSPECTOR_RULE).max(0.0),
+            panel.h,
+        );
+        (list, Some(inspector))
+    } else {
+        (panel, None)
+    };
     let rows = (0..rows)
-        .map(|i| {
-            Rect::new(
-                panel.x,
-                panel.y + i as f32 * ROW_HEIGHT,
-                panel.w,
-                ROW_HEIGHT,
-            )
-        })
+        .map(|i| Rect::new(list.x, list.y + i as f32 * ROW_HEIGHT, list.w, ROW_HEIGHT))
         .collect();
     let clear_button = Rect::new(
         footer.right() - BUTTON_WIDTH,
@@ -188,6 +234,8 @@ pub fn layout(w: f32, h: f32, rows: usize) -> Layout {
         wordmark,
         body,
         panel,
+        list,
+        inspector,
         rows,
         footer: Some(footer),
         clear_button: Some(clear_button),
@@ -314,6 +362,18 @@ pub fn row_line(row: &Rect) -> Rect {
     Rect::new(row.x + 16.0, row.y + 28.0, (row.w - 32.0).max(0.0), 20.0)
 }
 
+/// A row's preview: [`PREVIEW_ROW`] square, 12 DIPs in from the row's
+/// left edge and centred up and down. The chip and the text start
+/// [`PREVIEW_GAP`] after it.
+pub fn row_preview(row: &Rect) -> Rect {
+    Rect::new(
+        row.x + 12.0,
+        row.y + (row.h - PREVIEW_ROW) / 2.0,
+        PREVIEW_ROW,
+        PREVIEW_ROW,
+    )
+}
+
 /// Width of the footer's "Export all (n)" button.
 pub const EXPORT_ALL_WIDTH: f32 = 128.0;
 
@@ -355,6 +415,39 @@ pub fn rows_per_page(panel_h: f32) -> isize {
 
 /// The widest the content column grows in a wide window.
 pub const MAX_CONTENT_WIDTH: f32 = 880.0;
+
+/// The widest it grows while the inspector shows: the list keeps about
+/// the width it has without one.
+pub const MAX_CONTENT_WIDTH_WIDE: f32 = 1180.0;
+
+/// The inspector's width, in DIPs.
+pub const INSPECTOR_WIDTH: f32 = 300.0;
+
+/// The rule between the list and the inspector.
+pub const INSPECTOR_RULE: f32 = 1.0;
+
+/// The narrowest window, in zoomed DIPs, that shows the inspector beside
+/// the list. Narrower, it folds away.
+pub const INSPECTOR_FROM: f32 = 760.0;
+
+/// A row's preview: a square this many DIPs on a side.
+pub const PREVIEW_ROW: f32 = 34.0;
+
+/// The corner radius of a row's preview.
+pub const PREVIEW_RADIUS: f32 = 6.0;
+
+/// The inspector's preview, in DIPs: the width and height at
+/// [`INSPECTOR_WIDTH`], where it spans what the padding leaves.
+pub const HERO: (f32, f32) = (268.0, 120.0);
+
+/// Height of a format the inspector offers to convert to.
+pub const TARGET_HEIGHT: f32 = 36.0;
+
+/// Height of one labelled fact in the inspector.
+pub const FACT_HEIGHT: f32 = 18.0;
+
+/// Gap between a row's preview and the chip and text beside it.
+pub const PREVIEW_GAP: f32 = 12.0;
 
 /// Width of the footer's "Undo" link, after rows were removed.
 pub const UNDO_WIDTH: f32 = 48.0;
@@ -435,7 +528,7 @@ pub fn wheel_centre(radius: f32) -> WheelCentre {
 /// The empty window's centred group, top to bottom.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EmptyState {
-    /// The vessel icon, drawn at twice its size.
+    /// The vessel icon, drawn at three times its size.
     pub vessel: Rect,
     pub headline: Rect,
     pub instruction: Rect,
@@ -446,21 +539,49 @@ pub struct EmptyState {
     pub status: Rect,
     pub keys: Rect,
     pub privacy: Rect,
+    /// A tile for each of the four kinds, in a row under the privacy
+    /// line, with a word line [`GLAZE_WORD`] tall [`GLAZE_WORD_GAP`]
+    /// below each. `None` when the panel is too short to hold them whole:
+    /// the rest of the group then stands as it would without them.
+    pub glazes: Option<[Rect; 4]>,
 }
+
+/// A glaze tile in the empty window: a square this many DIPs on a side.
+pub const GLAZE_TILE: f32 = 64.0;
+
+/// The gap between two glaze tiles.
+pub const GLAZE_TILE_GAP: f32 = 12.0;
+
+/// Height of the word line under a glaze tile.
+pub const GLAZE_WORD: f32 = 16.0;
+
+/// The gap between a glaze tile and its word.
+pub const GLAZE_WORD_GAP: f32 = 4.0;
 
 /// The empty window's group, centred in the drop panel.
 pub fn empty_state(panel: &Rect) -> EmptyState {
     // Each part's height and the gap after it.
-    const PARTS: [(f32, f32); 7] = [
-        (48.0, 16.0),         // vessel
-        (24.0, 4.0),          // headline
-        (20.0, 12.0),         // instruction
-        (BUTTON_HEIGHT, 8.0), // button
-        (16.0, 8.0),          // status
-        (16.0, 4.0),          // keys
-        (16.0, 0.0),          // privacy
+    const PARTS: [(f32, f32); 8] = [
+        (72.0, 16.0),                                    // vessel
+        (24.0, 4.0),                                     // headline
+        (20.0, 12.0),                                    // instruction
+        (BUTTON_HEIGHT, 8.0),                            // button
+        (16.0, 8.0),                                     // status
+        (16.0, 4.0),                                     // keys
+        (16.0, 20.0),                                    // privacy, and the gap to the tiles
+        (GLAZE_TILE + GLAZE_WORD_GAP + GLAZE_WORD, 0.0), // tiles and words
     ];
-    let total: f32 = PARTS.iter().map(|(h, gap)| h + gap).sum();
+    // The tiles' part; the parts before it are the text.
+    const TILES: usize = 7;
+    let sum = |parts: &[(f32, f32)]| parts.iter().map(|(h, gap)| h + gap).sum::<f32>();
+    // The tiles show only when the whole group, with them, fits. Without
+    // them the privacy line is the last part and has no gap after it.
+    let tiles = panel.h >= sum(&PARTS);
+    let total = if tiles {
+        sum(&PARTS)
+    } else {
+        sum(&PARTS[..TILES]) - PARTS[TILES - 1].1
+    };
     let mut y = snap(panel.y + ((panel.h - total) / 2.0).max(0.0));
     let cx = panel.x + panel.w / 2.0;
     let line = |y: f32, h: f32| Rect::new(panel.x + 16.0, y, (panel.w - 32.0).max(0.0), h);
@@ -469,7 +590,7 @@ pub fn empty_state(panel: &Rect) -> EmptyState {
         y += PARTS[k].0 + PARTS[k].1;
         top
     };
-    let vessel = Rect::new(snap(cx - 24.0), next(0), 48.0, 48.0);
+    let vessel = Rect::new(snap(cx - 36.0), next(0), 72.0, 72.0);
     let headline = line(next(1), 24.0);
     let instruction = line(next(2), 20.0);
     let button = Rect::new(
@@ -481,6 +602,18 @@ pub fn empty_state(panel: &Rect) -> EmptyState {
     let status = line(next(4), 16.0);
     let keys = line(next(5), 16.0);
     let privacy = line(next(6), 16.0);
+    // Four tiles with a gap between, centred on the panel. A whole DIP
+    // keeps their edges crisp; the span is odd in grid units, so the row
+    // can't be both centred and on the 4 DIP grid.
+    let glazes = tiles.then(|| {
+        let top = next(TILES);
+        let span = 4.0 * GLAZE_TILE + 3.0 * GLAZE_TILE_GAP;
+        let left = (cx - span / 2.0).round();
+        std::array::from_fn(|i| {
+            let x = left + i as f32 * (GLAZE_TILE + GLAZE_TILE_GAP);
+            Rect::new(x, top, GLAZE_TILE, GLAZE_TILE)
+        })
+    });
     EmptyState {
         vessel,
         headline,
@@ -489,6 +622,7 @@ pub fn empty_state(panel: &Rect) -> EmptyState {
         status,
         keys,
         privacy,
+        glazes,
     }
 }
 
@@ -1175,6 +1309,171 @@ fn snap(v: f32) -> f32 {
     (v / GRID).floor() * GRID
 }
 
+/// What the inspector shows, as far as its geometry goes: which parts it
+/// has, and how tall the ones that hold wrapped text are.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InspectorShape {
+    /// Nothing selected: the vessel in the hero's place, a title, and
+    /// two lines of body.
+    Nothing,
+    /// One file nothing has been done to. `what_h` is the height of what
+    /// the format is, wrapped (0 for none); `facts` the labelled facts;
+    /// `targets` the formats offered; `more` whether More follows them.
+    Waiting {
+        what_h: f32,
+        facts: usize,
+        targets: usize,
+        more: bool,
+    },
+    /// A running job: the percentage and the time left in the body, and
+    /// Cancel.
+    Converting,
+    /// A finished job. `change` says there is a before and after to show.
+    Done { change: bool },
+    /// A failed or cancelled job: its sentence, `sentence_h` tall once
+    /// wrapped, and Retry when `retry`, then Show details.
+    Failed { sentence_h: f32, retry: bool },
+    /// Several files. `targets` counts whichever list is shown: the
+    /// formats they all share or, when they share none, the kinds
+    /// offered. `none_h` is the height of the sentence saying why there
+    /// is no shared format (0 when there is one).
+    Several { targets: usize, none_h: f32 },
+}
+
+/// Where the inspector's parts go. A part the shape doesn't have, or that
+/// doesn't fit whole, is `None` or empty; `hero`, `title` and `body` are
+/// always there to draw into, as an empty rect when left out.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct InspectorLayout {
+    /// The preview, [`HERO`] tall and as wide as the padding leaves. In
+    /// `Nothing` it holds the 48 DIP vessel, centred.
+    pub hero: Rect,
+    pub title: Rect,
+    /// What the format is, the sentence, or the lines of a running job
+    /// (the 40 DIP percentage, then a 20 DIP time line). Empty when the
+    /// shape has none.
+    pub body: Rect,
+    /// One rect per fact, [`FACT_HEIGHT`] tall.
+    pub facts: Vec<Rect>,
+    /// The "Turn it into" line over the targets.
+    pub label: Option<Rect>,
+    /// One rect per target, [`TARGET_HEIGHT`] tall, however many fit.
+    pub targets: Vec<Rect>,
+    pub more: Option<Rect>,
+    /// The buttons' slots, left to right. A shape gets a slot for each
+    /// button it can have, and the controls take them in their order.
+    pub buttons: Vec<Rect>,
+}
+
+/// Width of an inspector button.
+pub const INSPECTOR_BUTTON_WIDTH: f32 = 96.0;
+
+/// The inspector's parts stacked down `r`, inside 16 DIPs of padding.
+/// Whatever doesn't fit whole inside it is left out, and so is every part
+/// after it, so a short inspector shows the top of its story and not a
+/// cut-off bottom.
+pub fn inspector_layout(r: &Rect, shape: &InspectorShape) -> InspectorLayout {
+    /// Parts stacked down the padded rect, each after a gap.
+    struct Stack {
+        inner: Rect,
+        y: f32,
+        fits: bool,
+    }
+    impl Stack {
+        fn place(&mut self, gap: f32, h: f32) -> Option<Rect> {
+            let y = self.y + gap;
+            if !self.fits || y + h > self.inner.bottom() {
+                self.fits = false;
+                return None;
+            }
+            self.y = y + h;
+            Some(Rect::new(self.inner.x, y, self.inner.w, h))
+        }
+    }
+
+    const TITLE: f32 = 24.0;
+    const LABEL: f32 = 16.0;
+    const MORE: f32 = 24.0;
+    let inner = r.inset(PANEL_PADDING);
+    let mut s = Stack {
+        inner,
+        y: inner.y,
+        fits: true,
+    };
+    // The body's height, the facts, the targets, whether More follows
+    // them, and the slots for buttons.
+    let (body_h, facts, targets, more, buttons) = match *shape {
+        InspectorShape::Nothing => (40.0, 0, 0, false, 0),
+        InspectorShape::Waiting {
+            what_h,
+            facts,
+            targets,
+            more,
+        } => (what_h, facts, targets, more, 0),
+        InspectorShape::Converting => (60.0, 0, 0, false, 1),
+        InspectorShape::Done { change } => (if change { 20.0 } else { 0.0 }, 0, 0, false, 1),
+        InspectorShape::Failed { sentence_h, retry } => {
+            (sentence_h, 0, 0, false, if retry { 2 } else { 1 })
+        }
+        InspectorShape::Several { targets, none_h } => (none_h, 0, targets, false, 0),
+    };
+    // A part's place, or an empty rect where the stack stopped.
+    let required =
+        |at: Option<Rect>, s: &Stack| at.unwrap_or(Rect::new(s.inner.x, s.y, s.inner.w, 0.0));
+
+    let hero = s.place(0.0, HERO.1);
+    let hero = required(hero, &s);
+    let title = s.place(12.0, TITLE);
+    let title = required(title, &s);
+    let body = if body_h > 0.0 {
+        s.place(8.0, body_h)
+    } else {
+        None
+    };
+    let body = required(body, &s);
+
+    let facts: Vec<Rect> = (0..facts)
+        .map_while(|i| s.place(if i == 0 { 12.0 } else { 0.0 }, FACT_HEIGHT))
+        .collect();
+
+    let mut label = None;
+    let mut rows = vec![];
+    if targets > 0 {
+        label = s.place(12.0, LABEL);
+        rows = (0..targets)
+            .map_while(|_| s.place(6.0, TARGET_HEIGHT))
+            .collect();
+        // A heading over nothing is worse than none.
+        if rows.is_empty() {
+            label = None;
+        }
+    }
+    let more = if more { s.place(6.0, MORE) } else { None };
+
+    let mut slots = vec![];
+    if buttons > 0 {
+        if let Some(first) = s.place(12.0, BUTTON_HEIGHT) {
+            slots = (0..buttons)
+                .map(|i| {
+                    let x = first.x + i as f32 * (INSPECTOR_BUTTON_WIDTH + 8.0);
+                    Rect::new(x, first.y, INSPECTOR_BUTTON_WIDTH, BUTTON_HEIGHT)
+                })
+                .collect();
+        }
+    }
+
+    InspectorLayout {
+        hero,
+        title,
+        body,
+        facts,
+        label,
+        targets: rows,
+        more,
+        buttons: slots,
+    }
+}
+
 /// Largest scroll offset for a list of `rows` inside a panel `panel_h` tall.
 pub fn max_scroll(rows: usize, panel_h: f32) -> f32 {
     (rows as f32 * ROW_HEIGHT - panel_h).max(0.0)
@@ -1195,10 +1494,11 @@ pub fn scroll_to_show(index: usize, scroll: f32, panel_h: f32) -> f32 {
 
 /// Which row is under a point, given the current scroll.
 pub fn row_at(l: &Layout, x: f32, y: f32, scroll: f32) -> Option<usize> {
-    if !l.panel.contains(x, y) {
+    // The inspector's part of the panel holds no rows.
+    if !l.list.contains(x, y) {
         return None;
     }
-    let i = ((y - l.panel.y + scroll) / ROW_HEIGHT).floor();
+    let i = ((y - l.list.y + scroll) / ROW_HEIGHT).floor();
     (i >= 0.0 && (i as usize) < l.rows.len()).then_some(i as usize)
 }
 
@@ -1218,15 +1518,36 @@ mod tests {
 
     #[test]
     fn everything_sits_on_the_grid() {
-        for (w, h) in [(480.0, 360.0), (720.0, 480.0), (1024.0, 768.0)] {
+        for (w, h) in [
+            (480.0, 360.0),
+            (720.0, 480.0),
+            (1024.0, 768.0),
+            (1200.0, 360.0),
+            (1600.0, 900.0),
+        ] {
             for rows in [0, 1, 5] {
                 let l = layout(w, h, rows);
                 assert_grid(&l.header, "header");
                 assert_grid(&l.icon, "icon");
                 assert_grid(&l.body, "body");
                 assert_grid(&l.panel, "panel");
+                // The list gives up the inspector's 1 DIP rule, so with the
+                // rule counted back in, it and its rows stand on the grid.
+                let ruled = |r: &Rect| {
+                    let rule = if l.inspector.is_some() {
+                        INSPECTOR_RULE
+                    } else {
+                        0.0
+                    };
+                    Rect::new(r.x, r.y, r.w + rule, r.h)
+                };
+                assert_grid(&ruled(&l.list), "list");
                 for r in &l.rows {
-                    assert_grid(r, "row");
+                    assert_grid(&ruled(r), "row");
+                }
+                assert_eq!(l.inspector.is_some(), rows > 0 && inspector_fits(w));
+                if let Some(i) = &l.inspector {
+                    assert_grid(i, "inspector");
                 }
                 if let Some(f) = &l.footer {
                     assert_grid(f, "footer");
@@ -1412,7 +1733,7 @@ mod tests {
         // The empty window.
         let l = layout(w, h, 0);
         let e = empty_state(&l.panel);
-        all_apart(&[
+        let mut rects: Vec<(String, Rect)> = vec![
             ("icon".into(), l.icon),
             ("wordmark".into(), l.wordmark),
             ("help".into(), l.help_button),
@@ -1424,7 +1745,14 @@ mod tests {
             ("status".into(), e.status),
             ("keys".into(), e.keys),
             ("privacy".into(), e.privacy),
-        ]);
+        ];
+        // The glaze tiles, each with the word line under it.
+        for (i, tile) in e.glazes.iter().flatten().enumerate() {
+            let word = Rect::new(tile.x, tile.bottom() + GLAZE_WORD_GAP, tile.w, GLAZE_WORD);
+            rects.push((format!("glaze {i}"), *tile));
+            rects.push((format!("glaze {i} word"), word));
+        }
+        all_apart(&rects);
 
         // The list, with every row control and the footer.
         let l = layout(w, h, 4);
@@ -1451,8 +1779,22 @@ mod tests {
         for (i, r) in visible.into_iter().enumerate() {
             rects.push((format!("row {i} link"), row_link(r)));
             assert!(row_link(r).bottom() <= r.bottom() && row_cancel(r).bottom() <= r.bottom());
+            assert!(
+                r.x >= l.list.x && r.right() <= l.list.right(),
+                "row in list"
+            );
+            // The preview sits inside its row, with room for the chip.
+            let p = row_preview(r);
+            assert!(p.x >= r.x && p.y >= r.y && p.bottom() <= r.bottom());
+            assert!(p.right() + PREVIEW_GAP < row_link(r).x, "row {i} preview");
         }
         all_apart(&rects);
+        // The list and the inspector share the panel and never touch.
+        if let Some(i) = l.inspector {
+            all_apart(&[("list".into(), l.list), ("inspector".into(), i)]);
+            assert!(i.x >= l.panel.x && i.right() <= l.panel.right());
+            assert!((i.y, i.h) == (l.panel.y, l.panel.h));
+        }
 
         // The dialogs.
         let d = dialog(w, h);
@@ -1555,6 +1897,10 @@ mod tests {
     fn nothing_overlaps_in_the_smallest_window_at_any_text_size() {
         assert_nothing_overlaps(1.0, min_window(1.0));
         assert_nothing_overlaps(MAX_TEXT_SCALE, min_window(MAX_TEXT_SCALE));
+        // Wide windows, where the inspector shows beside the list: a short
+        // one and a roomy one.
+        assert_nothing_overlaps(1.0, (1200.0, 360.0));
+        assert_nothing_overlaps(1.0, (1600.0, 900.0));
         // A screen too small for the grown minimum: the zoom gives way and
         // the units come out above MIN_WINDOW and not round.
         let small = (1366.0, 700.0);
@@ -2009,7 +2355,13 @@ mod tests {
 
     #[test]
     fn the_empty_state_stacks_on_the_grid_and_fits() {
-        for (w, h) in [(480.0, 360.0), (720.0, 480.0), (1024.0, 768.0)] {
+        for (w, h) in [
+            (480.0, 360.0),
+            (720.0, 480.0),
+            (1024.0, 768.0),
+            (1200.0, 360.0),
+            (1600.0, 900.0),
+        ] {
             let panel = layout(w, h, 0).panel;
             let e = empty_state(&panel);
             let order = [
@@ -2021,6 +2373,33 @@ mod tests {
                 e.keys,
                 e.privacy,
             ];
+            // The tiles show where the group with them fits, in a row of
+            // four under the privacy line, and each has room for its word.
+            // Where they don't fit, the rest of the group is still whole.
+            // The group with them is 352 DIPs tall: the text's 248, a gap
+            // of 20, and the tiles' 64 + 4 + 16.
+            assert_eq!(e.glazes.is_some(), panel.h >= 352.0, "{w}x{h}");
+            let mut last = e.privacy.bottom();
+            if let Some(tiles) = e.glazes {
+                for t in &tiles {
+                    assert_eq!((t.w, t.h), (GLAZE_TILE, GLAZE_TILE));
+                    assert_eq!(t.y, tiles[0].y);
+                    assert!(on_grid(t.y), "tiles' top {}", t.y);
+                    assert!(t.y >= e.privacy.bottom());
+                    assert!(t.x >= panel.x && t.right() <= panel.right());
+                }
+                for pair in tiles.windows(2) {
+                    assert_eq!(pair[1].x - pair[0].right(), GLAZE_TILE_GAP);
+                }
+                last = tiles[0].bottom() + GLAZE_WORD_GAP + GLAZE_WORD;
+                assert!(last <= panel.bottom());
+            }
+            // The group is centred up and down, to the 4 DIP grid.
+            let (top, bottom) = (order[0].y - panel.y, panel.bottom() - last);
+            assert!(
+                (bottom - top).abs() <= 2.0 * GRID,
+                "{top} above, {bottom} below"
+            );
             for (k, r) in order.iter().enumerate() {
                 assert_grid(r, "empty state part");
                 assert!(r.x >= panel.x && r.right() <= panel.right(), "{k}: {r:?}");
@@ -2102,19 +2481,378 @@ mod tests {
             // On an ultrawide the column is capped and centred, with the
             // header's buttons at its right end and the footer's links
             // within reach of the names.
+            // The inspector's column is wider, so the list beside it keeps
+            // about the width the column had without one.
             let wide = layout(3000.0, 1200.0, rows);
-            assert_eq!(wide.body.w, MAX_CONTENT_WIDTH);
-            assert_eq!(wide.body.x + wide.body.w / 2.0, 1500.0);
+            let cap = if rows > 0 {
+                MAX_CONTENT_WIDTH_WIDE
+            } else {
+                MAX_CONTENT_WIDTH
+            };
+            assert_eq!(wide.body.w, cap);
+            assert!((wide.body.x + wide.body.w / 2.0 - 1500.0).abs() <= GRID / 2.0);
             assert_eq!(wide.settings_button.right(), wide.body.right());
             assert_eq!(wide.icon.x, wide.body.x);
             if rows > 0 {
                 let row = wide.rows[0];
-                assert_eq!((row.x, row.w), (wide.body.x, MAX_CONTENT_WIDTH));
+                assert_eq!((row.x, row.w), (wide.body.x, wide.list.w));
+                assert!(wide.list.w >= MAX_CONTENT_WIDTH - 1.0);
                 assert!(wide.footer.unwrap().right() <= wide.body.right());
                 // The row's links sit within the column.
                 assert!(row_link(&row).right() <= wide.body.right());
             }
         }
+    }
+
+    #[test]
+    fn the_inspector_shows_from_760_and_takes_300() {
+        let narrow = layout(759.0, 560.0, 3);
+        assert!(narrow.inspector.is_none());
+        assert_eq!(narrow.list, narrow.panel);
+        let wide = layout(760.0, 560.0, 3);
+        let i = wide.inspector.unwrap();
+        assert_eq!(i.w, INSPECTOR_WIDTH);
+        assert_eq!(i.right(), wide.panel.right());
+        assert_eq!(wide.list.w + 1.0 + i.w, wide.panel.w);
+        assert_eq!(wide.rows[0].w, wide.list.w);
+    }
+
+    #[test]
+    fn a_wide_window_caps_the_content_at_1180() {
+        let l = layout(2000.0, 900.0, 3);
+        assert_eq!(l.body.w, MAX_CONTENT_WIDTH_WIDE);
+        assert!(l.list.w >= 879.0);
+    }
+
+    #[test]
+    fn half_shown_slides_from_the_right() {
+        let l = layout_with(1000.0, 600.0, 3, 0.5);
+        assert_eq!(l.inspector.unwrap().w, INSPECTOR_WIDTH * 0.5);
+    }
+
+    #[test]
+    fn the_empty_window_has_no_inspector() {
+        assert!(layout(1000.0, 600.0, 0).inspector.is_none());
+        // Whatever the window is shown, no files means no inspector and
+        // the column stays as narrow as the empty window has always had it.
+        let l = layout_with(2000.0, 900.0, 0, 1.0);
+        assert!(l.inspector.is_none());
+        assert_eq!((l.list, l.body.w), (l.panel, MAX_CONTENT_WIDTH));
+    }
+
+    #[test]
+    fn the_inspector_slides_in_from_the_panels_right_edge() {
+        for shown in [0.25, 0.5, 0.75, 1.0] {
+            let l = layout_with(1000.0, 600.0, 3, shown);
+            let i = l.inspector.unwrap();
+            assert_eq!(i.right(), l.panel.right());
+            assert_eq!((i.y, i.h), (l.panel.y, l.panel.h));
+            // The list gives up what the inspector takes, and the rule.
+            assert_eq!(l.list.right() + INSPECTOR_RULE, i.x);
+            assert_eq!(l.list.x, l.panel.x);
+        }
+        // Folded away it leaves the list whole and the column as narrow
+        // as it was; shown too far in either direction is kept in range.
+        let folded = layout_with(2000.0, 900.0, 3, 0.0);
+        assert!(folded.inspector.is_none());
+        assert_eq!(
+            (folded.list, folded.body.w),
+            (folded.panel, MAX_CONTENT_WIDTH)
+        );
+        assert_eq!(folded.rows[0].w, folded.panel.w);
+        let w = |shown| layout_with(1000.0, 600.0, 3, shown).inspector.map(|i| i.w);
+        assert_eq!(w(2.0), Some(INSPECTOR_WIDTH));
+        assert_eq!(w(-1.0), None);
+        assert_eq!(w(f32::NAN), None);
+    }
+
+    #[test]
+    fn a_click_in_the_inspector_is_no_click_on_a_row() {
+        let l = layout(1000.0, 600.0, 3);
+        let i = l.inspector.unwrap();
+        let y = l.panel.y + ROW_HEIGHT / 2.0;
+        assert_eq!(row_at(&l, l.list.x + 10.0, y, 0.0), Some(0));
+        assert_eq!(row_at(&l, i.x + 10.0, y, 0.0), None);
+        assert_eq!(
+            row_at(&l, l.list.right() + INSPECTOR_RULE / 2.0, y, 0.0),
+            None
+        );
+    }
+
+    #[test]
+    fn the_row_preview_sits_at_the_left_on_the_grid() {
+        let row = Rect::new(16.0, 72.0, 600.0, ROW_HEIGHT);
+        let p = row_preview(&row);
+        assert_eq!((p.x, p.w, p.h), (28.0, PREVIEW_ROW, PREVIEW_ROW));
+        assert_eq!(p.y - row.y, row.bottom() - p.bottom());
+    }
+
+    #[test]
+    fn a_short_inspector_drops_what_does_not_fit_whole() {
+        let r = Rect::new(900.0, 72.0, 300.0, 260.0);
+        let l = inspector_layout(
+            &r,
+            &InspectorShape::Waiting {
+                what_h: 40.0,
+                facts: 3,
+                targets: 3,
+                more: true,
+            },
+        );
+        let inner = r.inset(16.0);
+        for t in l.targets.iter().chain(l.more.iter()).chain(l.facts.iter()) {
+            assert!(t.y >= inner.y && t.bottom() <= inner.bottom());
+        }
+        assert!(l.targets.len() < 3);
+    }
+
+    /// Every shape the inspector can take, with the most parts it has.
+    fn every_shape() -> [InspectorShape; 7] {
+        [
+            InspectorShape::Nothing,
+            InspectorShape::Waiting {
+                what_h: 40.0,
+                facts: 4,
+                targets: 3,
+                more: true,
+            },
+            InspectorShape::Converting,
+            InspectorShape::Done { change: true },
+            InspectorShape::Failed {
+                sentence_h: 60.0,
+                retry: true,
+            },
+            InspectorShape::Several {
+                targets: 3,
+                none_h: 0.0,
+            },
+            InspectorShape::Several {
+                targets: 0,
+                none_h: 80.0,
+            },
+        ]
+    }
+
+    /// The parts of an inspector layout that stand, in reading order.
+    fn standing(l: &InspectorLayout) -> Vec<(String, Rect)> {
+        let mut parts = vec![("hero".to_string(), l.hero), ("title".to_string(), l.title)];
+        if l.body.h > 0.0 {
+            parts.push(("body".into(), l.body));
+        }
+        let numbered = |name: &str, rs: &[Rect]| -> Vec<(String, Rect)> {
+            rs.iter()
+                .enumerate()
+                .map(|(i, r)| (format!("{name} {i}"), *r))
+                .collect()
+        };
+        parts.extend(numbered("fact", &l.facts));
+        parts.extend(l.label.map(|r| ("label".to_string(), r)));
+        parts.extend(numbered("target", &l.targets));
+        parts.extend(l.more.map(|r| ("more".to_string(), r)));
+        // The buttons share a row: the first stands for it.
+        parts.extend(l.buttons.first().map(|r| ("buttons".to_string(), *r)));
+        parts.retain(|(_, r)| r.h > 0.0);
+        parts
+    }
+
+    #[test]
+    fn the_inspector_stacks_its_parts_with_the_gaps_it_is_given() {
+        let r = Rect::new(900.0, 72.0, INSPECTOR_WIDTH, 900.0);
+        let inner = r.inset(16.0);
+        let waiting = inspector_layout(
+            &r,
+            &InspectorShape::Waiting {
+                what_h: 40.0,
+                facts: 3,
+                targets: 3,
+                more: true,
+            },
+        );
+        // The hero, then 12, the title, 8, the body, 12, the facts one
+        // under the next, 12, the label, 6, the targets 6 apart, 6, More.
+        assert_eq!(waiting.hero, Rect::new(inner.x, inner.y, HERO.0, HERO.1));
+        assert_eq!(waiting.title.y, waiting.hero.bottom() + 12.0);
+        assert_eq!(waiting.title.h, 24.0);
+        assert_eq!(waiting.body.y, waiting.title.bottom() + 8.0);
+        assert_eq!(waiting.body.h, 40.0);
+        assert_eq!(waiting.facts.len(), 3);
+        assert_eq!(waiting.facts[0].y, waiting.body.bottom() + 12.0);
+        for pair in waiting.facts.windows(2) {
+            assert_eq!(pair[1].y, pair[0].bottom());
+        }
+        assert!(waiting.facts.iter().all(|f| f.h == FACT_HEIGHT));
+        let label = waiting.label.unwrap();
+        assert_eq!(label.y, waiting.facts[2].bottom() + 12.0);
+        assert_eq!(label.h, 16.0);
+        assert_eq!(waiting.targets.len(), 3);
+        assert_eq!(waiting.targets[0].y, label.bottom() + 6.0);
+        for pair in waiting.targets.windows(2) {
+            assert_eq!(pair[1].y, pair[0].bottom() + 6.0);
+        }
+        assert!(waiting.targets.iter().all(|t| t.h == TARGET_HEIGHT));
+        let more = waiting.more.unwrap();
+        assert_eq!(more.y, waiting.targets[2].bottom() + 6.0);
+        assert_eq!(more.h, 24.0);
+        assert!(waiting.buttons.is_empty());
+        // Every part is as wide as the padding leaves.
+        for (name, p) in standing(&waiting) {
+            assert_eq!((p.x, p.w), (inner.x, inner.w), "{name}");
+        }
+
+        // A running job: the percentage and the time left share the body,
+        // and Cancel follows, 12 below.
+        let running = inspector_layout(&r, &InspectorShape::Converting);
+        assert_eq!(running.body.h, 40.0 + 20.0);
+        assert!(running.facts.is_empty() && running.label.is_none());
+        assert_eq!(running.buttons.len(), 1);
+        let cancel = running.buttons[0];
+        assert_eq!(cancel.y, running.body.bottom() + 12.0);
+        assert_eq!((cancel.w, cancel.h), (96.0, BUTTON_HEIGHT));
+
+        // A failure with Retry has a slot for it and for Show details, 8
+        // apart, left to right; without Retry, one slot.
+        let failed = |retry| InspectorShape::Failed {
+            sentence_h: 60.0,
+            retry,
+        };
+        let two = inspector_layout(&r, &failed(true));
+        assert_eq!(two.body.h, 60.0);
+        assert_eq!(two.buttons.len(), 2);
+        assert_eq!(two.buttons[1].x, two.buttons[0].right() + 8.0);
+        assert_eq!(two.buttons[1].y, two.buttons[0].y);
+        assert_eq!(inspector_layout(&r, &failed(false)).buttons.len(), 1);
+
+        // A finished one has a body only when there is a change to show.
+        let done = |change| inspector_layout(&r, &InspectorShape::Done { change });
+        assert_eq!(done(true).body.h, 20.0);
+        assert_eq!(done(false).body.h, 0.0);
+        assert_eq!(done(true).buttons.len(), 1);
+        // With no body there is no gap for it either.
+        assert_eq!(done(false).buttons[0].y, done(false).title.bottom() + 12.0);
+
+        // Several files list their shared formats, or when they share
+        // none, the sentence and the kinds on offer: both as target rows.
+        let shared = inspector_layout(
+            &r,
+            &InspectorShape::Several {
+                targets: 3,
+                none_h: 0.0,
+            },
+        );
+        assert_eq!(shared.body.h, 0.0);
+        assert!(shared.label.is_some() && shared.more.is_none());
+        assert_eq!(shared.targets.len(), 3);
+        let none = inspector_layout(
+            &r,
+            &InspectorShape::Several {
+                targets: 2,
+                none_h: 80.0,
+            },
+        );
+        assert_eq!(none.body.h, 80.0);
+        assert_eq!(none.targets.len(), 2);
+        assert!(none.targets.iter().all(|t| t.h == TARGET_HEIGHT));
+        let no_list = inspector_layout(
+            &r,
+            &InspectorShape::Several {
+                targets: 0,
+                none_h: 80.0,
+            },
+        );
+        assert!(no_list.label.is_none() && no_list.targets.is_empty());
+
+        // Nothing selected: the vessel's hero, a title and two lines of
+        // body, and no facts, targets or buttons.
+        let nothing = inspector_layout(&r, &InspectorShape::Nothing);
+        assert_eq!((nothing.hero.w, nothing.hero.h), HERO);
+        assert!(nothing.hero.w >= 48.0 && nothing.hero.h >= 48.0);
+        assert_eq!((nothing.title.h, nothing.body.h), (24.0, 40.0));
+        assert!(nothing.facts.is_empty() && nothing.label.is_none());
+        assert!(nothing.targets.is_empty() && nothing.more.is_none());
+        assert!(nothing.buttons.is_empty());
+    }
+
+    #[test]
+    fn a_shorter_inspector_loses_parts_from_the_bottom_and_never_overflows() {
+        for shape in every_shape() {
+            let mut count = 0;
+            for h in (0..=900).step_by(4) {
+                let r = Rect::new(900.0, 72.0, INSPECTOR_WIDTH, h as f32);
+                let inner = r.inset(16.0);
+                let l = inspector_layout(&r, &shape);
+                let parts = standing(&l);
+                for (i, (name, p)) in parts.iter().enumerate() {
+                    assert!(
+                        p.y >= inner.y && p.bottom() <= inner.bottom(),
+                        "{shape:?} at {h}: {name} {p:?} leaves {inner:?}"
+                    );
+                    assert!(p.x >= inner.x && p.right() <= inner.right());
+                    if i > 0 {
+                        assert!(p.y >= parts[i - 1].1.bottom(), "{shape:?}: {name}");
+                    }
+                }
+                // Taller never shows less, and a part left out takes the
+                // parts after it.
+                assert!(parts.len() >= count, "{shape:?} at {h}");
+                count = parts.len();
+                if l.hero.h == 0.0 {
+                    assert_eq!(parts.len(), 0);
+                }
+                if l.title.h == 0.0 {
+                    assert!(parts.len() <= 1);
+                }
+                if l.targets.len()
+                    < match shape {
+                        InspectorShape::Waiting { targets, .. }
+                        | InspectorShape::Several { targets, .. } => targets,
+                        _ => 0,
+                    }
+                {
+                    assert!(l.more.is_none() && l.buttons.is_empty());
+                }
+                if l.targets.is_empty() {
+                    assert!(l.label.is_none(), "{shape:?} at {h}: a label over nothing");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_roomy_window_holds_every_part_of_the_inspector() {
+        let r = layout(1600.0, 900.0, 3).inspector.unwrap();
+        let waiting = inspector_layout(&r, &every_shape()[1]);
+        assert_eq!(
+            (waiting.facts.len(), waiting.targets.len()),
+            (4, 3),
+            "{waiting:?}"
+        );
+        assert!(waiting.more.is_some());
+        assert_eq!(inspector_layout(&r, &every_shape()[4]).buttons.len(), 2);
+    }
+
+    #[test]
+    fn the_empty_window_shows_four_glaze_tiles_centred() {
+        let e = empty_state(&Rect::new(16.0, 72.0, 688.0, 380.0));
+        let glazes = e.glazes.unwrap();
+        let span = glazes[3].right() - glazes[0].x;
+        assert!((glazes[0].x - 16.0 - (688.0 - span) / 2.0).abs() < 1.0);
+        assert_eq!(e.vessel.w, 72.0);
+    }
+
+    #[test]
+    fn the_glaze_tiles_give_way_in_a_short_panel() {
+        // The smallest window has no room for them, and its group stays
+        // whole without them; the default window has.
+        let small = empty_state(&layout(480.0, 360.0, 0).panel);
+        assert!(small.glazes.is_none());
+        assert_eq!(small.vessel.w, 72.0);
+        assert!(small.privacy.bottom() <= layout(480.0, 360.0, 0).panel.bottom());
+        let default = empty_state(&layout(720.0, 480.0, 0).panel);
+        assert!(default.glazes.is_some());
+        // Just short of the group's height, and just enough for it.
+        let panel = |h| Rect::new(16.0, 72.0, 688.0, h);
+        assert!(empty_state(&panel(351.0)).glazes.is_none());
+        assert!(empty_state(&panel(352.0)).glazes.is_some());
     }
 
     #[test]
