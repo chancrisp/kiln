@@ -779,24 +779,14 @@ impl Entry {
             ),
             JobState::Done {
                 saved: Some(Saved::Folder(folder)),
-                outputs,
                 ..
-            } if self.path.parent().is_some_and(|p| same_path(p, folder)) => {
-                let first = outputs
-                    .first()
-                    .and_then(|p| p.file_name())
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                let more = match outputs.len() {
-                    0 | 1 => String::new(),
-                    2 => " and 1 more".to_owned(),
-                    k => format!(" and {} more", k - 1),
-                };
-                (
-                    format!("Saved next to the original: {first}{more}"),
-                    Tone::Result,
-                )
-            }
+            } if self.path.parent().is_some_and(|p| same_path(p, folder)) => (
+                format!(
+                    "Saved next to the original: {}",
+                    self.results_named().unwrap_or_default()
+                ),
+                Tone::Result,
+            ),
             JobState::Done {
                 saved: Some(Saved::Folder(folder)),
                 ..
@@ -808,22 +798,29 @@ impl Entry {
                 saved: Some(Saved::Dropped),
                 ..
             } => (DROPPED.to_owned(), Tone::Result),
-            JobState::Done { outputs, .. } => {
-                let first = outputs
-                    .first()
-                    .and_then(|p| p.file_name())
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                let more = match outputs.len() {
-                    0 | 1 => String::new(),
-                    2 => " and 1 more".to_owned(),
-                    k => format!(" and {} more", k - 1),
-                };
-                (format!("Done, not saved yet: {first}{more}"), Tone::Result)
-            }
+            JobState::Done { .. } => (
+                format!(
+                    "Done, not saved yet: {}",
+                    self.results_named().unwrap_or_default()
+                ),
+                Tone::Result,
+            ),
             JobState::Failed { message, .. } => (one_line(message), Tone::Crack),
             JobState::Cancelled => ("Cancelled.".to_owned(), Tone::Muted),
         }
+    }
+
+    /// What a finished row's results are called: "photo.jpg", or "photo.jpg
+    /// and 2 more". `None` where there is no result to name.
+    pub fn results_named(&self) -> Option<String> {
+        let JobState::Done { outputs, .. } = &self.job else {
+            return None;
+        };
+        let first = outputs.first()?.file_name()?.to_string_lossy().into_owned();
+        Some(match outputs.len() {
+            1 => first,
+            k => format!("{first} and {} more", k - 1),
+        })
     }
 
     /// The results this row holds, if it holds any: a finished job that
@@ -916,8 +913,9 @@ impl Entry {
     }
 
     /// The secondary line under the file name, before any job: what Kiln
-    /// found in the file, the size, the folder's own name, then what it
-    /// suggests. The row's tooltip has the whole path.
+    /// found in the file, the size, then what it suggests. A row with a
+    /// suggestion has no room for the folder's own name as well, and a row
+    /// without one ends with it. The row's tooltip has the whole path.
     pub fn detail(&self) -> String {
         match self.detail_parts() {
             (facts, Some(suggestion)) => format!("{facts}{DETAIL_SEPARATOR}{suggestion}"),
@@ -936,7 +934,9 @@ impl Entry {
         }
         let mut parts: Vec<String> = description.into_iter().collect();
         parts.push(human_size(self.size));
-        parts.push(self.folder_name());
+        if self.suggestion.is_none() {
+            parts.push(self.folder_name());
+        }
         let suggestion = self
             .suggestion
             .as_ref()
@@ -2922,7 +2922,7 @@ mod tests {
         });
         assert_eq!(
             e.detail(),
-            "4032 × 3024 photo  ·  3.1 MB  ·  photos  ·  as JPG about 2 MB"
+            "4032 × 3024 photo  ·  3.1 MB  ·  as JPG about 2 MB"
         );
         assert_eq!(e.line(), (e.detail(), Tone::Muted));
         assert_eq!(
@@ -2937,11 +2937,13 @@ mod tests {
         assert_eq!(txt.detail(), "Converts to 12 formats  ·  3.1 MB  ·  photos");
     }
 
-    /// The order: what it is, the size, the folder's last part, then the
-    /// suggestion, last so it can be drawn in its own colour. The other
-    /// rows' lines say something else in their own words, and keep them.
+    /// The order: what it is, the size, then the suggestion, last so it can
+    /// be drawn in its own colour and is never the part a narrow row cuts.
+    /// A row with a suggestion has no room for the folder's last part, and
+    /// without one it keeps it. The other rows' lines say something else in
+    /// their own words, and keep them.
     #[test]
-    fn row_line_order_is_what_size_folder_suggestion() {
+    fn row_line_ends_in_the_suggestion_and_keeps_the_folder_without_one() {
         let mut e = row("photo.png");
         e.folder = r"C:\kiln\target\samples".to_owned();
         e.size = 3_900_000;
@@ -2955,16 +2957,21 @@ mod tests {
         let parts: Vec<&str> = line.split("  ·  ").collect();
         assert_eq!(
             parts,
-            [
-                "1600 × 1200 photo",
-                "3.9 MB",
-                "samples",
-                "as JPG about 890 KB"
-            ]
+            ["1600 × 1200 photo", "3.9 MB", "as JPG about 890 KB"]
         );
         // With only the suggestion, it still comes last.
         e.facts = None;
-        assert_eq!(e.line().0, "3.9 MB  ·  samples  ·  as JPG about 890 KB");
+        assert_eq!(e.line().0, "3.9 MB  ·  as JPG about 890 KB");
+        // Without one, the facts keep the folder.
+        e.suggestion = None;
+        e.facts = Some(picture(facts("png", Kind::Image), 1600, 1200, Look::Photo));
+        assert_eq!(e.line().0, "1600 × 1200 photo  ·  3.9 MB  ·  samples");
+        e.facts = None;
+        e.suggestion = Some(Suggestion {
+            action: Suggested::Convert("jpg".into()),
+            reason: String::new(),
+            estimate: Some(890_000),
+        });
         // Before facts, the reach stands where what it is goes.
         e.suggestion = None;
         assert_eq!(e.line().0, "Converts to 12 formats  ·  3.9 MB  ·  samples");
@@ -3043,12 +3050,8 @@ mod tests {
             reason: String::new(),
             estimate: Some(183_400_000),
         });
-        assert!(
-            e.detail()
-                .ends_with("  ·  Suggested: Compress, about 180 MB"),
-            "{}",
-            e.detail()
-        );
+        // A tool is a suggestion too: it ends the line, and the folder goes.
+        assert_eq!(e.detail(), "3.1 MB  ·  Suggested: Compress, about 180 MB");
     }
 
     #[test]
@@ -3063,7 +3066,7 @@ mod tests {
             estimate: Some(410_000),
         });
         let (facts_part, suggestion) = e.detail_parts();
-        assert_eq!(facts_part, "1600 × 1200 photo  ·  2.4 MB  ·  samples");
+        assert_eq!(facts_part, "1600 × 1200 photo  ·  2.4 MB");
         let suggestion = suggestion.unwrap();
         assert!(suggestion.starts_with("as "), "{suggestion}");
         assert_eq!(suggestion, "as WEBP about 410 KB");
@@ -3080,9 +3083,10 @@ mod tests {
             estimate: None,
         });
         assert_eq!(e.detail_parts().1.as_deref(), Some("as WEBP"));
-        // No suggestion: the facts are the whole line.
+        // No suggestion: the facts are the whole line, and keep the folder.
         e.suggestion = None;
         assert_eq!(e.detail_parts(), (e.detail(), None));
+        assert_eq!(e.detail(), "1600 × 1200 photo  ·  2.4 MB  ·  samples");
         // Before facts: the plain line, and nothing to colour.
         e.facts = None;
         assert_eq!(e.detail_parts(), (e.plain_detail(), None));
@@ -3095,6 +3099,31 @@ mod tests {
         });
         e.check = FileCheck::Mismatch;
         assert_eq!(e.detail_parts(), (e.plain_detail(), None));
+    }
+
+    #[test]
+    fn a_finished_rows_results_are_named_with_how_many_more() {
+        let mut e = row("p.png");
+        // Nothing finished, nothing to name.
+        assert_eq!(e.results_named(), None);
+        let jpg = Action::Convert("jpg".into());
+        let done = |outputs: &[&str]| JobState::Done {
+            action: jpg.clone(),
+            outputs: outputs.iter().map(PathBuf::from).collect(),
+            saved: None,
+        };
+        e.job = done(&[]);
+        assert_eq!(e.results_named(), None);
+        e.job = done(&["held/p.jpg"]);
+        assert_eq!(e.results_named().as_deref(), Some("p.jpg"));
+        e.job = done(&["held/p 1.jpg", "held/p 2.jpg"]);
+        assert_eq!(e.results_named().as_deref(), Some("p 1.jpg and 1 more"));
+        e.job = done(&["held/p 1.jpg", "held/p 2.jpg", "held/p 3.jpg"]);
+        assert_eq!(e.results_named().as_deref(), Some("p 1.jpg and 2 more"));
+        // The row's line says them the same way.
+        assert_eq!(e.line().0, "Done, not saved yet: p 1.jpg and 2 more");
+        e.job = JobState::Cancelled;
+        assert_eq!(e.results_named(), None);
     }
 
     #[test]

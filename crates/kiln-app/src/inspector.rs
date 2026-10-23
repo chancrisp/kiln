@@ -24,6 +24,9 @@ pub enum InspectorControl {
     ShowInFolder,
     Retry,
     ShowDetails,
+    /// The nth kind of file offered when the selection shares no format:
+    /// choosing it selects just those files.
+    Kind(usize),
 }
 
 /// A format the inspector offers to convert the selection to.
@@ -69,8 +72,8 @@ pub enum Inspector {
         result: String,
         /// "2.4 MB → 410 KB, 83% smaller", where both sizes are known.
         change: Option<String>,
-        /// Whether the result has left Kiln's holding folder.
-        saved: bool,
+        /// Where the result is, and so what can be done with it.
+        kept: Kept,
     },
     /// A job that failed or was cancelled.
     Failed {
@@ -79,6 +82,8 @@ pub enum Inspector {
         sentence: String,
         /// Whether trying again may help.
         retry: bool,
+        /// Whether there is more to show than the sentence.
+        details: bool,
     },
     Several {
         /// The first three selected rows, for the stack of previews.
@@ -89,7 +94,23 @@ pub enum Inspector {
         targets: Vec<Target>,
         /// When `targets` is empty: why, and what to do about it.
         none_shared: Option<String>,
+        /// When `targets` is empty and there is more than one kind of file:
+        /// each kind's type code and how many files, most files first and a
+        /// tie in the order they were met. Empty otherwise.
+        offered: Vec<(String, usize)>,
     },
+}
+
+/// Where a finished file's result is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kept {
+    /// Still in Kiln's holding folder: it can be saved.
+    Held,
+    /// Saved or moved to a folder that can be shown.
+    InFolder,
+    /// Dragged out and dropped somewhere Kiln doesn't know: there is
+    /// nothing to save and no folder to show.
+    Dropped,
 }
 
 /// The most targets the inspector lists before More.
@@ -137,14 +158,23 @@ fn one(row: usize, e: &Entry, look: &Lookups, habits: &Habits) -> Inspector {
             outputs,
             saved,
         } => {
-            let result = outputs
-                .first()
-                .and_then(|p| p.file_name())
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
             // A file action (Move) leaves nothing in the holding folder:
             // the file is where it went, and its size is no result to compare.
             let in_place = matches!(action, Action::File(_));
+            let kept = if in_place {
+                // The moved file's own folder.
+                if e.folder.is_empty() {
+                    Kept::Dropped
+                } else {
+                    Kept::InFolder
+                }
+            } else if e.saved().is_some() {
+                Kept::InFolder
+            } else if saved.is_some() {
+                Kept::Dropped
+            } else {
+                Kept::Held
+            };
             // Several results are no single size to set against the original.
             let change = match outputs.as_slice() {
                 [only] if !in_place => (look.size_of)(only).map(|after| change_line(e.size, after)),
@@ -152,9 +182,11 @@ fn one(row: usize, e: &Entry, look: &Lookups, habits: &Habits) -> Inspector {
             };
             Inspector::Done {
                 row,
-                result,
+                // As the row names it, or the file itself when there is
+                // nothing else to call it.
+                result: e.results_named().unwrap_or_else(|| e.name.clone()),
                 change,
-                saved: in_place || saved.is_some(),
+                kept,
             }
         }
         // A cancelled file has the same way forward as a failed one.
@@ -162,6 +194,7 @@ fn one(row: usize, e: &Entry, look: &Lookups, habits: &Habits) -> Inspector {
             row,
             sentence: e.line().0,
             retry: e.retryable(),
+            details: e.details(false).is_some(),
         },
     }
 }
@@ -262,8 +295,9 @@ fn several(rows: &[usize], entries: &[Entry], look: &Lookups) -> Inspector {
     }
 
     // With nothing in common, the kinds present, most files first and a
-    // tie in the order they were met, as the wheel says it.
-    let none_shared = shared.is_empty().then(|| {
+    // tie in the order they were met, as the wheel says it. With only one
+    // kind there is none else to narrow to, so none is offered.
+    let (none_shared, offered) = if shared.is_empty() {
         let mut codes: Vec<(String, usize)> = vec![];
         for e in &picked {
             let code = if e.code.is_empty() { "Other" } else { &e.code };
@@ -273,12 +307,19 @@ fn several(rows: &[usize], entries: &[Entry], look: &Lookups) -> Inspector {
             }
         }
         codes.sort_by_key(|&(_, n)| std::cmp::Reverse(n));
-        let offer = match codes.as_slice() {
-            [(code, _)] => Offer::Unsupported(code.clone()),
-            _ => Offer::Mixed(codes),
-        };
-        offer_sentence(WheelKind::Convert, &offer)
-    });
+        match codes.as_slice() {
+            [(code, _)] => (
+                offer_sentence(WheelKind::Convert, &Offer::Unsupported(code.clone())),
+                vec![],
+            ),
+            _ => (
+                offer_sentence(WheelKind::Convert, &Offer::Mixed(codes.clone())),
+                codes,
+            ),
+        }
+    } else {
+        (None, vec![])
+    };
 
     Inspector::Several {
         rows: rows.iter().copied().take(3).collect(),
@@ -293,7 +334,8 @@ fn several(rows: &[usize], entries: &[Entry], look: &Lookups) -> Inspector {
                 suggested: false,
             })
             .collect(),
-        none_shared: none_shared.flatten(),
+        none_shared,
+        offered,
     }
 }
 
@@ -308,14 +350,23 @@ impl Inspector {
                 .map(C::Target)
                 .chain((*more).then_some(C::More))
                 .collect(),
-            Inspector::Several { targets, .. } => (0..targets.len()).map(C::Target).collect(),
+            // The shared formats, or with none, each kind to narrow to.
+            Inspector::Several {
+                targets, offered, ..
+            } => match targets.is_empty() {
+                false => (0..targets.len()).map(C::Target).collect(),
+                true => (0..offered.len()).map(C::Kind).collect(),
+            },
             Inspector::Converting { .. } => vec![C::Cancel],
-            Inspector::Done { saved: false, .. } => vec![C::Save],
-            Inspector::Done { saved: true, .. } => vec![C::ShowInFolder],
-            Inspector::Failed { retry, .. } => (*retry)
+            Inspector::Done { kept, .. } => match kept {
+                Kept::Held => vec![C::Save],
+                Kept::InFolder => vec![C::ShowInFolder],
+                Kept::Dropped => vec![],
+            },
+            Inspector::Failed { retry, details, .. } => (*retry)
                 .then_some(C::Retry)
                 .into_iter()
-                .chain([C::ShowDetails])
+                .chain((*details).then_some(C::ShowDetails))
                 .collect(),
         }
     }
@@ -756,7 +807,7 @@ mod tests {
                 row: 0,
                 result: "harbour.webp".to_owned(),
                 change: Some("2.4 MB → 410 KB, 83% smaller".to_owned()),
-                saved: false
+                kept: Kept::Held
             }
         );
         // Without the output's size there is no before and after.
@@ -766,47 +817,88 @@ mod tests {
                 row: 0,
                 result: "harbour.webp".to_owned(),
                 change: None,
-                saved: false
+                kept: Kept::Held
             }
         );
-        // Exported: saved.
+        let kept_of = |e: &Entry| {
+            let list = selecting(vec![e.clone()], &[0]);
+            let Inspector::Done { kept, .. } = inspect_plain(&list, &Habits::default()) else {
+                panic!()
+            };
+            kept
+        };
+        // Exported to a folder: it can be shown there.
         e.job = JobState::Done {
             action: Action::Convert("webp".to_owned()),
             outputs: vec![out.clone()],
             saved: Some(Saved::Folder(PathBuf::from("photos"))),
         };
-        let list = selecting(vec![e.clone()], &[0]);
-        let Inspector::Done { saved, .. } = inspect_plain(&list, &Habits::default()) else {
-            panic!()
+        assert_eq!(kept_of(&e), Kept::InFolder);
+        // Dragged out and dropped somewhere Kiln doesn't know: no folder to
+        // show, and nothing held to save.
+        e.job = JobState::Done {
+            action: Action::Convert("webp".to_owned()),
+            outputs: vec![out.clone()],
+            saved: Some(Saved::Dropped),
         };
-        assert!(saved);
-        // A moved file has nothing held to save, and no conversion to compare.
+        assert_eq!(kept_of(&e), Kept::Dropped);
+        // A moved file has nothing held to save, no conversion to compare,
+        // and a folder to show.
         e.job = JobState::Done {
             action: Action::File(crate::actions::FileAction::Move),
             outputs: vec![out.clone()],
             saved: None,
         };
-        let list = selecting(vec![e], &[0]);
+        assert_eq!(kept_of(&e), Kept::InFolder);
+        let list = selecting(vec![e.clone()], &[0]);
+        let Inspector::Done { change, .. } = inspect(&list, &look, &Habits::default()) else {
+            panic!()
+        };
+        assert_eq!(change, None);
+
+        // Several results are named as the row names them, and are no one
+        // size to set against the original.
+        let many: Vec<PathBuf> = (1..=3)
+            .map(|i| PathBuf::from("held").join(format!("harbour {i}.png")))
+            .collect();
+        e.job = JobState::Done {
+            action: Action::Convert("png".to_owned()),
+            outputs: many,
+            saved: None,
+        };
+        let sized = |_: &Path| Some(1_000);
         let look = Lookups {
             kind_of: &kind_by_code,
-            size_of: &seen,
+            size_of: &sized,
         };
-        let Inspector::Done { saved, change, .. } = inspect(&list, &look, &Habits::default())
+        let list = selecting(vec![e.clone()], &[0]);
+        let Inspector::Done { result, change, .. } = inspect(&list, &look, &Habits::default())
         else {
             panic!()
         };
-        assert!(saved);
+        assert_eq!(result, "harbour 1.png and 2 more");
+        assert_eq!(result, e.results_named().unwrap());
         assert_eq!(change, None);
+        // No outputs at all: the file's own name.
+        e.job = JobState::Done {
+            action: Action::Convert("png".to_owned()),
+            outputs: vec![],
+            saved: None,
+        };
+        let list = selecting(vec![e], &[0]);
+        let Inspector::Done { result, .. } = inspect_plain(&list, &Habits::default()) else {
+            panic!()
+        };
+        assert_eq!(result, "harbour.png");
     }
-
     #[test]
     fn a_failed_file_says_why_and_offers_retry_when_it_may_help() {
-        let failed = |message: &str, last: Option<Action>| {
+        let failed = |message: &str, last: Option<Action>, details: &str| {
             let mut e = harbour();
             e.job = JobState::Failed {
                 message: message.to_owned(),
-                details: String::new(),
-                engine: None,
+                details: details.to_owned(),
+                engine: Some("FFmpeg"),
             };
             e.last = last;
             let want = (e.line().0, e.retryable());
@@ -817,6 +909,7 @@ mod tests {
         let (i, (sentence, retry)) = failed(
             "The conversion stopped before it finished. Try again.",
             again.clone(),
+            "",
         );
         assert!(retry);
         assert_eq!(
@@ -824,13 +917,15 @@ mod tests {
             Inspector::Failed {
                 row: 0,
                 sentence,
-                retry: true
+                retry: true,
+                details: false
             }
         );
         // A damaged file would fail the same way: no Retry.
         let (i, (sentence, retry)) = failed(
             "This file looks damaged. Try opening it in another app.",
             again.clone(),
+            "",
         );
         assert!(!retry);
         assert_eq!(
@@ -838,28 +933,46 @@ mod tests {
             Inspector::Failed {
                 row: 0,
                 sentence,
-                retry: false
+                retry: false,
+                details: false
             }
         );
         // Nothing known to repeat: no Retry either.
-        let (i, (_, retry)) = failed("Try again.", None);
+        let (i, (_, retry)) = failed("Try again.", None, "");
         assert!(!retry);
         assert!(matches!(i, Inspector::Failed { retry: false, .. }));
+        // The engine's own words are something to show.
+        let (i, _) = failed(
+            "The conversion stopped before it finished. Try again.",
+            again.clone(),
+            "Error while decoding stream #0:0",
+        );
+        let Inspector::Failed { details, .. } = &i else {
+            panic!("{i:?}")
+        };
+        assert!(*details);
+        assert_eq!(
+            i.controls(),
+            [InspectorControl::Retry, InspectorControl::ShowDetails]
+        );
         // A cancelled file is shown the same way, and can be tried again.
+        // It has nothing to show details of.
         let mut e = harbour();
         e.job = JobState::Cancelled;
         e.last = again;
         let list = selecting(vec![e], &[0]);
+        let i = inspect_plain(&list, &Habits::default());
         assert_eq!(
-            inspect_plain(&list, &Habits::default()),
+            i,
             Inspector::Failed {
                 row: 0,
                 sentence: "Cancelled.".to_owned(),
-                retry: true
+                retry: true,
+                details: false
             }
         );
+        assert_eq!(i.controls(), [InspectorControl::Retry]);
     }
-
     #[test]
     fn several_files_name_their_kinds_most_first() {
         use Kind::*;
@@ -909,6 +1022,7 @@ mod tests {
             kinds,
             targets,
             none_shared,
+            offered,
         } = i
         else {
             panic!("{i:?}")
@@ -924,10 +1038,12 @@ mod tests {
             "Convert to WEBP, a small image for the web"
         );
         assert_eq!(none_shared, None);
+        // Sharing formats, there is no kind to choose between.
+        assert!(offered.is_empty());
     }
 
     #[test]
-    fn several_files_with_nothing_shared_explain_it() {
+    fn several_files_with_nothing_shared_explain_it_and_offer_each_kind() {
         let mp4 = |name: &str| entry(name, "MP4", 1_000, &["mkv", "webm"]);
         let docx = entry("c.docx", "DOCX", 1_000, &["pdf", "odt"]);
         let list = selecting(vec![mp4("a.mp4"), docx.clone(), mp4("b.mp4")], &[0, 1, 2]);
@@ -937,24 +1053,63 @@ mod tests {
             kinds,
             targets,
             none_shared,
-        } = i
+            offered,
+        } = &i
         else {
             panic!("{i:?}")
         };
-        assert_eq!(rows, [0, 1, 2]);
+        assert_eq!(rows, &[0, 1, 2]);
         assert_eq!(kinds, "2 videos, 1 document");
         assert!(targets.is_empty());
         // The phase 3 sentence, with the kinds most files first.
         let mixed = Offer::Mixed(vec![("MP4".to_owned(), 2), ("DOCX".to_owned(), 1)]);
         assert_eq!(
             none_shared,
-            crate::wheel::offer_sentence(WheelKind::Convert, &mixed)
+            &crate::wheel::offer_sentence(WheelKind::Convert, &mixed)
         );
         assert!(none_shared
+            .as_ref()
             .unwrap()
             .starts_with("These files have no format in common"));
-    }
+        // And each kind is offered, most files first, as a control.
+        assert_eq!(offered, &[("MP4".to_owned(), 2), ("DOCX".to_owned(), 1)]);
+        assert_eq!(
+            i.controls(),
+            [InspectorControl::Kind(0), InspectorControl::Kind(1)]
+        );
 
+        // One of each: the order they were met in.
+        let list = selecting(vec![mp4("a.mp4"), docx.clone()], &[0, 1]);
+        let Inspector::Several { offered, .. } = inspect_plain(&list, &Habits::default()) else {
+            panic!()
+        };
+        assert_eq!(offered, [("MP4".to_owned(), 1), ("DOCX".to_owned(), 1)]);
+        // A kind with more files comes first, whatever was met first.
+        let list = selecting(vec![docx, mp4("a.mp4"), mp4("b.mp4")], &[0, 1, 2]);
+        let Inspector::Several { offered, .. } = inspect_plain(&list, &Habits::default()) else {
+            panic!()
+        };
+        assert_eq!(offered, [("MP4".to_owned(), 2), ("DOCX".to_owned(), 1)]);
+        // Files of one kind that share nothing have no other kind to
+        // narrow to, so offer none.
+        let odd = |name: &str| entry(name, "MP4", 1_000, &[]);
+        let list = selecting(vec![odd("a.mp4"), odd("b.mp4")], &[0, 1]);
+        let i = inspect_plain(&list, &Habits::default());
+        let Inspector::Several {
+            offered,
+            none_shared,
+            ..
+        } = &i
+        else {
+            panic!("{i:?}")
+        };
+        assert!(offered.is_empty());
+        assert_eq!(
+            none_shared.as_deref(),
+            Some("Kiln can't convert MP4 files.")
+        );
+        assert_eq!(i.controls(), []);
+    }
     #[test]
     fn nothing_selected_is_nothing() {
         let habits = Habits::default();
@@ -998,30 +1153,41 @@ mod tests {
             .controls(),
             [C::Cancel]
         );
-        let done = |saved| Inspector::Done {
+        let done = |kept| Inspector::Done {
             row: 0,
             result: "a.webp".to_owned(),
             change: None,
-            saved,
+            kept,
         };
-        assert_eq!(done(false).controls(), [C::Save]);
-        assert_eq!(done(true).controls(), [C::ShowInFolder]);
-        let failed = |retry| Inspector::Failed {
+        assert_eq!(done(Kept::Held).controls(), [C::Save]);
+        assert_eq!(done(Kept::InFolder).controls(), [C::ShowInFolder]);
+        // Dragged out: nothing to save, and no folder to show.
+        assert_eq!(done(Kept::Dropped).controls(), []);
+        let failed = |retry, details| Inspector::Failed {
             row: 0,
             sentence: String::new(),
             retry,
+            details,
         };
-        assert_eq!(failed(true).controls(), [C::Retry, C::ShowDetails]);
-        assert_eq!(failed(false).controls(), [C::ShowDetails]);
+        assert_eq!(failed(true, true).controls(), [C::Retry, C::ShowDetails]);
+        assert_eq!(failed(true, false).controls(), [C::Retry]);
+        assert_eq!(failed(false, true).controls(), [C::ShowDetails]);
+        assert_eq!(failed(false, false).controls(), []);
+        let several = |targets: Vec<Target>, offered: Vec<(String, usize)>| Inspector::Several {
+            rows: vec![0, 1],
+            kinds: String::new(),
+            targets,
+            none_shared: None,
+            offered,
+        };
         assert_eq!(
-            Inspector::Several {
-                rows: vec![0, 1],
-                kinds: String::new(),
-                targets: vec![target("jpg"), target("gif")],
-                none_shared: None
-            }
-            .controls(),
+            several(vec![target("jpg"), target("gif")], vec![]).controls(),
             [C::Target(0), C::Target(1)]
+        );
+        // With nothing shared, each kind is a control instead.
+        assert_eq!(
+            several(vec![], vec![("MP4".to_owned(), 2), ("DOCX".to_owned(), 1)]).controls(),
+            [C::Kind(0), C::Kind(1)]
         );
         assert_eq!(Inspector::Nothing.controls(), []);
     }
