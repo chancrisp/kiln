@@ -18,7 +18,7 @@ use windows::Win32::UI::Shell::{
 };
 
 use super::{PostTarget, WM_KILN_PREVIEW};
-use crate::previews::{fix_alpha, Pixels, Preview, PreviewKey};
+use crate::previews::{fix_alpha, premultiply, Pixels, Preview, PreviewKey};
 
 /// Windows' thumbnail of `path`, made to fit a square as wide as the
 /// larger side of `pixels`, as premultiplied BGRA, top row first. `None`
@@ -41,6 +41,7 @@ pub fn fetch(path: &Path, pixels: (u32, u32)) -> Option<Pixels> {
     }
     let mut px = read?;
     fix_alpha(&mut px.bgra);
+    premultiply(&mut px.bgra);
     Some(px)
 }
 
@@ -301,6 +302,34 @@ mod tests {
         assert!(px.width > 0 && px.height > 0);
         assert_eq!(px.bgra.len(), (px.width * px.height * 4) as usize);
         assert!(px.bgra.chunks_exact(4).any(|p| p[3] != 0), "all clear");
+    }
+
+    #[test]
+    fn a_translucent_png_arrives_premultiplied() {
+        // Windows gives straight alpha; Direct2D draws premultiplied. A
+        // translucent bone half and a clear half: no colour may be brighter
+        // than its alpha, or the edge glows on the dark theme.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("glaze.png");
+        let mut pixmap = tiny_skia::Pixmap::new(64, 64).unwrap();
+        let bone = tiny_skia::ColorU8::from_rgba(0xED, 0xE6, 0xDA, 64).premultiply();
+        for y in 0..64 {
+            for x in 0..32 {
+                pixmap.pixels_mut()[y * 64 + x] = bone;
+            }
+        }
+        pixmap.save_png(&path).unwrap();
+
+        let px = fetch_on_sta(path, (34, 34)).expect("Windows makes a thumbnail of a PNG");
+
+        assert!(px.bgra.chunks_exact(4).any(|p| p[3] == 64), "translucent");
+        assert!(px.bgra.chunks_exact(4).any(|p| p[3] == 0), "clear");
+        assert!(
+            px.bgra
+                .chunks_exact(4)
+                .all(|p| p[..3].iter().all(|&c| c <= p[3])),
+            "straight alpha reached the renderer"
+        );
     }
 
     #[test]

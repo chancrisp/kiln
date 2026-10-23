@@ -52,7 +52,7 @@ window between them as well.
 - [ ] The empty list's hint names the current wheel keys, and changes when they're reassigned in Settings. It isn't cut off at the smallest window size.
 - [ ] With files listed, the footer has an **Add files** button left of Export all and Clear, the same height and corners as Clear, and a **Convert** button left of Add files.
 - [ ] Convert is quiet (muted label, no hover) with nothing selected, and a press says "Select a file to convert." It is also quiet while a selected file is converting. Select a file and it comes to life; pressing it opens the format choice beside the button.
-- [ ] A file nothing has been done to has a **Convert** link at the right end of its row; it selects the row and opens the format choice beside the row, with the file's name still readable. Enter on a selected row opens the same.
+- [ ] In a window narrower than 760 px, a file nothing has been done to has a **Convert** link at the right end of its row; it selects the row and opens the format choice beside the row, with the file's name still readable. Enter on a selected row opens the same.
 - [ ] Selecting an MP4 and a DOCX and pressing Convert (or Enter) opens no wheel: the footer says "These files have no format in common: …" and Ctrl+A on many mixed files says the same.
 - [ ] The first plain drop that adds files shows "Tip: hold Shift, Ctrl or Alt as you drop." in the footer. A second drop, and any drop after restarting, does not.
 - [ ] Tab goes from the list to Convert (while enabled), then Add files.
@@ -89,6 +89,15 @@ window between them as well.
 - [ ] A failed row never shows a file path or the helper's own words, and ends with a next step ("Try opening it in another app.", "Try again."). Where trying again can help, or after a cancel, a Retry link sits beside Show details (or alone) and runs the job again; a damaged file gets none. The right-click menu has Retry too.
 - [ ] The footer sums up each batch calmly: "Converted 3 files to JPG.", "Couldn't convert the file to FLAC. The row says why.". No exclamation marks.
 - [ ] Clear and Delete cancel running jobs first and leave no partial files behind.
+
+## Look
+
+- [ ] **Previews in rows.** Each row starts with a 34 px square preview with 6 px corners: a photo, a video frame or a PDF page, cropped to fill, never stretched. It fades in as it arrives. A file with no thumbnail (an MP3, an empty or broken file, an unknown type) shows its glaze tile: the glaze's chip colour with the kind's icon in the glaze, and a plain tile for a type Kiln doesn't know. A PNG with transparent or half-transparent parts shows on its tile with no bright fringe or halo, in dark and light.
+- [ ] **Glaze chips in both themes.** Chips follow the file's kind: celadon for images, blue for video, yellow for audio, lavender for documents (spreadsheets, slides and subtitles too), stone for anything else. Each is an opaque tint with a fine outline of its glaze and its code in the glaze's ink, readable on the panel, a hovered row and a selected row. A row's suggestion ("as WEBP about 410 KB") is in the same ink, after the muted facts. Under a contrast theme chips are outlined in the theme's colours, with no tint.
+- [ ] **The converting wash.** A converting row has a faint wash of its glaze at the left, gone by 60% of the way across, and its heat line along the bottom is in the glaze, its leading edge breathing brighter. Under a contrast theme the line is the highlight colour, with no wash and no glow.
+- [ ] **Depth on the panel.** The list panel (and the empty window's panel) casts one soft shadow, darker below than at the sides, and has a 1 px light along its top edge. Settings, Help, the details dialog, the options sheet, the wheel and the footer's celadon Convert button do the same. The ground has a faint celadon glow at the top centre under the grain. A contrast theme has no shadow, light or glow.
+- [ ] **The empty window's tiles.** The empty window shows the vessel in celadon line work (72 px, 2 px line) and, under the privacy line, four tiles: Images, Video, Audio and Documents, each its glaze with its icon and its name under it in the glaze's ink. In a window too short for them (480 x 360) the tiles are left out and nothing overlaps.
+- [ ] **Links and the inspector.** In a window 760 px wide or more (with files listed), rows show no Convert, Export or Show details link; narrower, they do. The scroll thumb stays at the list's right edge.
 
 ## App icon
 
@@ -139,7 +148,7 @@ window between them as well.
 - [ ] With Narrator, a row reads as "photo.png. 64 by 48 photo. Suggested JPG… File size 9.3 KB. Folder files." and its buttons say their file ("Cancel photo.png"). In Help, Narrator doesn't read lines scrolled out of view.
 - [ ] The window never flashes white on start, in dark or in light, at any scale.
 - [ ] At the smallest window (480 x 360), in dark and light, Settings > General shows the three key buttons (Convert / SHIFT, Tools / CTRL, Actions / ALT) with nothing overlapping, and every label fits.
-- [ ] In a window much wider than 880 px the header, list and footer sit in one centred column; each row's Convert link is beside its name, and Settings and Help sit at the column's right end.
+- [ ] In a window much wider than 880 px the header, list and footer sit in one centred column, rows have no links (the inspector beside the list carries the actions), and Settings and Help sit at the column's right end.
 - [ ] Muted text (second lines, the footer line, Settings labels) is readable on the panel and on a selected row in both themes; button outlines and the lines between rows are visible but quiet.
 - [ ] Captions are 13 px. The wheel's group names (Images, Video, ...) stay inside their slots, and Settings and Help fit at the smallest window.
 - [ ] Settings reads "Folder shown first when saving" and "Reset suggestions" (Narrator: "Reset learned suggestions"). The empty window has one instruction and the privacy line, no tagline; Help ends with "About Kiln".

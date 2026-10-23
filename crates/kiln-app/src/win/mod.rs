@@ -568,6 +568,10 @@ impl Engines {
     }
 }
 
+/// A picture painted in a frame: its row and size, its pixels, its key's
+/// id and how far it has faded in.
+type Painted = (usize, PreviewSize, Arc<previews::Pixels>, u64, f32);
+
 /// What the previews asked for depend on: see `App::ask_previews`.
 #[derive(Debug, Clone, PartialEq)]
 struct PreviewAsk {
@@ -746,6 +750,12 @@ struct App {
     /// What the previews were last asked for. `None` asks again after the
     /// next message, whatever else changed.
     previews_asked: Option<PreviewAsk>,
+    /// When the last picture arrived for a row in view, so frames run
+    /// while it fades in.
+    preview_shown: Option<Instant>,
+    /// The pictures painted in the last frame. Kept so each frame refills
+    /// it rather than making another.
+    painted_previews: Vec<Painted>,
 }
 
 impl App {
@@ -960,7 +970,10 @@ impl App {
             ui.tab_marker.running(now)
                 || anim::within(ui.switched, motion::QUICK_MS, now, animations)
         });
-        self.drag.running(now) || rows || wheel || sheet || settings
+        let preview = self
+            .preview_shown
+            .is_some_and(|t| anim::within(t, anim::PREVIEW_MS, now, animations));
+        self.drag.running(now) || rows || wheel || sheet || settings || preview
     }
 
     fn row_anim(&self, i: usize) -> RowAnim {
@@ -4260,9 +4273,11 @@ impl App {
         r.y -= self.scroll;
         let e = &self.files.entries()[i];
         let running = matches!(e.job, JobState::Running { .. });
-        // A row being exported has no link until it's done.
+        // A row being exported has no link until it's done, and no row has
+        // one while the inspector shows.
         let saving = self.row_saving(i);
-        let link = !saving && e.link(self.renderer.line_cut(&r, e)).is_some();
+        let link =
+            l.inspector.is_none() && !saving && e.link(self.renderer.line_cut(&r, e)).is_some();
         let saved = !saving && e.saved().is_some();
         let retry = !saving && e.retryable();
         let part = layout::row_part_with_retry(&r, x, y, running, link, saved, retry);
@@ -5347,6 +5362,23 @@ impl App {
         let saving = self.saving_rows();
         let status = self.footer_text();
         let empty_status = self.empty_status();
+        let row_links = self.row_links();
+        let painted = self.paint_previews(now, animations);
+        let preview = |i: usize, size: PreviewSize| {
+            painted
+                .iter()
+                .find(|(row, s, ..)| *row == i && *s == size)
+                .map(|(_, _, px, id, fade)| (px.clone(), *id, *fade))
+        };
+        let entries = self.files.entries();
+        let registry = self.kiln.registry();
+        let kind = |i: usize| {
+            entries
+                .get(i)
+                .and_then(|e| registry.format(&e.code))
+                .map(|f| f.kind)
+        };
+        let glaze = |i: usize| theme::glaze_of(kind(i));
         let view = View {
             palette: &self.palette,
             // One ring at a time: on a button Tab moved to, or on the list.
@@ -5357,13 +5389,17 @@ impl App {
             button_ring: self
                 .focused_button()
                 .and_then(|b| self.focus_button_rect(b)),
-            entries: self.files.entries(),
+            entries,
             notes: &self.notes,
             saving: &saving,
             export_all: export_all.as_deref(),
             export_hover: self.export_hover,
             export_pressed: self.export_pressed,
             selected: self.files.selected_rows(),
+            glaze: &glaze,
+            kind: &kind,
+            preview: &preview,
+            row_links,
             hover_row: self.hover_row,
             hover_cancel: self.hover_cancel,
             hover_link: self.hover_link,
@@ -5455,6 +5491,7 @@ impl App {
         if let Err(e) = self.renderer.draw(&view) {
             log(&format!("draw failed: {e}"));
         }
+        self.painted_previews = painted;
         let key = self.tip_key();
         if self.tip_cache.as_ref().is_none_or(|(k, _)| *k != key) {
             let tools = self.tip_tools();
@@ -5544,16 +5581,53 @@ impl App {
     /// key's time. The list decides whether it is kept, and for which row
     /// (`FileList::preview_arrived`).
     fn on_preview(&mut self, key: PreviewKey, preview: Preview) {
+        let listed = self.files.index_of(&key.path);
+        let was = listed.and_then(|i| self.files.entries()[i].modified);
         let Some(i) = self.files.preview_arrived(&key.path, key.modified) else {
             return;
         };
-        self.previews.put(key, preview, Instant::now());
-        // Only a picture that shows needs a frame: a row in view, or the
-        // selection's in the inspector. Those asked ahead of the scroll
-        // wait in the cache.
-        if self.visible_rows().contains(&i) || self.files.selected() == Some(i) {
-            self.invalidate();
+        // The file changed since it was listed: its other sizes are asked
+        // for again at its new time, not left waiting for the next scroll.
+        if key.modified != was {
+            self.previews_asked = None;
         }
+        self.previews.put(key, preview, Instant::now());
+        // Only a picture that shows needs a frame: a row in view (the rows
+        // `paint_previews` draws), or the selection's in the inspector.
+        // Those asked ahead of the scroll wait in the cache. A picture in
+        // view fades in, so frames run until it has.
+        if self.visible_rows().contains(&i) || self.files.selected() == Some(i) {
+            self.preview_shown = Some(Instant::now());
+            if self.animating() {
+                self.animate();
+            } else {
+                self.invalidate();
+            }
+        }
+    }
+
+    /// The pictures to paint this frame: each row in view whose picture
+    /// has arrived, with its key's id and how far it has faded in. Looking
+    /// one up counts as using it, which keeps it in the cache.
+    fn paint_previews(&mut self, now: Instant, animations: bool) -> Vec<Painted> {
+        let mut painted = std::mem::take(&mut self.painted_previews);
+        painted.clear();
+        for i in self.visible_rows() {
+            let Some(key) = self.preview_key(i, PreviewSize::Row) else {
+                continue;
+            };
+            if let Some((Preview::Ready(px), arrived)) = self.previews.get(&key, now) {
+                let fade = anim::eased(arrived, anim::PREVIEW_MS, now, animations);
+                painted.push((i, PreviewSize::Row, px.clone(), key.id(), fade));
+            }
+        }
+        painted
+    }
+
+    /// Whether rows show their own links: not while the inspector shows,
+    /// as it carries the actions.
+    fn row_links(&self) -> bool {
+        self.layout().inspector.is_none()
     }
 
     // Tooltips.
@@ -5625,20 +5699,21 @@ impl App {
             let bottom = r.bottom().min(panel.bottom());
             layout::Rect::new(r.x, top, r.w, (bottom - top).max(0.0))
         };
+        let links = l.inspector.is_none();
         for i in self.visible_rows() {
             let (Some(r), Some(line)) = (self.row_rect(i), self.shown_line(i)) else {
                 continue;
             };
             let e = &self.files.entries()[i];
             let saving = self.row_saving(i);
-            let (area, _) = self.renderer.row_tip(&r, e, &line, saving);
+            let (area, _) = self.renderer.row_tip(&r, e, &line, saving, links);
             let id = TIP_ROWS + 3 * i;
             tools.push((id, clip(area)));
             if matches!(e.job, JobState::Running { .. }) {
                 tools.push((id + 1, clip(layout::row_cancel(&r))));
             }
             // Only a failed row's link depends on its line being cut.
-            if !saving && e.link(false) == Some("Export") {
+            if links && !saving && e.link(false) == Some("Export") {
                 tools.push((id + 2, clip(layout::row_link(&r))));
             }
         }
@@ -5667,7 +5742,9 @@ impl App {
                         ) else {
                             return String::new();
                         };
-                        let (_, cut) = self.renderer.row_tip(&r, e, &line, self.row_saving(i));
+                        let saving = self.row_saving(i);
+                        let links = self.row_links();
+                        let (_, cut) = self.renderer.row_tip(&r, e, &line, saving, links);
                         e.tooltip(&line, cut)
                     }
                 }
@@ -5938,6 +6015,8 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         previews: PreviewCache::new(CACHE_CAP),
         thumbs: Thumbs::start(target),
         previews_asked: None,
+        preview_shown: None,
+        painted_previews: Vec::new(),
     });
     let app = Box::into_raw(app);
     unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, app as isize) };

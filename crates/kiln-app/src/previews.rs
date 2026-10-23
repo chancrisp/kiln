@@ -280,6 +280,22 @@ pub fn fix_alpha(bgra: &mut [u8]) {
     }
 }
 
+/// Windows hands thumbnails back with straight alpha: a pixel's colour is
+/// its full colour whatever its alpha. Direct2D draws premultiplied
+/// pixels, so each colour is scaled by its alpha here, once, as the
+/// picture arrives. Drawn straight, a translucent edge would glow.
+pub fn premultiply(bgra: &mut [u8]) {
+    for px in bgra.chunks_exact_mut(4) {
+        let a = px[3] as u32;
+        if a == 255 {
+            continue;
+        }
+        for c in &mut px[..3] {
+            *c = ((*c as u32 * a + 127) / 255) as u8;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -663,5 +679,24 @@ mod tests {
         let mut none: Vec<u8> = Vec::new();
         fix_alpha(&mut none);
         assert!(none.is_empty());
+    }
+
+    #[test]
+    fn premultiplying_scales_each_colour_by_its_alpha() {
+        let mut px = vec![
+            219, 231, 239, 64, // bone at a quarter
+            200, 100, 50, 255, // opaque: unchanged
+            90, 80, 70, 0, // clear: no colour left
+            255, 255, 255, 128, // half
+        ];
+        premultiply(&mut px);
+        assert_eq!(
+            px,
+            [55, 58, 60, 64, 200, 100, 50, 255, 0, 0, 0, 0, 128, 128, 128, 128]
+        );
+        // No colour is ever brighter than its alpha allows.
+        assert!(px
+            .chunks_exact(4)
+            .all(|p| p[..3].iter().all(|&c| c <= p[3])));
     }
 }

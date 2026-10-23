@@ -1,10 +1,11 @@
 //! Direct2D drawing. Everything is laid out in DIPs; the render target's
 //! DPI maps them to pixels, so 100%, 150% and 200% scaling share one path.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::f32::consts::{PI, TAU};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use windows::core::Result;
 use windows::Win32::Foundation::{D2DERR_RECREATE_TARGET, HWND, RECT};
@@ -15,7 +16,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 use windows_numerics::{Matrix3x2, Vector2};
 
-use kiln_core::Preset;
+use kiln_core::{Kind, Preset};
 
 use crate::help::{self, HelpSection, Placed};
 use crate::icons::{self, Cmd, Icon, Style};
@@ -24,9 +25,10 @@ use crate::layout::{
     SheetLayout, CHIP_HEIGHT, CHIP_MIN_WIDTH, PROGRESS_HEIGHT, ROW_HEIGHT,
 };
 use crate::model::{self, Entry, JobState, Tone};
+use crate::previews::{cover_source, Pixels, PreviewSize};
 use crate::quality::{QualityDefaults, Value};
 use crate::settings::{KeyMap, ThemeChoice};
-use crate::theme::{self, effects, shape, Palette, Rgb};
+use crate::theme::{self, depth, effects, shape, Glaze, Palette, Rgb};
 use crate::ways_in::{self, EmptyLines};
 use crate::wheel::{self, Action, Spot, Wheel, R_INNER, R_MORE_INNER, R_MORE_OUTER, R_OUTER};
 
@@ -60,6 +62,26 @@ pub struct WheelView<'a> {
 /// icon or code it marks.
 const DOT_R: f32 = 2.0;
 const DOT_GAP: f32 = 6.0;
+
+/// A row's glaze tile draws its kind's icon at this scale.
+const ROW_ICON_SCALE: f32 = 0.75;
+
+/// The empty window's vessel is drawn with a line this many DIPs wide.
+const VESSEL_LINE: f32 = 2.0;
+
+/// The empty window's glaze tiles: each tile's corners, and the scale of
+/// its icon, drawn with the vessel's line.
+const TILE_RADIUS: f32 = shape::RADIUS_PANEL;
+const TILE_ICON_SCALE: f32 = 1.5;
+
+/// The empty window's glazes: each tile's glaze, the kind whose icon it
+/// shows, and the word under it.
+const GLAZE_TILES: [(Glaze, Kind, &str); 4] = [
+    (Glaze::Image, Kind::Image, "Images"),
+    (Glaze::Video, Kind::Video, "Video"),
+    (Glaze::Audio, Kind::Audio, "Audio"),
+    (Glaze::Document, Kind::Document, "Documents"),
+];
 
 /// The options sheet this frame.
 pub struct SheetView<'a> {
@@ -111,6 +133,18 @@ pub struct View<'a> {
     pub export_pressed: bool,
     /// The selected rows; each draws the selected wash.
     pub selected: &'a BTreeSet<usize>,
+    /// The glaze of row `i`'s kind of file.
+    pub glaze: &'a dyn Fn(usize) -> Glaze,
+    /// Row `i`'s kind of file, whose icon its glaze tile shows. `None` for
+    /// a type Kiln has no kind for.
+    pub kind: &'a dyn Fn(usize) -> Option<Kind>,
+    /// Row `i`'s picture at a size, once Windows has made one: its pixels,
+    /// the id of its key (the renderer keeps a bitmap by it) and how far
+    /// it has faded in, 0 to 1. `None` draws the glaze tile.
+    pub preview: &'a dyn Fn(usize, PreviewSize) -> Option<(Arc<Pixels>, u64, f32)>,
+    /// Whether rows draw their own link. False while the inspector shows,
+    /// which carries the actions.
+    pub row_links: bool,
     /// The row the keyboard is on; it keeps a ring even with nothing
     /// selected.
     pub focus: Option<usize>,
@@ -219,6 +253,12 @@ pub struct Renderer {
     target: Option<Target>,
     hwnd: HWND,
     dpi: f32,
+    /// The soft shadow under a raised surface, worked out once: each
+    /// layer's growth and its share of the shadow's alpha.
+    shadow: Vec<(f32, f32)>,
+    /// Frames drawn so far, to tell which previews' bitmaps have gone
+    /// undrawn long enough to drop.
+    frame: u64,
 }
 
 /// Device-dependent resources, rebuilt if the device is lost.
@@ -226,9 +266,31 @@ struct Target {
     rt: ID2D1HwndRenderTarget,
     brush: ID2D1SolidColorBrush,
     grain: ID2D1BitmapBrush,
+    /// The faint celadon glow at the top centre of the ground. It is made
+    /// with the grain; each frame places it for the window's size.
+    glow: ID2D1RadialGradientBrush,
+    /// Each glaze from clear to full, in `Glaze::ALL` order, and the text
+    /// colour the same way: a converting row's wash and its heat line's
+    /// glow. Each use places them and sets their opacity, so a frame makes
+    /// no brush of its own.
+    glaze_ramps: Vec<ID2D1LinearGradientBrush>,
+    text_ramp: ID2D1LinearGradientBrush,
+    /// Previews made into brushes, by their key's id, and the frame each
+    /// was last drawn in. They go with the device.
+    pictures: RefCell<HashMap<u64, Picture>>,
     /// The palette the grain was made for.
     palette: Palette,
 }
+
+/// A preview's bitmap, ready to fill a shape with.
+struct Picture {
+    brush: ID2D1BitmapBrush,
+    drawn: u64,
+}
+
+/// A preview's bitmap is dropped once it has gone this many frames
+/// without being drawn.
+const PICTURE_FRAMES: u64 = 120;
 
 fn color(c: Rgb, a: f32) -> D2D1_COLOR_F {
     let [r, g, b] = c.unit();
@@ -254,6 +316,41 @@ fn solid(p: &Palette, a: f32) -> f32 {
         1.0
     } else {
         a
+    }
+}
+
+/// Two gradient stops: `c` at alpha `from` at the start, and at `to` at
+/// the end.
+fn ramp_stops(c: Rgb, from: f32, to: f32) -> [D2D1_GRADIENT_STOP; 2] {
+    [
+        D2D1_GRADIENT_STOP {
+            position: 0.0,
+            color: color(c, from),
+        },
+        D2D1_GRADIENT_STOP {
+            position: 1.0,
+            color: color(c, to),
+        },
+    ]
+}
+
+/// A gradient of `c` from clear at its start point to full at its end.
+/// Each use places it and sets its opacity.
+fn ramp(rt: &ID2D1HwndRenderTarget, c: Rgb) -> Result<ID2D1LinearGradientBrush> {
+    unsafe {
+        let coll = rt.CreateGradientStopCollection(
+            &ramp_stops(c, 0.0, 1.0),
+            D2D1_GAMMA_2_2,
+            D2D1_EXTEND_MODE_CLAMP,
+        )?;
+        rt.CreateLinearGradientBrush(
+            &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                startPoint: pt(0.0, 0.0),
+                endPoint: pt(1.0, 0.0),
+            },
+            None,
+            &coll,
+        )
     }
 }
 
@@ -323,25 +420,28 @@ fn chip_width(text: &Text, e: &Entry) -> Result<f32> {
     Ok((text_w + 16.0).max(CHIP_MIN_WIDTH).ceil())
 }
 
-/// Where a row's name and second line start, right of its chip.
+/// Where a row's name and second line start: right of its chip, which
+/// starts after the preview, with the same gap again.
 fn row_text_x(r: &Rect, chip_w: f32) -> f32 {
-    r.x + 16.0 + CHIP_MIN_WIDTH.max(chip_w) + 16.0
+    layout::row_text_left(r) + CHIP_MIN_WIDTH.max(chip_w) + layout::PREVIEW_GAP
 }
 
 /// Where a row's name and line run, from `x` to `right`, short of the
 /// cancel cross or the link, and the link if there is one. `chip_w` is the
-/// chip's measured width, and `saving` says the row is being exported.
+/// chip's measured width, `saving` says the row is being exported, and
+/// `links` that rows show their links (not while the inspector does).
 fn row_text_span(
     text: &Text,
     r: &Rect,
     e: &Entry,
     chip_w: f32,
     saving: bool,
+    links: bool,
 ) -> (f32, f32, Option<&'static str>) {
     let x = row_text_x(r, chip_w);
     let link = e
         .link(line_cut_with(text, r, e, chip_w))
-        .filter(|_| !saving);
+        .filter(|_| links && !saving);
     let right = if matches!(e.job, JobState::Running { .. }) {
         layout::row_cancel(r).x - 8.0
     } else if e.retryable() && !saving {
@@ -404,6 +504,8 @@ impl Renderer {
             target: None,
             hwnd,
             dpi,
+            shadow: depth::shadow_layers(),
+            frame: 0,
         })
     }
 
@@ -428,9 +530,17 @@ impl Renderer {
     /// Row `r`'s tooltip area, from its left edge to where its name and
     /// line end (short of the cancel cross and the link, which have tools
     /// of their own), and whether `line`, as the row shows it, is cut.
-    pub fn row_tip(&self, r: &Rect, e: &Entry, line: &str, saving: bool) -> (Rect, bool) {
+    /// `links` says rows show their links.
+    pub fn row_tip(
+        &self,
+        r: &Rect,
+        e: &Entry,
+        line: &str,
+        saving: bool,
+        links: bool,
+    ) -> (Rect, bool) {
         let chip_w = chip_width(&self.text, e).unwrap_or(CHIP_MIN_WIDTH);
-        let (x, right, _) = row_text_span(&self.text, r, e, chip_w, saving);
+        let (x, right, _) = row_text_span(&self.text, r, e, chip_w, saving, links);
         let cut = self.text.measure(line, &self.text.caption) > (right - x).max(0.0);
         (Rect::new(r.x, r.y, (right - r.x).max(0.0), r.h), cut)
     }
@@ -526,10 +636,36 @@ impl Renderer {
                 None,
             )?
         };
+        // The glow: celadon at its faint peak to clear. Its centre and radii
+        // are set for the window's size each frame.
+        let glow = unsafe {
+            let stops = ramp_stops(palette.accent, effects::GROUND_GLOW, 0.0);
+            let coll =
+                rt.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+            rt.CreateRadialGradientBrush(
+                &D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES {
+                    center: pt(0.0, 0.0),
+                    gradientOriginOffset: pt(0.0, 0.0),
+                    radiusX: 1.0,
+                    radiusY: 1.0,
+                },
+                None,
+                &coll,
+            )?
+        };
+        let glaze_ramps = Glaze::ALL
+            .iter()
+            .map(|&g| ramp(&rt, palette.glaze(g)))
+            .collect::<Result<Vec<_>>>()?;
+        let text_ramp = ramp(&rt, palette.text)?;
         self.target = Some(Target {
             rt,
             brush,
             grain,
+            glow,
+            glaze_ramps,
+            text_ramp,
+            pictures: RefCell::new(HashMap::new()),
             palette: *palette,
         });
         Ok(())
@@ -543,13 +679,20 @@ impl Renderer {
         let p = v.palette;
         let rt = &t.rt;
 
+        self.frame += 1;
         unsafe {
             rt.BeginDraw();
             rt.SetTransform(&Matrix3x2::identity());
             rt.Clear(Some(&color(p.ground, 1.0)));
-            // A contrast theme's ground is flat.
+            // A contrast theme's ground is flat. Kiln's own has a faint
+            // celadon glow at the top centre, under the grain.
             if !p.high_contrast {
-                rt.FillRectangle(&rectf(&Rect::new(0.0, 0.0, w, h)), &t.grain);
+                let ground = rectf(&Rect::new(0.0, 0.0, w, h));
+                t.glow.SetCenter(pt(w / 2.0, -0.1 * h));
+                t.glow.SetRadiusX(1.2 * w);
+                t.glow.SetRadiusY(0.7 * h);
+                rt.FillRectangle(&ground, &t.glow);
+                rt.FillRectangle(&ground, &t.grain);
             }
         }
 
@@ -561,6 +704,11 @@ impl Renderer {
             round: &self.round,
             icons: &self.icons,
             base: Cell::new(Matrix3x2::identity()),
+            shadow: &self.shadow,
+            glaze_ramps: &t.glaze_ramps,
+            text_ramp: &t.text_ramp,
+            pictures: &t.pictures,
+            frame: self.frame,
         };
         let mut result = d.header(&l, v);
         if result.is_ok() {
@@ -590,6 +738,12 @@ impl Renderer {
         }
 
         let end = unsafe { rt.EndDraw(None, None) };
+        // Pictures not drawn for a while go; they're made again if their
+        // rows come back into view.
+        let frame = self.frame;
+        t.pictures
+            .borrow_mut()
+            .retain(|_, pic| frame - pic.drawn < PICTURE_FRAMES);
         result?;
         match end {
             Err(e) if e.code() == D2DERR_RECREATE_TARGET => {
@@ -616,6 +770,13 @@ struct Draw<'a> {
     icons: &'a [(&'static str, ID2D1PathGeometry)],
     /// The transform everything is currently drawn under.
     base: Cell<Matrix3x2>,
+    /// The shadow's layers: growth and share of its alpha.
+    shadow: &'a [(f32, f32)],
+    glaze_ramps: &'a [ID2D1LinearGradientBrush],
+    text_ramp: &'a ID2D1LinearGradientBrush,
+    pictures: &'a RefCell<HashMap<u64, Picture>>,
+    /// This frame's number, stamped on each picture drawn.
+    frame: u64,
 }
 
 impl Draw<'_> {
@@ -782,6 +943,13 @@ impl Draw<'_> {
     }
 
     fn icon(&self, name: &str, x: f32, y: f32, scale: f32, c: Rgb, a: f32) {
+        self.icon_lined(name, x, y, scale, shape::ICON_STROKE * scale, c, a);
+    }
+
+    /// An icon at `scale` whose line is `line` DIPs wide whatever the
+    /// scale, for the empty window's larger drawings.
+    #[allow(clippy::too_many_arguments)]
+    fn icon_lined(&self, name: &str, x: f32, y: f32, scale: f32, line: f32, c: Rgb, a: f32) {
         let Some((_, geom)) = self.icons.iter().find(|(n, _)| *n == name) else {
             return;
         };
@@ -795,11 +963,208 @@ impl Draw<'_> {
             if solid {
                 self.rt.FillGeometry(geom, self.paint(c, a), None);
             } else {
+                // The stroke is drawn under the scale, so it's given in the
+                // icon's own units.
                 self.rt
-                    .DrawGeometry(geom, self.paint(c, a), shape::ICON_STROKE, self.round);
+                    .DrawGeometry(geom, self.paint(c, a), line / scale, self.round);
             }
             self.rt.SetTransform(&base);
         }
+    }
+
+    /// The soft shadow under a raised surface `r` with corners of `radius`:
+    /// the shadow's layers, each the surface grown by its amount, offset
+    /// down, in the theme's shadow colour at its share of the alpha. A
+    /// layer pulled in so far it has no area is skipped. A contrast theme
+    /// has no shadows.
+    fn shadow(&self, r: &Rect, radius: f32, p: &Palette) {
+        if p.high_contrast {
+            return;
+        }
+        for &(grow, share) in self.shadow {
+            let a = p.shadow_alpha * share;
+            let layer = Rect::new(
+                r.x - grow,
+                r.y + depth::OFFSET_Y - grow,
+                r.w + 2.0 * grow,
+                r.h + 2.0 * grow,
+            );
+            if layer.w <= 0.0 || layer.h <= 0.0 || a <= 0.0 {
+                continue;
+            }
+            let corner = (radius + grow).clamp(0.0, layer.w.min(layer.h) / 2.0);
+            self.fill(&layer, corner, p.shadow, a);
+        }
+    }
+
+    /// The 1 px light along the top of a raised surface `r`, `inset` below
+    /// its top edge (inside its border, if it has one), between its rounded
+    /// corners. A contrast theme has none.
+    fn highlight(&self, r: &Rect, radius: f32, inset: f32, p: &Palette) {
+        if p.high_contrast || p.highlight_alpha <= 0.0 {
+            return;
+        }
+        let (x0, x1) = (r.x + radius, r.right() - radius);
+        if x1 > x0 {
+            self.hline(x0, x1, r.y + inset, p.highlight, p.highlight_alpha);
+        }
+    }
+
+    /// A raised panel: its shadow, the surface, its edge and its top
+    /// highlight. Sheets and dialogs are drawn on one.
+    fn raised_panel(&self, r: &Rect, p: &Palette) {
+        self.shadow(r, shape::RADIUS_PANEL, p);
+        self.fill(r, shape::RADIUS_PANEL, p.surface, 1.0);
+        self.border(r, shape::RADIUS_PANEL, p.edge, 1.0, shape::BORDER);
+        self.highlight(r, shape::RADIUS_PANEL, shape::BORDER, p);
+    }
+
+    /// The gradient of glaze `g`, from clear to full.
+    fn glaze_ramp(&self, g: Glaze) -> &ID2D1LinearGradientBrush {
+        let i = Glaze::ALL.iter().position(|&x| x == g).unwrap_or(0);
+        &self.glaze_ramps[i]
+    }
+
+    /// A format chip: an opaque fill of glaze `g`, a 1 px outline of it,
+    /// and the code in the glaze's ink. A contrast theme keeps its own
+    /// colours: an outline in its line colour and the code in its text.
+    fn chip(&self, code: &str, r: &Rect, g: Glaze, a: f32, p: &Palette) -> Result<()> {
+        if p.high_contrast {
+            self.border(r, shape::RADIUS_CONTROL, p.line, a, shape::BORDER);
+            self.code(code, r, p.text, a)?;
+        } else {
+            self.fill(r, shape::RADIUS_CONTROL, p.chip_fill(g), a);
+            let outline = effects::CHIP_OUTLINE * a;
+            self.border(r, shape::RADIUS_CONTROL, p.glaze(g), outline, shape::BORDER);
+            self.code(code, r, p.glaze_ink(g), a)?;
+        }
+        Ok(())
+    }
+
+    /// A glaze tile in `r`: the chip fill of glaze `g`, with the icon of
+    /// `kind` centred in the glaze at `scale`, its line `line` DIPs wide,
+    /// at `icon_a`. Under a contrast theme the tile is the surface with an
+    /// outline, and the icon is in its text colour.
+    #[allow(clippy::too_many_arguments)]
+    fn glaze_tile(
+        &self,
+        r: &Rect,
+        radius: f32,
+        g: Glaze,
+        kind: Option<Kind>,
+        (scale, line): (f32, f32),
+        icon_a: f32,
+        a: f32,
+        p: &Palette,
+    ) {
+        self.fill(r, radius, p.chip_fill(g), a);
+        if p.high_contrast {
+            self.border(r, radius, p.line, a, shape::BORDER);
+        }
+        if let (Some(kind), true) = (kind, icon_a > 0.0) {
+            let side = shape::ICON_GRID * scale;
+            let (x, y) = (r.x + (r.w - side) / 2.0, r.y + (r.h - side) / 2.0);
+            let c = p.glaze(g);
+            self.icon_lined(wheel::icon_for_kind(kind), x, y, scale, line, c, a * icon_a);
+        }
+    }
+
+    /// A file's preview in `dst`, with corners of `radius`: its glaze tile,
+    /// and over it, once Windows has made one, its picture cropped to
+    /// fill, fading in as the tile's icon fades out.
+    #[allow(clippy::too_many_arguments)]
+    fn preview(
+        &self,
+        dst: &Rect,
+        radius: f32,
+        picture: Option<(Arc<Pixels>, u64, f32)>,
+        g: Glaze,
+        kind: Option<Kind>,
+        a: f32,
+        p: &Palette,
+    ) {
+        let shown = picture.and_then(|(px, id, fade)| {
+            let brush = self.picture(&px, id)?;
+            Some((brush, px, fade.clamp(0.0, 1.0)))
+        });
+        let fade = shown.as_ref().map_or(0.0, |(_, _, f)| *f);
+        let icon = (ROW_ICON_SCALE, shape::ICON_STROKE * ROW_ICON_SCALE);
+        self.glaze_tile(dst, radius, g, kind, icon, 1.0 - fade, a, p);
+        let Some((brush, px, fade)) = shown else {
+            return;
+        };
+        // The brush maps the crop's pixels onto `dst`; the bitmap is at 96
+        // DPI, so its DIPs are its pixels.
+        let (sx, sy, sw, sh) = cover_source((px.width, px.height), (dst.w, dst.h));
+        let (kx, ky) = (dst.w / sw, dst.h / sh);
+        unsafe {
+            brush.SetTransform(&Matrix3x2 {
+                M11: kx,
+                M12: 0.0,
+                M21: 0.0,
+                M22: ky,
+                M31: dst.x - sx * kx,
+                M32: dst.y - sy * ky,
+            });
+            brush.SetOpacity(a * fade);
+            self.rt.FillRoundedRectangle(&rounded(dst, radius), &brush);
+        }
+    }
+
+    /// The brush for preview `id`, made from `px` the first time it's
+    /// drawn, and marked as drawn this frame. `None` when the pixels don't
+    /// make a bitmap.
+    fn picture(&self, px: &Pixels, id: u64) -> Option<ID2D1BitmapBrush> {
+        let mut pictures = self.pictures.borrow_mut();
+        if let Some(pic) = pictures.get_mut(&id) {
+            pic.drawn = self.frame;
+            return Some(pic.brush.clone());
+        }
+        let stride = px.width.checked_mul(4)?;
+        let len = (stride as usize).checked_mul(px.height as usize)?;
+        if px.width == 0 || px.height == 0 || px.bgra.len() < len {
+            return None;
+        }
+        let brush = unsafe {
+            let bitmap = self
+                .rt
+                .CreateBitmap(
+                    D2D_SIZE_U {
+                        width: px.width,
+                        height: px.height,
+                    },
+                    Some(px.bgra.as_ptr().cast()),
+                    stride,
+                    &D2D1_BITMAP_PROPERTIES {
+                        pixelFormat: D2D1_PIXEL_FORMAT {
+                            format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                            alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+                        },
+                        dpiX: 96.0,
+                        dpiY: 96.0,
+                    },
+                )
+                .ok()?;
+            self.rt
+                .CreateBitmapBrush(
+                    &bitmap,
+                    Some(&D2D1_BITMAP_BRUSH_PROPERTIES {
+                        extendModeX: D2D1_EXTEND_MODE_CLAMP,
+                        extendModeY: D2D1_EXTEND_MODE_CLAMP,
+                        interpolationMode: D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                    }),
+                    None,
+                )
+                .ok()?
+        };
+        pictures.insert(
+            id,
+            Picture {
+                brush: brush.clone(),
+                drawn: self.frame,
+            },
+        );
+        Some(brush)
     }
 
     fn header(&self, l: &Layout, v: &View) -> Result<()> {
@@ -825,6 +1190,7 @@ impl Draw<'_> {
     fn empty_state(&self, l: &Layout, v: &View) -> Result<()> {
         let p = v.palette;
         let panel = l.panel;
+        self.shadow(&panel, shape::RADIUS_PANEL, p);
         self.fill(&panel, shape::RADIUS_PANEL, p.surface, 1.0);
         if v.drag > 0.0 && !p.high_contrast {
             self.fill(
@@ -842,14 +1208,30 @@ impl Draw<'_> {
             1.0,
             shape::BORDER + 0.5 * v.drag,
         );
+        self.highlight(&panel, shape::RADIUS_PANEL, shape::BORDER, p);
 
-        // The centred group: the headline, how else to add files, the
-        // button, what the status says, the keys to hold and, last, the
-        // privacy note.
+        // The centred group: the vessel, the headline, how else to add
+        // files, the button, what the status says, the keys to hold, the
+        // privacy note and, where there's room, the four glazes.
         let e = layout::empty_state(&panel);
         let lines = v.empty;
-        let vessel = blend(p, p.text_muted, p.accent, v.drag);
-        self.icon("vessel", e.vessel.x, e.vessel.y, 2.0, vessel, 1.0);
+        // Celadon line work, filling its 72 DIPs. A contrast theme draws
+        // it in text, lit by a drag like the panel's edge.
+        let vessel = if p.high_contrast {
+            blend(p, p.text_muted, p.accent, v.drag)
+        } else {
+            p.accent_strong
+        };
+        let k = e.vessel.w / shape::ICON_GRID;
+        self.icon_lined(
+            "vessel",
+            e.vessel.x,
+            e.vessel.y,
+            k,
+            VESSEL_LINE,
+            vessel,
+            1.0,
+        );
         self.label(
             lines.headline,
             &self.text.lead_center,
@@ -875,12 +1257,28 @@ impl Draw<'_> {
         for (text, r) in [(lines.keys.as_str(), &e.keys), (lines.privacy, &e.privacy)] {
             self.label(text, &self.text.caption_center, r, p.text_muted, 1.0);
         }
+        // The kinds Kiln reads, each a tile of its glaze and its icon, with
+        // its name under it in the glaze's ink.
+        for (tile, (g, kind, word)) in e.glazes.iter().flatten().zip(GLAZE_TILES) {
+            let icon = (TILE_ICON_SCALE, VESSEL_LINE);
+            self.glaze_tile(tile, TILE_RADIUS, g, Some(kind), icon, 1.0, 1.0, p);
+            let under = Rect::new(
+                tile.x,
+                tile.bottom() + layout::GLAZE_WORD_GAP,
+                tile.w,
+                layout::GLAZE_WORD,
+            );
+            // 12 px and centred, as the wheel's group names are.
+            let small = &self.text.ring_heading;
+            self.label(word, small, &under, p.glaze_ink(g), 1.0);
+        }
         Ok(())
     }
 
     fn list(&self, l: &Layout, v: &View) -> Result<()> {
         let p = v.palette;
         let panel = l.panel;
+        self.shadow(&panel, shape::RADIUS_PANEL, p);
         self.fill(&panel, shape::RADIUS_PANEL, p.surface, 1.0);
 
         // Clip rows to the panel's rounded shape so selection fills
@@ -932,15 +1330,17 @@ impl Draw<'_> {
             1.0,
             shape::BORDER + 0.5 * v.drag,
         );
+        self.highlight(&panel, shape::RADIUS_PANEL, shape::BORDER, p);
 
-        // A thin scroll thumb when the list overflows.
+        // A thin scroll thumb when the list overflows, at the list's right
+        // edge, short of the inspector.
         let max = layout::max_scroll(v.entries.len(), panel.h);
         if max > 0.0 {
             let content = v.entries.len() as f32 * ROW_HEIGHT;
             let track = panel.h - 16.0;
             let thumb_h = (track * panel.h / content).max(24.0);
             let thumb_y = panel.y + 8.0 + (track - thumb_h) * (v.scroll / max);
-            let thumb = Rect::new(panel.right() - 6.0, thumb_y, 2.0, thumb_h);
+            let thumb = Rect::new(l.list.right() - 6.0, thumb_y, 2.0, thumb_h);
             self.thumb(&thumb, p);
         }
         Ok(())
@@ -950,6 +1350,7 @@ impl Draw<'_> {
         let p = v.palette;
         let anim = (v.row_anim)(i);
         let a = anim.appear;
+        let glaze = (v.glaze)(i);
         let hovered = v.hover_row == Some(i);
         let selected = v.selected.contains(&i);
         if selected {
@@ -967,6 +1368,17 @@ impl Draw<'_> {
                 self.fill(r, 0.0, p.line, effects::ROW_HOVER * a);
             }
         }
+        // A converting row glows in its glaze from the left, clear by 60%
+        // of the way across. A contrast theme has no washes.
+        if matches!(e.job, JobState::Running { .. }) && !p.high_contrast {
+            let ramp = self.glaze_ramp(glaze);
+            unsafe {
+                ramp.SetStartPoint(pt(r.x + 0.6 * r.w, r.y));
+                ramp.SetEndPoint(pt(r.x, r.y));
+                ramp.SetOpacity(effects::ROW_WASH * a);
+                self.rt.FillRectangle(&rectf(r), ramp);
+            }
+        }
         // Muted text on a washed row is a step brighter (darker in light),
         // so it still reads.
         let muted = if selected || hovered {
@@ -978,20 +1390,19 @@ impl Draw<'_> {
             self.hline(r.x, r.right(), r.y - 0.5, p.edge, a);
         }
 
-        // Format chip: monospace, uppercase, tracked.
+        // The preview, then the format chip after it: monospace,
+        // uppercase, tracked, in the file's glaze.
+        let picture = (v.preview)(i, PreviewSize::Row);
+        let kind = (v.kind)(i);
+        let preview = layout::row_preview(r);
+        self.preview(&preview, layout::PREVIEW_RADIUS, picture, glaze, kind, a, p);
         let chip_y = r.y + (ROW_HEIGHT - CHIP_HEIGHT) / 2.0;
-        let code = chip_code(e);
         let chip_w = chip_width(self.text, e)?;
-        let chip = Rect::new(r.x + 16.0, chip_y, chip_w, CHIP_HEIGHT);
-        if p.high_contrast {
-            self.border(&chip, shape::RADIUS_CONTROL, p.line, a, shape::BORDER);
-        } else {
-            self.fill(&chip, shape::RADIUS_CONTROL, p.line, a);
-        }
-        self.code(code, &chip, p.text, a)?;
+        let chip = Rect::new(layout::row_text_left(r), chip_y, chip_w, CHIP_HEIGHT);
+        self.chip(chip_code(e), &chip, glaze, a, p)?;
 
         let saving = v.saving.contains(&e.path);
-        let (x, right, link) = row_text_span(self.text, r, e, chip_w, saving);
+        let (x, right, link) = row_text_span(self.text, r, e, chip_w, saving, v.row_links);
         let w = (right - x).max(0.0);
         self.label(
             &e.name,
@@ -1001,10 +1412,11 @@ impl Draw<'_> {
             a,
         );
 
+        let note = v.notes.get(&e.path);
         let (line, tone) = if saving {
             (model::SAVING.to_owned(), Tone::Muted)
         } else {
-            v.notes.get(&e.path).cloned().unwrap_or_else(|| e.line())
+            note.cloned().unwrap_or_else(|| e.line())
         };
         let (c, la) = match tone {
             Tone::Muted => (muted, a),
@@ -1029,7 +1441,29 @@ impl Draw<'_> {
                 la *= anim.facts;
             }
         }
-        self.label(&line, &self.text.caption, &line_rect, c, la);
+        // A waiting file's own line ends with its suggestion, which is in
+        // the glaze's ink.
+        let suggested = (matches!(e.job, JobState::Idle) && !saving && note.is_none())
+            .then(|| e.detail_parts())
+            .and_then(|(facts, suggestion)| suggestion.map(|s| (facts, s)));
+        match suggested {
+            Some((facts, suggestion)) => {
+                let head = format!("{facts}{}", model::DETAIL_SEPARATOR);
+                self.label(&head, &self.text.caption, &line_rect, c, la);
+                let head_w = self.text.measure(&head, &self.text.caption);
+                if head_w < line_rect.w {
+                    let rest = Rect::new(
+                        line_rect.x + head_w,
+                        line_rect.y,
+                        line_rect.w - head_w,
+                        line_rect.h,
+                    );
+                    let ink = p.glaze_ink(glaze);
+                    self.label(&suggestion, &self.text.caption, &rest, ink, la);
+                }
+            }
+            None => self.label(&line, &self.text.caption, &line_rect, c, la),
+        }
         // An exported row's "Saved to" opens its folder: underlined while
         // the pointer is on it, like a link.
         if hovered && v.hover_link && e.saved().is_some() {
@@ -1045,7 +1479,7 @@ impl Draw<'_> {
 
         match &e.job {
             JobState::Running { fraction, .. } => {
-                self.progress(r, *fraction, v.heat, p, a)?;
+                self.progress(r, *fraction, v.heat, glaze, p, a);
                 // Cancel is always there to see, as a word.
                 let area = layout::row_cancel_text(r);
                 self.row_link_label(
@@ -1061,7 +1495,7 @@ impl Draw<'_> {
                 // The finished line fades as the result settles.
                 let fade = 1.0 - anim.settle;
                 if fade > 0.0 {
-                    self.progress(r, Some(1.0), 0.0, p, a * fade)?;
+                    self.progress(r, Some(1.0), 0.0, glaze, p, a * fade);
                 }
             }
             _ => {}
@@ -1107,76 +1541,50 @@ impl Draw<'_> {
         Ok(())
     }
 
-    /// The temperature line along the bottom of a job row. While running it
-    /// burns a little brighter at its leading edge, like a glaze taking
-    /// heat, and that glow slowly rises and falls with `heat`. This glow is
-    /// the only gradient in the app.
-    fn progress(
-        &self,
-        r: &Rect,
-        fraction: Option<f32>,
-        heat: f32,
-        p: &Palette,
-        a: f32,
-    ) -> Result<()> {
+    /// The temperature line along the bottom of a job row, in the file's
+    /// glaze `g`. While running it burns a little brighter at its leading
+    /// edge, like a glaze taking heat, and that glow slowly rises and falls
+    /// with `heat`. A contrast theme draws it in its highlight colour, with
+    /// no glow.
+    fn progress(&self, r: &Rect, fraction: Option<f32>, heat: f32, g: Glaze, p: &Palette, a: f32) {
         let y = r.bottom() - PROGRESS_HEIGHT;
         let track = Rect::new(r.x, y, r.w, PROGRESS_HEIGHT);
         self.fill(&track, 0.0, p.line, a);
+        let burn = if p.high_contrast {
+            p.accent_strong
+        } else {
+            p.glaze(g)
+        };
         let Some(f) = fraction else {
             // Unknown length: the whole line holds a heat that breathes,
             // solid so it reads against the row.
-            let c = blend(p, p.accent_strong, p.text, effects::BREATH_SWING * heat);
+            let c = blend(p, burn, p.text, effects::BREATH_SWING * heat);
             self.fill(&track, 0.0, c, a);
-            return Ok(());
+            return;
         };
         let end = r.x + r.w * f.clamp(0.0, 1.0);
-        self.fill(
-            &Rect::new(r.x, y, end - r.x, PROGRESS_HEIGHT),
-            0.0,
-            p.accent_strong,
-            a,
-        );
-        // A contrast theme has no glow.
+        self.fill(&Rect::new(r.x, y, end - r.x, PROGRESS_HEIGHT), 0.0, burn, a);
         if f < 1.0 && end > r.x && !p.high_contrast {
+            // The glow: the glaze rising to full at the leading edge, and
+            // over it the text colour by as much as the breath swings, so
+            // the edge burns toward the text colour.
             let swing = effects::GLOW_MIN + effects::BREATH_SWING * heat;
-            let hot = theme::mix(p.accent_strong, p.text, swing);
             let glow_w = 40.0f32.min(end - r.x);
-            let stops = [
-                D2D1_GRADIENT_STOP {
-                    position: 0.0,
-                    color: color(hot, 0.0),
-                },
-                D2D1_GRADIENT_STOP {
-                    position: 1.0,
-                    color: color(hot, a),
-                },
-            ];
-            unsafe {
-                let coll = self.rt.CreateGradientStopCollection(
-                    &stops,
-                    D2D1_GAMMA_2_2,
-                    D2D1_EXTEND_MODE_CLAMP,
-                )?;
-                let brush = self.rt.CreateLinearGradientBrush(
-                    &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
-                        startPoint: pt(end - glow_w, y),
-                        endPoint: pt(end, y),
-                    },
-                    None,
-                    &coll,
-                )?;
-                self.rt.FillRectangle(
-                    &rectf(&Rect::new(
-                        end - glow_w,
-                        y - 1.0,
-                        glow_w,
-                        PROGRESS_HEIGHT + 1.0,
-                    )),
-                    &brush,
-                );
+            let glow = rectf(&Rect::new(
+                end - glow_w,
+                y - 1.0,
+                glow_w,
+                PROGRESS_HEIGHT + 1.0,
+            ));
+            for (ramp, opacity) in [(self.glaze_ramp(g), a), (self.text_ramp, a * swing)] {
+                unsafe {
+                    ramp.SetStartPoint(pt(end - glow_w, y));
+                    ramp.SetEndPoint(pt(end, y));
+                    ramp.SetOpacity(opacity);
+                    self.rt.FillRectangle(&glow, ramp);
+                }
             }
         }
-        Ok(())
     }
 
     fn footer(&self, l: &Layout, v: &View) -> Result<()> {
@@ -1202,13 +1610,19 @@ impl Draw<'_> {
             self.row_link_label("Undo", &link, false, false, p, 1.0);
         }
         if v.convert_enabled {
-            self.button(
+            // The footer's one primary action stands raised: its shadow, and
+            // the light along its top, which a press sinks out of sight.
+            self.shadow(&convert, shape::RADIUS_CONTROL, p);
+            self.primary(
                 v.convert_label,
                 &convert,
                 v.convert_hover,
                 v.convert_pressed,
                 p,
             );
+            if !v.convert_pressed {
+                self.highlight(&convert, shape::RADIUS_CONTROL, 0.0, p);
+            }
         } else {
             // Disabled: the label is muted and the edge flat.
             self.button_face(&convert, false, false, false, p);
@@ -1408,6 +1822,12 @@ impl Draw<'_> {
         let s = (0.55 + 0.45 * wv.open) * w.scale;
         let base = scale_at(s, w.center.0, w.center.1);
         let result = self.with_opacity(opacity, || {
+            // The wheel stands raised: one soft shadow under all of it,
+            // reaching as far as More's ring has poured out.
+            self.set_base(base);
+            let more = if w.more.is_empty() { 0.0 } else { wv.more };
+            let ring = R_MORE_OUTER * (0.66 + 0.34 * more);
+            self.disc_shadow(R_OUTER + (ring - R_OUTER).max(0.0) * more, p);
             // More's ring pours out from behind the dish.
             if wv.more > 0.0 && !w.more.is_empty() {
                 let k = 0.66 + 0.34 * wv.more;
@@ -1473,6 +1893,7 @@ impl Draw<'_> {
         // The dish.
         self.circle(R_OUTER, p.surface, 1.0)?;
         self.ring_edge(R_OUTER - 0.5, p.line)?;
+        self.top_light(R_OUTER - 1.5, p)?;
 
         // Hover or pulse: a celadon wash and a fine arc. Icons keep their
         // colour.
@@ -1580,6 +2001,7 @@ impl Draw<'_> {
         }
         self.ring_edge(R_MORE_INNER + 0.5, p.line)?;
         self.ring_edge(R_MORE_OUTER - 0.5, p.line)?;
+        self.top_light(R_MORE_OUTER - 1.5, p)?;
 
         let (lit, wash) = Self::lit(wv);
         if let Some(Spot::Outer(j)) = lit {
@@ -1661,6 +2083,50 @@ impl Draw<'_> {
         Ok(())
     }
 
+    /// The wheel's shadow: the shadow's layers as discs round its centre,
+    /// each `reach` grown by its amount, offset down. A contrast theme has
+    /// none.
+    fn disc_shadow(&self, reach: f32, p: &Palette) {
+        if p.high_contrast {
+            return;
+        }
+        for &(grow, share) in self.shadow {
+            let (r, a) = (reach + grow, p.shadow_alpha * share);
+            if r <= 0.0 || a <= 0.0 {
+                continue;
+            }
+            unsafe {
+                self.rt.FillEllipse(
+                    &D2D1_ELLIPSE {
+                        point: pt(0.0, depth::OFFSET_Y),
+                        radiusX: r,
+                        radiusY: r,
+                    },
+                    self.paint(p.shadow, a),
+                );
+            }
+        }
+    }
+
+    /// The 1 px light along the top of a raised disc: an arc at radius `r`
+    /// across its top, a little under a third of the way round. A contrast
+    /// theme has none.
+    fn top_light(&self, r: f32, p: &Palette) -> Result<()> {
+        if p.high_contrast || p.highlight_alpha <= 0.0 {
+            return Ok(());
+        }
+        let arc = self.arc(1.2 * PI, 1.8 * PI, r, false)?;
+        unsafe {
+            self.rt.DrawGeometry(
+                &arc,
+                self.paint(p.highlight, p.highlight_alpha),
+                shape::BORDER,
+                self.round,
+            );
+        }
+        Ok(())
+    }
+
     fn ring_edge(&self, r: f32, c: Rgb) -> Result<()> {
         unsafe {
             self.rt.DrawEllipse(
@@ -1724,10 +2190,10 @@ impl Draw<'_> {
     /// inside the body; focus starts on Copy.
     fn dialog(&self, w: f32, h: f32, dv: &DetailsView, p: &Palette) -> Result<()> {
         let d = layout::dialog(w, h);
-        // A scrim, not a shadow: it quiets the window behind the dialog.
+        // A scrim quiets the window behind the dialog, which stands raised
+        // over it.
         self.scrim(w, h, 1.0, p);
-        self.fill(&d.panel, shape::RADIUS_PANEL, p.surface, 1.0);
-        self.border(&d.panel, shape::RADIUS_PANEL, p.edge, 1.0, shape::BORDER);
+        self.raised_panel(&d.panel, p);
         self.label(dv.title, &self.text.display, &d.title, p.text, 1.0);
 
         let body = d.body;
@@ -1780,8 +2246,7 @@ impl Draw<'_> {
     fn help(&self, w: f32, h: f32, hv: &HelpView, p: &Palette) -> Result<()> {
         let d = layout::help(w, h);
         self.scrim(w, h, 1.0, p);
-        self.fill(&d.panel, shape::RADIUS_PANEL, p.surface, 1.0);
-        self.border(&d.panel, shape::RADIUS_PANEL, p.edge, 1.0, shape::BORDER);
+        self.raised_panel(&d.panel, p);
         self.label(help::TITLE, &self.text.display, &d.title, p.text, 1.0);
 
         let body = d.body;
@@ -1823,8 +2288,7 @@ impl Draw<'_> {
     fn settings(&self, w: f32, h: f32, sv: &SettingsView, p: &Palette) -> Result<()> {
         let l = sv.layout;
         self.scrim(w, h, 1.0, p);
-        self.fill(&l.panel, shape::RADIUS_PANEL, p.surface, 1.0);
-        self.border(&l.panel, shape::RADIUS_PANEL, p.edge, 1.0, shape::BORDER);
+        self.raised_panel(&l.panel, p);
         self.label("Settings", &self.text.display, &l.title, p.text, 1.0);
         self.tabs(sv, p);
         // A new page fades in where the last one was.
@@ -2060,8 +2524,7 @@ impl Draw<'_> {
         let result = self.with_opacity(a, || {
             self.set_base(scale_at(1.0, 0.0, rise));
             let l = sv.layout;
-            self.fill(&l.panel, shape::RADIUS_PANEL, p.surface, 1.0);
-            self.border(&l.panel, shape::RADIUS_PANEL, p.edge, 1.0, shape::BORDER);
+            self.raised_panel(&l.panel, p);
             self.label(sv.title, &self.text.display, &l.title, p.text, 1.0);
             self.label(sv.target, &self.text.caption, &l.target, p.text_muted, 1.0);
             self.label(
