@@ -289,7 +289,7 @@ pub fn offer(kind: WheelKind, kiln: &Kiln, available: &Availability, paths: &[Pa
         }
     }
     // Most files first; ties keep the order they were met in.
-    kinds.sort_by(|a, b| b.1.cmp(&a.1));
+    kinds.sort_by_key(|a| std::cmp::Reverse(a.1));
     match kinds.as_slice() {
         [(code, _)] => Offer::Unsupported(code.clone()),
         _ => Offer::Mixed(kinds),
