@@ -7,7 +7,7 @@
 //! (`win::thumbs`) fetches on a worker thread, and the window draws what
 //! the cache holds.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -86,6 +86,8 @@ struct Entry {
     preview: Preview,
     arrived: Instant,
     cost: usize,
+    /// When this was last used, as a count of uses: bigger is newer.
+    last_used: u64,
 }
 
 /// Previews held by key, up to a number of bytes. When a new one doesn't
@@ -94,8 +96,9 @@ pub struct PreviewCache {
     cap: usize,
     bytes: usize,
     entries: HashMap<PreviewKey, Entry>,
-    /// Every key in `entries`, the least recently used first.
-    order: VecDeque<PreviewKey>,
+    /// Counts every `get` and `put`; an entry takes the count as its
+    /// `last_used`. Reading is constant time however many are held.
+    uses: u64,
     /// Keys the worker has been asked for and has not yet answered.
     pending: HashSet<PreviewKey>,
 }
@@ -106,7 +109,7 @@ impl PreviewCache {
             cap,
             bytes: 0,
             entries: HashMap::new(),
-            order: VecDeque::new(),
+            uses: 0,
             pending: HashSet::new(),
         }
     }
@@ -114,8 +117,9 @@ impl PreviewCache {
     /// The preview for `key` and when it arrived, which counts as using
     /// it. `now` is the frame's clock; the order of use doesn't read it.
     pub fn get(&mut self, key: &PreviewKey, _now: Instant) -> Option<(&Preview, Instant)> {
-        let entry = self.entries.get(key)?;
-        Self::touch(&mut self.order, key);
+        let entry = self.entries.get_mut(key)?;
+        self.uses += 1;
+        entry.last_used = self.uses;
         Some((&entry.preview, entry.arrived))
     }
 
@@ -128,20 +132,27 @@ impl PreviewCache {
         self.remove(&key);
         let cost = preview.cost();
         self.bytes += cost;
-        self.order.push_back(key.clone());
+        self.uses += 1;
         self.entries.insert(
             key,
             Entry {
                 preview,
                 arrived: now,
                 cost,
+                last_used: self.uses,
             },
         );
-        while self.bytes > self.cap && self.order.len() > 1 {
-            if let Some(oldest) = self.order.pop_front() {
-                if let Some(entry) = self.entries.remove(&oldest) {
-                    self.bytes -= entry.cost;
-                }
+        // The one just put is the newest, so it is only ever the oldest
+        // when it is the only one left.
+        while self.bytes > self.cap && self.entries.len() > 1 {
+            let oldest = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(key, _)| key.clone());
+            match oldest.and_then(|key| self.entries.remove(&key)) {
+                Some(entry) => self.bytes -= entry.cost,
+                None => break,
             }
         }
     }
@@ -150,7 +161,20 @@ impl PreviewCache {
     /// the cache doesn't hold, and stays false until the answer arrives
     /// through [`put`](Self::put), so each picture is asked for once.
     pub fn pending(&mut self, key: &PreviewKey) -> bool {
-        !self.entries.contains_key(key) && self.pending.insert(key.clone())
+        if self.entries.contains_key(key) || self.pending.contains(key) {
+            return false;
+        }
+        self.pending.insert(key.clone());
+        true
+    }
+
+    /// Forgets that anything is being waited for; the previews held stay.
+    /// The worker's new queue replaces its old one, so the keys it dropped
+    /// will never be answered. The window calls this just before each new
+    /// ask, so what is pending is what was last asked, and a picture
+    /// scrolled away from and back to is asked for again.
+    pub fn clear_pending(&mut self) {
+        self.pending.clear();
     }
 
     /// Drops the previews, and the waiting for previews, of every path
@@ -166,8 +190,6 @@ impl PreviewCache {
             keep
         });
         self.bytes -= freed;
-        let entries = &self.entries;
-        self.order.retain(|key| entries.contains_key(key));
     }
 
     /// The bytes of pictures held now.
@@ -178,21 +200,6 @@ impl PreviewCache {
     fn remove(&mut self, key: &PreviewKey) {
         if let Some(entry) = self.entries.remove(key) {
             self.bytes -= entry.cost;
-            if let Some(i) = self.order.iter().rposition(|k| k == key) {
-                self.order.remove(i);
-            }
-        }
-    }
-
-    /// Moves `key` to the most recently used end. The rows on screen were
-    /// all read a moment ago, so searching from that end is short.
-    fn touch(order: &mut VecDeque<PreviewKey>, key: &PreviewKey) {
-        if let Some(i) = order.iter().rposition(|k| k == key) {
-            if i + 1 != order.len() {
-                if let Some(used) = order.remove(i) {
-                    order.push_back(used);
-                }
-            }
         }
     }
 }
@@ -455,6 +462,44 @@ mod tests {
         cache.put(key("b"), ready(100), now); // pushes a out
         assert!(cache.get(&key("a"), now).is_none());
         assert!(cache.pending(&key("a")));
+    }
+
+    #[test]
+    fn clearing_the_pending_asks_again_but_keeps_what_arrived() {
+        let now = Instant::now();
+        let mut cache = PreviewCache::new(1000);
+        let (waiting, held) = (key("waiting"), key("held"));
+        cache.put(held.clone(), ready(100), now);
+        assert!(cache.pending(&waiting));
+        assert!(!cache.pending(&waiting));
+
+        cache.clear_pending();
+
+        assert!(cache.pending(&waiting), "the worker dropped it: ask again");
+        assert!(!cache.pending(&held), "a held preview is never asked for");
+        assert!(cache.get(&held, now).is_some());
+        assert_eq!(cache.bytes(), 100);
+    }
+
+    #[test]
+    fn five_thousand_previews_still_drop_the_least_recently_used() {
+        // 5,000 four-byte previews fill a cap of 20,000 bytes exactly.
+        let now = Instant::now();
+        let mut cache = PreviewCache::new(5_000 * 4);
+        for i in 0..5_000 {
+            cache.put(key(&format!("k{i}")), ready(4), now);
+        }
+        assert_eq!(cache.bytes(), 20_000);
+
+        // The oldest is read, so the second-oldest is now the one to go.
+        assert!(cache.get(&key("k0"), now).is_some());
+        cache.put(key("one more"), ready(4), now);
+
+        assert!(cache.get(&key("k0"), now).is_some(), "k0 was just used");
+        assert!(cache.get(&key("k1"), now).is_none(), "k1 was the oldest");
+        assert!(cache.get(&key("k2"), now).is_some());
+        assert!(cache.get(&key("one more"), now).is_some());
+        assert_eq!(cache.bytes(), 20_000);
     }
 
     #[test]
