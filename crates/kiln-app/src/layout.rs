@@ -161,9 +161,11 @@ pub fn layout_with(w: f32, h: f32, rows: usize, shown: f32) -> Layout {
     let header = Rect::new(0.0, 0.0, w, HEADER_HEIGHT);
     // Content stays in a column of a readable width, centred in a wide
     // window, so a row's link is never a thousand pixels from its name.
-    // The inspector's column is wider by most of its own width.
-    let cap = if inspected {
-        MAX_CONTENT_WIDTH_WIDE
+    // With files the column is wider by as much of the inspector as is
+    // shown, so the list keeps its width while the inspector slides in
+    // and the header and footer glide out with it instead of jumping.
+    let cap = if rows > 0 {
+        MAX_CONTENT_WIDTH + (MAX_CONTENT_WIDTH_WIDE - MAX_CONTENT_WIDTH) * shown
     } else {
         MAX_CONTENT_WIDTH
     };
@@ -357,9 +359,22 @@ pub fn row_part_with_retry(
     }
 }
 
+/// Where a row's chip and text start: [`PREVIEW_GAP`] after its preview.
+pub fn row_text_left(row: &Rect) -> f32 {
+    row_preview(row).right() + PREVIEW_GAP
+}
+
 /// A row's second line, where a saved row's "Saved to" can be clicked.
+/// It starts at [`row_text_left`], clear of the preview, and ends 16 DIPs
+/// short of the row's right edge.
 pub fn row_line(row: &Rect) -> Rect {
-    Rect::new(row.x + 16.0, row.y + 28.0, (row.w - 32.0).max(0.0), 20.0)
+    let left = row_text_left(row);
+    Rect::new(
+        left,
+        row.y + 28.0,
+        (row.right() - 16.0 - left).max(0.0),
+        20.0,
+    )
 }
 
 /// A row's preview: [`PREVIEW_ROW`] square, 12 DIPs in from the row's
@@ -416,8 +431,9 @@ pub fn rows_per_page(panel_h: f32) -> isize {
 /// The widest the content column grows in a wide window.
 pub const MAX_CONTENT_WIDTH: f32 = 880.0;
 
-/// The widest it grows while the inspector shows: the list keeps about
-/// the width it has without one.
+/// The widest it grows with the inspector all the way in: the list keeps
+/// about the width it has without one. With files the cap rises from
+/// [`MAX_CONTENT_WIDTH`] to this as the inspector slides in.
 pub const MAX_CONTENT_WIDTH_WIDE: f32 = 1180.0;
 
 /// The inspector's width, in DIPs.
@@ -1310,7 +1326,8 @@ fn snap(v: f32) -> f32 {
 }
 
 /// What the inspector shows, as far as its geometry goes: which parts it
-/// has, and how tall the ones that hold wrapped text are.
+/// has, how tall the ones that hold wrapped text are, and how many buttons
+/// it has (the count of its controls that are buttons).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InspectorShape {
     /// Nothing selected: the vessel in the hero's place, a title, and
@@ -1326,13 +1343,19 @@ pub enum InspectorShape {
         more: bool,
     },
     /// A running job: the percentage and the time left in the body, and
-    /// Cancel.
-    Converting,
-    /// A finished job. `change` says there is a before and after to show.
-    Done { change: bool },
+    /// its `buttons` (Cancel).
+    Converting { buttons: usize },
+    /// A finished job. Its body holds a line for the result, one for the
+    /// change when `change`, and one for the hint that the result can be
+    /// dragged out when `drag`, each 20 DIPs; then its `buttons`.
+    Done {
+        change: bool,
+        drag: bool,
+        buttons: usize,
+    },
     /// A failed or cancelled job: its sentence, `sentence_h` tall once
-    /// wrapped, and Retry when `retry`, then Show details.
-    Failed { sentence_h: f32, retry: bool },
+    /// wrapped, then its `buttons`.
+    Failed { sentence_h: f32, buttons: usize },
     /// Several files. `targets` counts whichever list is shown: the
     /// formats they all share or, when they share none, the kinds
     /// offered. `none_h` is the height of the sentence saying why there
@@ -1346,12 +1369,13 @@ pub enum InspectorShape {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct InspectorLayout {
     /// The preview, [`HERO`] tall and as wide as the padding leaves. In
-    /// `Nothing` it holds the 48 DIP vessel, centred.
+    /// `Nothing` it holds the 48 DIP vessel, centred. It is the first
+    /// thing to go when the inspector is short.
     pub hero: Rect,
     pub title: Rect,
-    /// What the format is, the sentence, or the lines of a running job
-    /// (the 40 DIP percentage, then a 20 DIP time line). Empty when the
-    /// shape has none.
+    /// What the format is, the sentence, or the lines of a running or
+    /// finished job (a running job's 40 DIP percentage, then a 20 DIP
+    /// time line). Empty when the shape has none.
     pub body: Rect,
     /// One rect per fact, [`FACT_HEIGHT`] tall.
     pub facts: Vec<Rect>,
@@ -1360,49 +1384,85 @@ pub struct InspectorLayout {
     /// One rect per target, [`TARGET_HEIGHT`] tall, however many fit.
     pub targets: Vec<Rect>,
     pub more: Option<Rect>,
-    /// The buttons' slots, left to right. A shape gets a slot for each
-    /// button it can have, and the controls take them in their order.
+    /// One slot for each of the shape's `buttons`, left to right, so a
+    /// slot is never drawn as a button that isn't there. A slot that
+    /// doesn't fit across the rect is left out, so a rect narrower than
+    /// the buttons never places a control that sticks out of it.
     pub buttons: Vec<Rect>,
 }
 
 /// Width of an inspector button.
 pub const INSPECTOR_BUTTON_WIDTH: f32 = 96.0;
 
-/// The inspector's parts stacked down `r`, inside 16 DIPs of padding.
-/// Whatever doesn't fit whole inside it is left out, and so is every part
-/// after it, so a short inspector shows the top of its story and not a
-/// cut-off bottom.
+/// The inspector's parts stacked down `r`, inside 16 DIPs of padding. `r`
+/// is the whole inspector, [`INSPECTOR_WIDTH`] wide: the fold slides it in
+/// by translation and clipping, and never lays it out narrower.
+///
+/// When the whole stack doesn't fit `r`'s height, parts give way so the
+/// inspector keeps what it exists for, the actions: first the hero, then
+/// all of the facts. Only then are the targets, More and the buttons cut
+/// from the bottom. Whatever doesn't fit whole inside the padding, down
+/// or across, is left out, and so is every part after it, so a short or
+/// narrow inspector shows the top of its story and never a cut-off or
+/// protruding control.
 pub fn inspector_layout(r: &Rect, shape: &InspectorShape) -> InspectorLayout {
-    /// Parts stacked down the padded rect, each after a gap.
+    for (hero, facts) in [(true, true), (false, true)] {
+        let (layout, whole) = inspector_stack(r, shape, hero, facts);
+        if whole {
+            return layout;
+        }
+    }
+    inspector_stack(r, shape, false, false).0
+}
+
+/// One try at [`inspector_layout`], offering the hero and the facts or
+/// not, and whether every part it offered was placed whole.
+fn inspector_stack(
+    r: &Rect,
+    shape: &InspectorShape,
+    hero: bool,
+    facts: bool,
+) -> (InspectorLayout, bool) {
+    /// Parts stacked down the padded rect, each after a gap, except the
+    /// first.
     struct Stack {
         inner: Rect,
         y: f32,
+        placed: bool,
         fits: bool,
     }
     impl Stack {
         fn place(&mut self, gap: f32, h: f32) -> Option<Rect> {
-            let y = self.y + gap;
+            let y = if self.placed { self.y + gap } else { self.y };
             if !self.fits || y + h > self.inner.bottom() {
                 self.fits = false;
                 return None;
             }
             self.y = y + h;
+            self.placed = true;
             Some(Rect::new(self.inner.x, y, self.inner.w, h))
+        }
+
+        /// A part's place, or an empty rect where the stack stopped.
+        fn or_empty(&self, at: Option<Rect>) -> Rect {
+            at.unwrap_or(Rect::new(self.inner.x, self.y, self.inner.w, 0.0))
         }
     }
 
     const TITLE: f32 = 24.0;
     const LABEL: f32 = 16.0;
     const MORE: f32 = 24.0;
+    const LINE: f32 = 20.0;
     let inner = r.inset(PANEL_PADDING);
     let mut s = Stack {
         inner,
         y: inner.y,
+        placed: false,
         fits: true,
     };
     // The body's height, the facts, the targets, whether More follows
-    // them, and the slots for buttons.
-    let (body_h, facts, targets, more, buttons) = match *shape {
+    // them, and the buttons.
+    let (body_h, fact_count, targets, more, buttons) = match *shape {
         InspectorShape::Nothing => (40.0, 0, 0, false, 0),
         InspectorShape::Waiting {
             what_h,
@@ -1410,31 +1470,42 @@ pub fn inspector_layout(r: &Rect, shape: &InspectorShape) -> InspectorLayout {
             targets,
             more,
         } => (what_h, facts, targets, more, 0),
-        InspectorShape::Converting => (60.0, 0, 0, false, 1),
-        InspectorShape::Done { change } => (if change { 20.0 } else { 0.0 }, 0, 0, false, 1),
-        InspectorShape::Failed { sentence_h, retry } => {
-            (sentence_h, 0, 0, false, if retry { 2 } else { 1 })
+        InspectorShape::Converting { buttons } => (60.0, 0, 0, false, buttons),
+        InspectorShape::Done {
+            change,
+            drag,
+            buttons,
+        } => {
+            let lines = 1 + u8::from(change) + u8::from(drag);
+            (LINE * f32::from(lines), 0, 0, false, buttons)
         }
+        InspectorShape::Failed {
+            sentence_h,
+            buttons,
+        } => (sentence_h, 0, 0, false, buttons),
         InspectorShape::Several { targets, none_h } => (none_h, 0, targets, false, 0),
     };
-    // A part's place, or an empty rect where the stack stopped.
-    let required =
-        |at: Option<Rect>, s: &Stack| at.unwrap_or(Rect::new(s.inner.x, s.y, s.inner.w, 0.0));
 
-    let hero = s.place(0.0, HERO.1);
-    let hero = required(hero, &s);
+    // Without the hero the stack starts at the title, and when the hero
+    // is offered but doesn't fit, nothing after it does either.
+    let hero = if hero { s.place(0.0, HERO.1) } else { None };
+    let hero = s.or_empty(hero);
     let title = s.place(12.0, TITLE);
-    let title = required(title, &s);
+    let title = s.or_empty(title);
     let body = if body_h > 0.0 {
         s.place(8.0, body_h)
     } else {
         None
     };
-    let body = required(body, &s);
+    let body = s.or_empty(body);
 
-    let facts: Vec<Rect> = (0..facts)
-        .map_while(|i| s.place(if i == 0 { 12.0 } else { 0.0 }, FACT_HEIGHT))
-        .collect();
+    let facts: Vec<Rect> = if facts {
+        (0..fact_count)
+            .map_while(|i| s.place(if i == 0 { 12.0 } else { 0.0 }, FACT_HEIGHT))
+            .collect()
+    } else {
+        vec![]
+    };
 
     let mut label = None;
     let mut rows = vec![];
@@ -1450,19 +1521,31 @@ pub fn inspector_layout(r: &Rect, shape: &InspectorShape) -> InspectorLayout {
     }
     let more = if more { s.place(6.0, MORE) } else { None };
 
-    let mut slots = vec![];
-    if buttons > 0 {
-        if let Some(first) = s.place(12.0, BUTTON_HEIGHT) {
-            slots = (0..buttons)
+    // The buttons in a row, as many as fit across the padded width.
+    let step = INSPECTOR_BUTTON_WIDTH + 8.0;
+    let across = (0..buttons)
+        .take_while(|&i| i as f32 * step + INSPECTOR_BUTTON_WIDTH <= inner.w)
+        .count();
+    let row = if across > 0 {
+        s.place(12.0, BUTTON_HEIGHT)
+    } else {
+        None
+    };
+    let slots: Vec<Rect> = row
+        .map(|row| {
+            (0..across)
                 .map(|i| {
-                    let x = first.x + i as f32 * (INSPECTOR_BUTTON_WIDTH + 8.0);
-                    Rect::new(x, first.y, INSPECTOR_BUTTON_WIDTH, BUTTON_HEIGHT)
+                    let x = row.x + i as f32 * step;
+                    Rect::new(x, row.y, INSPECTOR_BUTTON_WIDTH, BUTTON_HEIGHT)
                 })
-                .collect();
-        }
+                .collect()
+        })
+        .unwrap_or_default();
+    if slots.len() < buttons {
+        s.fits = false;
     }
 
-    InspectorLayout {
+    let layout = InspectorLayout {
         hero,
         title,
         body,
@@ -1471,7 +1554,8 @@ pub fn inspector_layout(r: &Rect, shape: &InspectorShape) -> InspectorLayout {
         targets: rows,
         more,
         buttons: slots,
-    }
+    };
+    (layout, s.fits)
 }
 
 /// Largest scroll offset for a list of `rows` inside a panel `panel_h` tall.
@@ -1787,6 +1871,11 @@ mod tests {
             let p = row_preview(r);
             assert!(p.x >= r.x && p.y >= r.y && p.bottom() <= r.bottom());
             assert!(p.right() + PREVIEW_GAP < row_link(r).x, "row {i} preview");
+            // The saved line, which can be clicked, starts clear of it and
+            // stays inside the row.
+            let line = row_line(r);
+            assert!(apart(&line, &p), "row {i}: the line overlaps the preview");
+            assert!(line.x >= p.right() + PREVIEW_GAP && line.right() <= r.right());
         }
         all_apart(&rects);
         // The list and the inspector share the panel and never touch.
@@ -2531,6 +2620,62 @@ mod tests {
     }
 
     #[test]
+    fn the_column_widens_as_the_inspector_slides_in() {
+        // The cap with files is 880 plus what is shown of the inspector, so
+        // half in it is 1030 in a window wide enough for that.
+        let half = layout_with(2000.0, 900.0, 3, 0.5);
+        assert_eq!(half.body.w, 1030.0);
+        assert_eq!(layout_with(2000.0, 900.0, 3, 0.0).body.w, MAX_CONTENT_WIDTH);
+        assert_eq!(
+            layout_with(2000.0, 900.0, 3, 1.0).body.w,
+            MAX_CONTENT_WIDTH_WIDE
+        );
+        // The list keeps its width while the inspector slides in, give or
+        // take the rule.
+        for i in 0..=20 {
+            let l = layout_with(2000.0, 900.0, 3, i as f32 * 0.05);
+            assert!((l.list.w - 879.5).abs() <= 0.6, "{i}: {}", l.list.w);
+        }
+    }
+
+    #[test]
+    fn nothing_jumps_while_the_inspector_slides_in() {
+        // Across the slide in steps of 0.05, the column, the header's
+        // buttons, the footer and the rows move no faster than the
+        // inspector grows, plus a grid step for snapping the centred
+        // column. A step in the column's cap at the start would be a jump
+        // of 300 DIPs.
+        let most = INSPECTOR_WIDTH * 0.05 + GRID;
+        for w in [1000.0, 1300.0, 2000.0, 3000.0] {
+            let at = |i: usize| layout_with(w, 600.0, 3, i as f32 * 0.05);
+            let numbers = |l: &Layout| {
+                [
+                    l.body.x,
+                    l.body.w,
+                    l.body.right(),
+                    l.icon.x,
+                    l.settings_button.x,
+                    l.help_button.x,
+                    l.footer.unwrap().right(),
+                    l.clear_button.unwrap().x,
+                    l.list.w,
+                    l.rows[0].w,
+                    l.inspector.map_or(l.panel.right(), |i| i.x),
+                ]
+            };
+            for i in 0..20 {
+                let (a, b) = (numbers(&at(i)), numbers(&at(i + 1)));
+                for (k, (x, y)) in a.iter().zip(&b).enumerate() {
+                    assert!(
+                        (x - y).abs() <= most,
+                        "{w}: value {k} jumps {x} to {y} at {i}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn the_empty_window_has_no_inspector() {
         assert!(layout(1000.0, 600.0, 0).inspector.is_none());
         // Whatever the window is shown, no files means no inspector and
@@ -2588,8 +2733,38 @@ mod tests {
     }
 
     #[test]
+    fn the_row_text_starts_clear_of_the_preview() {
+        let row = Rect::new(16.0, 72.0, 600.0, ROW_HEIGHT);
+        let p = row_preview(&row);
+        // The chip and the text start 12 DIPs after the preview.
+        assert_eq!(row_text_left(&row), p.right() + 12.0);
+        assert_eq!(row_text_left(&row), row.x + 58.0);
+        // The saved line starts there too, and keeps its y, its height and
+        // its right edge, 16 DIPs short of the row's.
+        let line = row_line(&row);
+        assert_eq!(line.x, row_text_left(&row));
+        assert_eq!((line.y, line.h), (row.y + 28.0, 20.0));
+        assert_eq!(line.right(), row.right() - 16.0);
+        assert!(apart(&line, &p));
+        // So a click on the preview is a click on the row, not the link.
+        let on_preview = (p.x + p.w / 2.0, p.y + p.h / 2.0);
+        assert!(row.contains(on_preview.0, on_preview.1));
+        assert_eq!(
+            row_part(&row, on_preview.0, on_preview.1, false, false, true),
+            RowPart::Row
+        );
+        let on_line = (line.x + line.w / 2.0, line.y + line.h / 2.0);
+        assert_eq!(
+            row_part(&row, on_line.0, on_line.1, false, false, true),
+            RowPart::Link
+        );
+        // A row too narrow to hold it has no line, rather than a negative one.
+        assert_eq!(row_line(&Rect::new(0.0, 0.0, 60.0, ROW_HEIGHT)).w, 0.0);
+    }
+
+    #[test]
     fn a_short_inspector_drops_what_does_not_fit_whole() {
-        let r = Rect::new(900.0, 72.0, 300.0, 260.0);
+        let r = Rect::new(900.0, 72.0, 300.0, 220.0);
         let l = inspector_layout(
             &r,
             &InspectorShape::Waiting {
@@ -2604,6 +2779,7 @@ mod tests {
             assert!(t.y >= inner.y && t.bottom() <= inner.bottom());
         }
         assert!(l.targets.len() < 3);
+        assert!(l.more.is_none());
     }
 
     /// Every shape the inspector can take, with the most parts it has.
@@ -2616,11 +2792,15 @@ mod tests {
                 targets: 3,
                 more: true,
             },
-            InspectorShape::Converting,
-            InspectorShape::Done { change: true },
+            InspectorShape::Converting { buttons: 1 },
+            InspectorShape::Done {
+                change: true,
+                drag: true,
+                buttons: 1,
+            },
             InspectorShape::Failed {
                 sentence_h: 60.0,
-                retry: true,
+                buttons: 2,
             },
             InspectorShape::Several {
                 targets: 3,
@@ -2633,12 +2813,31 @@ mod tests {
         ]
     }
 
-    /// The parts of an inspector layout that stand, in reading order.
-    fn standing(l: &InspectorLayout) -> Vec<(String, Rect)> {
-        let mut parts = vec![("hero".to_string(), l.hero), ("title".to_string(), l.title)];
-        if l.body.h > 0.0 {
-            parts.push(("body".into(), l.body));
+    /// What a shape asks for: its facts, targets, whether More, its buttons.
+    fn asks_for(shape: &InspectorShape) -> (usize, usize, bool, usize) {
+        match *shape {
+            InspectorShape::Nothing => (0, 0, false, 0),
+            InspectorShape::Waiting {
+                facts,
+                targets,
+                more,
+                ..
+            } => (facts, targets, more, 0),
+            InspectorShape::Several { targets, .. } => (0, targets, false, 0),
+            InspectorShape::Converting { buttons }
+            | InspectorShape::Done { buttons, .. }
+            | InspectorShape::Failed { buttons, .. } => (0, 0, false, buttons),
         }
+    }
+
+    /// The parts of an inspector layout that stand, in reading order, with
+    /// every button slot.
+    fn every_rect(l: &InspectorLayout) -> Vec<(String, Rect)> {
+        let mut parts = vec![
+            ("hero".to_string(), l.hero),
+            ("title".to_string(), l.title),
+            ("body".to_string(), l.body),
+        ];
         let numbered = |name: &str, rs: &[Rect]| -> Vec<(String, Rect)> {
             rs.iter()
                 .enumerate()
@@ -2649,9 +2848,15 @@ mod tests {
         parts.extend(l.label.map(|r| ("label".to_string(), r)));
         parts.extend(numbered("target", &l.targets));
         parts.extend(l.more.map(|r| ("more".to_string(), r)));
-        // The buttons share a row: the first stands for it.
-        parts.extend(l.buttons.first().map(|r| ("buttons".to_string(), *r)));
+        parts.extend(numbered("button", &l.buttons));
         parts.retain(|(_, r)| r.h > 0.0);
+        parts
+    }
+
+    /// The same, one to a line: a row of buttons stands as its first.
+    fn standing(l: &InspectorLayout) -> Vec<(String, Rect)> {
+        let mut parts = every_rect(l);
+        parts.retain(|(name, _)| name != "button 1" && name != "button 2");
         parts
     }
 
@@ -2701,7 +2906,7 @@ mod tests {
 
         // A running job: the percentage and the time left share the body,
         // and Cancel follows, 12 below.
-        let running = inspector_layout(&r, &InspectorShape::Converting);
+        let running = inspector_layout(&r, &InspectorShape::Converting { buttons: 1 });
         assert_eq!(running.body.h, 40.0 + 20.0);
         assert!(running.facts.is_empty() && running.label.is_none());
         assert_eq!(running.buttons.len(), 1);
@@ -2709,26 +2914,46 @@ mod tests {
         assert_eq!(cancel.y, running.body.bottom() + 12.0);
         assert_eq!((cancel.w, cancel.h), (96.0, BUTTON_HEIGHT));
 
-        // A failure with Retry has a slot for it and for Show details, 8
-        // apart, left to right; without Retry, one slot.
-        let failed = |retry| InspectorShape::Failed {
-            sentence_h: 60.0,
-            retry,
+        // A failure has a slot for each button it has, 8 apart, left to
+        // right, and none for one it hasn't.
+        let failed = |buttons| {
+            inspector_layout(
+                &r,
+                &InspectorShape::Failed {
+                    sentence_h: 60.0,
+                    buttons,
+                },
+            )
         };
-        let two = inspector_layout(&r, &failed(true));
+        let two = failed(2);
         assert_eq!(two.body.h, 60.0);
         assert_eq!(two.buttons.len(), 2);
+        assert_eq!(two.buttons[0].y, two.body.bottom() + 12.0);
         assert_eq!(two.buttons[1].x, two.buttons[0].right() + 8.0);
         assert_eq!(two.buttons[1].y, two.buttons[0].y);
-        assert_eq!(inspector_layout(&r, &failed(false)).buttons.len(), 1);
+        assert_eq!(failed(1).buttons.len(), 1);
+        assert!(failed(0).buttons.is_empty());
 
-        // A finished one has a body only when there is a change to show.
-        let done = |change| inspector_layout(&r, &InspectorShape::Done { change });
-        assert_eq!(done(true).body.h, 20.0);
-        assert_eq!(done(false).body.h, 0.0);
-        assert_eq!(done(true).buttons.len(), 1);
-        // With no body there is no gap for it either.
-        assert_eq!(done(false).buttons[0].y, done(false).title.bottom() + 12.0);
+        // A finished job's body holds a 20 DIP line for the result, one for
+        // the change and one for the drag-out hint, when it has them.
+        let done = |change, drag, buttons| {
+            inspector_layout(
+                &r,
+                &InspectorShape::Done {
+                    change,
+                    drag,
+                    buttons,
+                },
+            )
+        };
+        assert_eq!(done(false, false, 1).body.h, 20.0);
+        assert_eq!(done(true, false, 1).body.h, 40.0);
+        assert_eq!(done(false, true, 1).body.h, 40.0);
+        assert_eq!(done(true, true, 1).body.h, 60.0);
+        assert_eq!(done(true, true, 1).buttons.len(), 1);
+        assert!(done(true, true, 0).buttons.is_empty());
+        let full = done(true, true, 1);
+        assert_eq!(full.buttons[0].y, full.body.bottom() + 12.0);
 
         // Several files list their shared formats, or when they share
         // none, the sentence and the kinds on offer: both as target rows.
@@ -2773,9 +2998,58 @@ mod tests {
     }
 
     #[test]
-    fn a_shorter_inspector_loses_parts_from_the_bottom_and_never_overflows() {
+    fn a_short_inspector_gives_up_its_picture_and_facts_before_its_actions() {
+        let waiting = InspectorShape::Waiting {
+            what_h: 40.0,
+            facts: 3,
+            targets: 3,
+            more: true,
+        };
+        // A window 800 x 480 gives the inspector 300 x 348: too short for
+        // the picture and the facts with the targets. The targets and More
+        // are the point of it, so they stay and the picture and facts go.
+        let r = layout(800.0, 480.0, 3).inspector.unwrap();
+        assert_eq!((r.w, r.h), (300.0, 348.0));
+        let l = inspector_layout(&r, &waiting);
+        assert_eq!(l.hero.h, 0.0);
+        assert!(l.facts.is_empty());
+        assert_eq!(l.targets.len(), 3);
+        assert!(l.more.is_some());
+        assert!(l.label.is_some());
+        // Every part is in the padding, and the title now leads.
+        let inner = r.inset(16.0);
+        assert_eq!(l.title.y, inner.y);
+        for (name, p) in every_rect(&l) {
+            assert!(p.y >= inner.y && p.bottom() <= inner.bottom(), "{name}");
+        }
+        // With room for the facts but not the picture, the facts come back
+        // first: the stack with them, no picture, is 322 DIPs of padding.
+        let at = |h| inspector_layout(&Rect::new(r.x, r.y, 300.0, h), &waiting);
+        let facts = at(322.0 + 32.0);
+        assert_eq!((facts.hero.h, facts.facts.len()), (0.0, 3));
+        assert_eq!((facts.targets.len(), facts.more.is_some()), (3, true));
+        assert_eq!(at(321.0 + 32.0).facts.len(), 0);
+        // With room for everything, the picture comes back, last.
+        let whole = at(454.0 + 32.0);
+        assert_eq!((whole.hero.h, whole.facts.len()), (HERO.1, 3));
+        assert_eq!((whole.targets.len(), whole.more.is_some()), (3, true));
+        assert_eq!(at(453.0 + 32.0).hero.h, 0.0);
+        // The same goes for a job's buttons: a short inspector loses the
+        // picture before Cancel.
+        let running = InspectorShape::Converting { buttons: 1 };
+        let cancel = |h| {
+            let l = inspector_layout(&Rect::new(0.0, 0.0, 300.0, h), &running);
+            (l.hero.h, l.buttons.len())
+        };
+        assert_eq!(cancel(200.0), (0.0, 1));
+        assert_eq!(cancel(500.0), (HERO.1, 1));
+    }
+
+    #[test]
+    fn a_shorter_inspector_never_overflows_and_cuts_actions_only_from_the_bottom() {
         for shape in every_shape() {
-            let mut count = 0;
+            let (asked_facts, asked_targets, asked_more, asked_buttons) = asks_for(&shape);
+            let mut actions = 0;
             for h in (0..=900).step_by(4) {
                 let r = Rect::new(900.0, 72.0, INSPECTOR_WIDTH, h as f32);
                 let inner = r.inset(16.0);
@@ -2791,28 +3065,95 @@ mod tests {
                         assert!(p.y >= parts[i - 1].1.bottom(), "{shape:?}: {name}");
                     }
                 }
-                // Taller never shows less, and a part left out takes the
-                // parts after it.
-                assert!(parts.len() >= count, "{shape:?} at {h}");
-                count = parts.len();
-                if l.hero.h == 0.0 {
-                    assert_eq!(parts.len(), 0);
+                // Taller never shows fewer actions.
+                let now = l.targets.len() + usize::from(l.more.is_some()) + l.buttons.len();
+                assert!(
+                    now >= actions,
+                    "{shape:?} at {h}: {now} actions after {actions}"
+                );
+                actions = now;
+                // The picture shows only with every part the shape asks for.
+                if l.hero.h > 0.0 {
+                    assert_eq!(l.hero.h, HERO.1);
+                    assert_eq!(l.facts.len(), asked_facts, "{shape:?} at {h}");
+                    assert_eq!(l.targets.len(), asked_targets, "{shape:?} at {h}");
+                    assert_eq!(l.more.is_some(), asked_more, "{shape:?} at {h}");
+                    assert_eq!(l.buttons.len(), asked_buttons, "{shape:?} at {h}");
                 }
+                // The facts go before any action is cut.
+                if !l.facts.is_empty() {
+                    assert_eq!(l.targets.len(), asked_targets, "{shape:?} at {h}");
+                    assert_eq!(l.buttons.len(), asked_buttons, "{shape:?} at {h}");
+                }
+                // A part left out takes the parts after it.
                 if l.title.h == 0.0 {
-                    assert!(parts.len() <= 1);
+                    assert!(parts.is_empty(), "{shape:?} at {h}");
                 }
-                if l.targets.len()
-                    < match shape {
-                        InspectorShape::Waiting { targets, .. }
-                        | InspectorShape::Several { targets, .. } => targets,
-                        _ => 0,
-                    }
-                {
+                if l.targets.len() < asked_targets {
                     assert!(l.more.is_none() && l.buttons.is_empty());
                 }
                 if l.targets.is_empty() {
                     assert!(l.label.is_none(), "{shape:?} at {h}: a label over nothing");
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn a_narrow_rect_never_places_a_control_outside_it() {
+        // The layout is meant for the full 300 DIPs, but a narrower rect
+        // must still not place a part, a button slot included, that
+        // reaches past its padding, or leaves a button without a slot's room.
+        for w in [150.0, 100.0] {
+            for shape in every_shape() {
+                for h in (0..=900).step_by(4) {
+                    let r = Rect::new(900.0, 72.0, w, h as f32);
+                    let inner = r.inset(16.0);
+                    let l = inspector_layout(&r, &shape);
+                    for (name, p) in every_rect(&l) {
+                        assert!(
+                            p.x >= inner.x && p.right() <= inner.right(),
+                            "{shape:?} at {w}x{h}: {name} {p:?} leaves {inner:?} across"
+                        );
+                        assert!(
+                            p.y >= inner.y && p.bottom() <= inner.bottom(),
+                            "{shape:?} at {w}x{h}: {name} {p:?} leaves {inner:?} down"
+                        );
+                    }
+                    for pair in l.buttons.windows(2) {
+                        assert!(apart(&pair[0], &pair[1]));
+                    }
+                    assert!(l.buttons.len() <= asks_for(&shape).3);
+                }
+            }
+        }
+        // 118 DIPs of padding hold one 96 button but not a second; 68 hold none.
+        let two = InspectorShape::Failed {
+            sentence_h: 20.0,
+            buttons: 2,
+        };
+        let tall = |w| {
+            inspector_layout(&Rect::new(0.0, 0.0, w, 600.0), &two)
+                .buttons
+                .len()
+        };
+        assert_eq!((tall(300.0), tall(150.0), tall(100.0)), (2, 1, 0));
+        // At the inspector's own width every button has its slot.
+        for buttons in 0..=2 {
+            for shape in [
+                InspectorShape::Converting { buttons },
+                InspectorShape::Done {
+                    change: true,
+                    drag: true,
+                    buttons,
+                },
+                InspectorShape::Failed {
+                    sentence_h: 60.0,
+                    buttons,
+                },
+            ] {
+                let r = Rect::new(0.0, 0.0, INSPECTOR_WIDTH, 600.0);
+                assert_eq!(inspector_layout(&r, &shape).buttons.len(), buttons);
             }
         }
     }
@@ -2827,6 +3168,7 @@ mod tests {
             "{waiting:?}"
         );
         assert!(waiting.more.is_some());
+        assert!(waiting.hero.h > 0.0);
         assert_eq!(inspector_layout(&r, &every_shape()[4]).buttons.len(), 2);
     }
 
