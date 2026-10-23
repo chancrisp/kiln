@@ -209,8 +209,13 @@ impl Palette {
         self.glaze_inks[g.index()]
     }
 
-    /// A chip's opaque fill: the glaze at `CHIP_FILL` over the surface.
+    /// A chip's opaque fill: the glaze at `CHIP_FILL` over the surface. In a
+    /// contrast theme washes go, and every glaze is the theme's text colour,
+    /// so a chip is the plain surface and its outline and text carry it.
     pub fn chip_fill(&self, g: Glaze) -> Rgb {
+        if self.high_contrast {
+            return self.surface;
+        }
         over(self.glaze(g), effects::CHIP_FILL, self.surface)
     }
 }
@@ -740,6 +745,19 @@ pub mod effects {
     pub const ROW_WASH: f32 = 0.09;
 }
 
+/// The complementary error function, for the shadow's Gaussian falloff.
+/// Abramowitz and Stegun 7.1.26, good to about 1.5e-7; std has none.
+fn erfc(x: f32) -> f32 {
+    if x < 0.0 {
+        return 2.0 - erfc(-x);
+    }
+    let t = 1.0 / (1.0 + 0.327_591_1 * x);
+    let poly = t
+        * (0.254_829_6
+            + t * (-0.284_496_74 + t * (1.421_413_7 + t * (-1.453_152 + t * 1.061_405_4))));
+    poly * (-x * x).exp()
+}
+
 /// Depth: one soft shadow under each raised surface.
 pub mod depth {
     /// How far the shadow sits below the surface, in DIPs.
@@ -751,24 +769,36 @@ pub mod depth {
 
     const LAYERS: usize = 8;
 
-    /// The shadow as stacked layers, nearest first: each is the surface's
-    /// rounded rectangle grown by `grow` DIPs (CSS `0 10 30 -18` reaches
-    /// from the spread out to `SPREAD + BLUR`), drawn with its share of the
-    /// shadow's alpha. Shares follow a Gaussian over `grow` centred on the
-    /// spread, so the shadow is densest at its core and fades smoothly,
-    /// and they add up to 1.
+    /// The shadow as stacked layers, innermost first: each is the surface's
+    /// rounded rectangle grown by `grow` DIPs, drawn with its share of the
+    /// shadow's alpha. A blur of 30 is a Gaussian of sigma 15 (CSS `0 10 30
+    /// -18`), and the layers run from two sigma inside the spread to two
+    /// sigma outside it, from `SPREAD - BLUR` to `SPREAD + BLUR`.
+    ///
+    /// A point sees the shares of every layer grown at least as far as it
+    /// lies from the surface's edge, so the stack's alpha there follows the
+    /// Gaussian's edge, `0.5 * erfc((x - SPREAD) / (sigma * sqrt 2))`. Each
+    /// layer's share is the drop in that curve across its step, so shares
+    /// peak in the middle layers; they add up to 1. A layer pulled in so
+    /// far that its rectangle has no area is skipped when drawn.
     pub fn shadow_layers() -> Vec<(f32, f32)> {
-        let sigma = BLUR / 6.0;
-        let step = BLUR / (LAYERS - 1) as f32;
-        let layers: Vec<(f32, f32)> = (0..LAYERS)
-            .map(|i| {
-                let grow = SPREAD + i as f32 * step;
-                let d = grow - SPREAD;
-                (grow, (-(d * d) / (2.0 * sigma * sigma)).exp())
+        let sigma = BLUR / 2.0;
+        let reach = |x: f32| 0.5 * super::erfc((x - SPREAD) / (sigma * std::f32::consts::SQRT_2));
+        let grows: Vec<f32> = (0..LAYERS)
+            .map(|i| SPREAD + sigma * (-2.0 + 4.0 * i as f32 / (LAYERS - 1) as f32))
+            .collect();
+        let shares: Vec<f32> = (0..LAYERS)
+            .map(|i| match grows.get(i + 1) {
+                Some(&next) => reach(grows[i]) - reach(next),
+                None => reach(grows[i]),
             })
             .collect();
-        let total: f32 = layers.iter().map(|l| l.1).sum();
-        layers.into_iter().map(|(g, w)| (g, w / total)).collect()
+        let total: f32 = shares.iter().sum();
+        grows
+            .into_iter()
+            .zip(shares)
+            .map(|(g, s)| (g, s / total))
+            .collect()
     }
 }
 
@@ -1242,30 +1272,59 @@ mod tests {
         for g in Glaze::ALL {
             assert_eq!(p.glaze(g), p.text);
             assert_eq!(p.glaze_ink(g), p.text);
+            // A chip is plain: no wash of the text colour over the window.
+            assert_eq!(p.chip_fill(g), p.surface);
         }
         assert_eq!((p.shadow_alpha, p.highlight_alpha), (0.0, 0.0));
     }
 
     #[test]
-    fn shadow_layers_fade_out_and_sum_to_one() {
+    fn shadow_layers_rise_sum_to_one_and_show() {
         let l = depth::shadow_layers();
         assert!(l.len() >= 6);
-        assert!(l.windows(2).all(|w| w[0].0 < w[1].0 && w[0].1 >= w[1].1));
+        assert!(l.windows(2).all(|w| w[0].0 < w[1].0));
+        assert!(l.iter().all(|x| x.1 >= 0.0));
         let sum: f32 = l.iter().map(|x| x.1).sum();
-        assert!((sum - 1.0).abs() < 1e-3);
-        assert!(l.last().unwrap().0 <= depth::BLUR / 2.0 + depth::SPREAD.abs());
+        assert!((sum - 1.0).abs() < 1e-3, "{sum}");
+        // The share of the shadow that reaches a point `from` DIPs out
+        // from a surface's edge is that of the layers grown at least that
+        // far. Below the bottom edge the shadow sits 10 DIPs lower, so
+        // layers grown to -10 reach it; at the side only those grown to 0.
+        let seen = |from: f32| l.iter().filter(|x| x.0 >= from).map(|x| x.1).sum::<f32>();
+        let bottom = seen(-depth::OFFSET_Y);
+        assert!((0.15..0.35).contains(&bottom), "bottom edge {bottom}");
+        let side = seen(0.0);
+        assert!((0.02..0.15).contains(&side), "side edge {side}");
     }
 
     #[test]
-    fn the_shadow_spans_from_its_spread_to_its_blur() {
-        // CSS "0 10 30 -18": the core is pulled in by the spread, and the
-        // softest layer reaches the spread plus the blur (12 DIPs out).
+    fn the_shadow_spans_two_blurs_about_its_spread() {
+        // CSS "0 10 30 -18": a blur of 30 is a Gaussian of sigma 15, and the
+        // layers run from two sigma inside the spread to two sigma outside.
         let l = depth::shadow_layers();
         assert_eq!(l.len(), 8);
-        assert!((l[0].0 - depth::SPREAD).abs() < 1e-4);
-        assert!((l[7].0 - (depth::SPREAD + depth::BLUR)).abs() < 1e-4);
-        // Most of the weight is in the layers nearest the edge.
-        assert!(l[0].1 > 0.3 && l[0].1 > l[1].1);
+        assert!((l[0].0 - (depth::SPREAD - depth::BLUR)).abs() < 1e-3);
+        assert!((l[7].0 - (depth::SPREAD + depth::BLUR)).abs() < 1e-3);
+        // The shadow is densest in the middle layers, not at either end.
+        let peak = (0..l.len())
+            .max_by(|&a, &b| l[a].1.total_cmp(&l[b].1))
+            .unwrap();
+        assert!((2..=5).contains(&peak), "peak at layer {peak}");
+    }
+
+    #[test]
+    fn erfc_matches_known_values() {
+        for (x, want) in [
+            (0.0, 1.0),
+            (0.5, 0.4795),
+            (1.0, 0.1573),
+            (2.0, 0.004678),
+            (-1.0, 1.8427),
+            (-2.0, 1.9953),
+        ] {
+            let got = erfc(x);
+            assert!((got - want).abs() < 1e-3, "erfc({x}) = {got}, want {want}");
+        }
     }
 
     #[test]
