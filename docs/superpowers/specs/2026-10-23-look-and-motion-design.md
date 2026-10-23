@@ -136,12 +136,18 @@ The inspector shows the selection. It has its own layout for each case:
 |---|---|---|---|
 | Images | Celadon | `#7FB5A0` | `#467966` |
 | Video | Chun blue | `#8FA6C9` | `#4D6489` |
-| Audio | Ki-seto yellow | `#CDB67E` | `#7A6630` |
+| Audio | Ki-seto yellow | `#C8BA83` | `#756835` |
 | Documents (including ebooks, spreadsheets, slides, subtitles) | Lavender jun | `#B3A5CF` | `#6A5B8C` |
 | Anything else | Stone | `#A89E8F` | `#6E665B` |
 
+- Ki-seto yellow sits at hue 48°, saturation 0.38, so the token test
+  doesn't read it as orange.
+- Text drawn in a glaze uses that glaze's ink: the glaze mixed toward the
+  theme's text colour just enough to reach 4.5:1. The ink colours are in
+  the implementation plan and in `DESIGN.md`.
 - A glaze appears only in these places:
-  - format chips: text in the glaze, a 16% fill and a 35% outline
+  - format chips: text in the glaze's ink, an opaque fill of the glaze at
+    16% over the surface, and a 35% outline
   - the preview's fallback tile
   - a file's heat and its converting wash
   - the suggestion text on a row
