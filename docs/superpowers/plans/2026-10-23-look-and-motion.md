@@ -1223,12 +1223,50 @@ git commit -m "Motion: pour, glide, cross-fade, cool, crack, bloom, sheets, butt
 - [ ] **Step 2: Update `VISUAL_TESTING.md`** with the fold point at 760,
   previews, glazes in both themes and High Contrast, and motion with
   Animation effects off.
-- [ ] **Step 3: README and CHANGELOG.**
-  - README, under the features: "The file list shows a preview of every
-    file, and a panel that describes the selected file and what Kiln can
-    turn it into."
-  - CHANGELOG, under the next version: "A new look: previews, a colour for
-    each kind of file, a panel for the selected file, and smoother motion."
+- [ ] **Step 3: Bring the whole README up to date (owner's request,
+  2026-10-23).** The README was last touched by Open with, so it misses
+  the phase 3 redesign as well as this branch. Check every section against
+  the app as built on this branch, and fix whatever is out of date.
+  - **What is Kiln?:** the bullets.
+    - Replace "Nothing is saved until you export it…" with the current
+      output model: results are held until saved, unless **Save next to
+      the original** is on (asked once, the first time a result is
+      ready), and existing files are never overwritten.
+    - Add the visible **Convert** button and the inspector.
+    - Add previews and the glaze colours.
+    - Add progress with percent and time left, a visible Cancel, Retry on
+      failed rows, and the taskbar and finish signal.
+    - Add files checked when added, and helper apps checked at start.
+    - Add folders dropped or added (their files, with a count).
+    - Add Undo after removing rows.
+    - Check the window start-up time against the speed numbers measured
+      in step 4.
+  - **The glaze wheel, Suggestions, A closer look:** the text and
+    captions.
+    - Mixed selections explain themselves.
+    - Suggestions show in the inspector's "Turn it into".
+    - Use the current Settings wording ("Reset learned suggestions",
+      "Folder shown first when saving", Helper apps).
+  - **Install:** keep the Open with / Send to line.
+  - **Settings, Command line, Build from source:** check each claim
+    against `settings.rs`, `kiln-cli` and the build. The `wix` and
+    `package.ps1` steps are unchanged unless they changed.
+  - **Screenshots:**
+    - Retake every screenshot the README shows, in the new look, as PNGs
+      under `docs/screenshots/m10/`. Use the same names as the ones they
+      replace, at 100%, in both themes where the README pairs them.
+    - Take them from the release build with a scratch profile and
+      `docs/ux/phase3/scripts`-style capture: UIA patterns to select and
+      invoke, and `PrintWindow` for the image. No real cursor or keys.
+      Files come from the repo's samples, in a folder named `samples`, so
+      no personal path shows.
+    - Point the README at them. Leave the old `m5` to `m9` folders in
+      place; deleting them is the owner's call.
+    - Before committing, check that no new PNG contains a `c2pa` block
+      (see the earlier incident).
+  - **CHANGELOG**, under the next version: "A new look: previews, a colour
+    for each kind of file, a panel for the selected file, and smoother
+    motion."
 - [ ] **Step 4: Speed check (controller).**
   - Rerun `sc01`, `sc50`, `sc61` and `sc90` from
     `docs/ux/phase3/scripts`.
@@ -1238,6 +1276,6 @@ git commit -m "Motion: pour, glide, cross-fade, cool, crack, bloom, sheets, butt
 - [ ] **Step 5: Run the gates, then commit.**
 
 ```bash
-git add DESIGN.md VISUAL_TESTING.md README.md CHANGELOG.md
+git add DESIGN.md VISUAL_TESTING.md README.md CHANGELOG.md docs/screenshots/m10
 git commit -m "Look and motion: design notes, visual checks, README and CHANGELOG"
 ```
