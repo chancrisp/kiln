@@ -162,7 +162,7 @@ fn work(
 
 /// Inspecting is background work: below normal, so it gives way to the
 /// window and to conversions.
-fn below_normal() {
+pub(super) fn below_normal() {
     use windows::Win32::System::Threading::{
         GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
     };

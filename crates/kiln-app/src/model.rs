@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use kiln_core::{
     about, Availability, Facts, FileCheck, Kiln, Kind, Look, Suggested, Suggestion, Tool,
@@ -691,6 +691,11 @@ pub struct Entry {
     /// Format code shown in monospace: "PNG". Empty if there's no extension.
     pub code: String,
     pub size: u64,
+    /// When the file was last changed, as read when it was listed, or
+    /// newer once a preview found it changed since. `None` if Windows
+    /// couldn't say. Previews are keyed by it, so the window never has to
+    /// ask the disk.
+    pub modified: Option<SystemTime>,
     /// Codes Kiln can convert this file to now, from formats.toml, with the
     /// helper apps installed.
     pub targets: Vec<String>,
@@ -1395,8 +1400,13 @@ impl FileList {
                 result.duplicates += 1;
                 continue;
             }
-            self.entries
-                .push(entry_for(kiln, available, path, meta.len()));
+            self.entries.push(entry_for(
+                kiln,
+                available,
+                path,
+                meta.len(),
+                meta.modified().ok(),
+            ));
             result.added += 1;
         }
         result
@@ -1581,7 +1591,8 @@ impl FileList {
     pub fn relocate(&mut self, kiln: &Kiln, old: &Path, new: PathBuf) -> Option<usize> {
         let i = self.index_of(old)?;
         let e = &mut self.entries[i];
-        let fresh = entry_for(kiln, &Availability::all(), new, e.size);
+        // A move keeps the file's time, as it keeps its size.
+        let fresh = entry_for(kiln, &Availability::all(), new, e.size, e.modified);
         e.path = fresh.path;
         e.name = fresh.name;
         e.folder = fresh.folder;
@@ -1700,7 +1711,13 @@ fn offers(
     (usable.iter().map(|f| f.code()).collect(), missing)
 }
 
-fn entry_for(kiln: &Kiln, available: &Availability, path: PathBuf, size: u64) -> Entry {
+fn entry_for(
+    kiln: &Kiln,
+    available: &Availability,
+    path: PathBuf,
+    size: u64,
+    modified: Option<SystemTime>,
+) -> Entry {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -1727,6 +1744,7 @@ fn entry_for(kiln: &Kiln, available: &Availability, path: PathBuf, size: u64) ->
         folder,
         code,
         size,
+        modified,
         targets,
         check,
         missing,
@@ -2369,6 +2387,27 @@ mod tests {
     }
 
     #[test]
+    fn a_file_is_listed_with_the_time_it_was_last_changed() {
+        let (dir, kiln) = setup();
+        let a = dir.path().join("a.png");
+        fs::write(&a, b"x").unwrap();
+        let changed = fs::metadata(&a).unwrap().modified().unwrap();
+        let mut list = FileList::default();
+        list.add(&kiln, &Availability::all(), [a.clone()]);
+        assert_eq!(list.entries()[0].modified, Some(changed));
+
+        // A move keeps the time, as moving a file does.
+        let moved = dir.path().join("b.png");
+        fs::rename(&a, &moved).unwrap();
+        list.relocate(&kiln, &a, moved.clone());
+        assert_eq!(list.entries()[0].path, moved);
+        assert_eq!(list.entries()[0].modified, Some(changed));
+        // So does an undone Remove.
+        let back = list.remove(0).unwrap().restored();
+        assert_eq!(back.modified, Some(changed));
+    }
+
+    #[test]
     fn duplicates_and_folders_are_skipped() {
         let (dir, kiln) = setup();
         let a = dir.path().join("a.mp3");
@@ -2864,6 +2903,7 @@ mod tests {
             folder: "photos".to_owned(),
             code: "PNG".to_owned(),
             size: 3_100_000,
+            modified: None,
             targets: (0..12).map(|i| format!("F{i}")).collect(),
             job: JobState::Idle,
             facts: None,

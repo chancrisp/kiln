@@ -1257,6 +1257,7 @@ mod tests {
             folder: r"C:\photos".to_owned(),
             code: "PNG".to_owned(),
             size: 3_100_000,
+            modified: None,
             targets: vec!["jpg".into(), "webp".into()],
             job,
             facts: None,

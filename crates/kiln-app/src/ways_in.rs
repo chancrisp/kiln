@@ -670,6 +670,7 @@ mod tests {
             folder: r"C:\in".into(),
             code: "PNG".into(),
             size: 1,
+            modified: None,
             targets: vec![],
             job,
             facts: None,

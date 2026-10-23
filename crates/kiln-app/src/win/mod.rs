@@ -7,6 +7,7 @@ mod inspect;
 mod render;
 mod system;
 mod text;
+mod thumbs;
 mod tips;
 mod uia;
 mod updates;
@@ -54,6 +55,7 @@ use crate::model::{
     self, batch_summary, leave_prompt, status_line, Due, FileList, FocusButton, JobState, Leave,
     Next, PromptButton, Tone,
 };
+use crate::previews::{self, Preview, PreviewCache, PreviewKey, PreviewSize, CACHE_CAP};
 use crate::quality::{self as q, Value};
 use crate::settings::{self, Engine, Settings};
 use crate::theme::{self, motion, Palette};
@@ -63,6 +65,7 @@ use crate::wheel::{self, Action, Spot, Wheel, WheelKind};
 use drop::{DragEvent, DropTarget, DRAG_ENTER, DRAG_LEAVE, DRAG_OVER, WM_KILN_DRAG, WM_KILN_DROP};
 use inspect::Inspector;
 use render::{DetailsView, HelpView, Renderer, RowAnim, SettingsView, SheetView, View, WheelView};
+use thumbs::Thumbs;
 use tips::Tips;
 
 const ANIM_TIMER: usize = 1;
@@ -105,6 +108,8 @@ const WM_KILN_TEXT_SCALE: u32 = WM_APP + 9;
 /// The notification area's message for Kiln's finish notice: lparam's low
 /// word says what happened to it.
 const WM_KILN_NOTIFY: u32 = WM_APP + 11;
+/// Posted by the thumbnail worker; lparam is a `Box<(PreviewKey, Preview)>`.
+const WM_KILN_PREVIEW: u32 = WM_APP + 12;
 /// The notice was clicked, timed out, or was hidden.
 const NIN_BALLOONHIDE: u32 = 0x403;
 const NIN_BALLOONTIMEOUT: u32 = 0x404;
@@ -563,6 +568,19 @@ impl Engines {
     }
 }
 
+/// What the previews asked for depend on: see `App::ask_previews`.
+#[derive(Debug, Clone, PartialEq)]
+struct PreviewAsk {
+    /// The row whose picture the inspector shows.
+    selected: Option<usize>,
+    /// The rows in view, which scrolling and the window's size move.
+    visible: std::ops::Range<usize>,
+    /// How many rows there are, which adding files changes.
+    total: usize,
+    /// Device pixels per layout DIP, which the screen and Text size set.
+    px_per_dip: f32,
+}
+
 struct App {
     hwnd: HWND,
     kiln: Arc<Kiln>,
@@ -719,6 +737,15 @@ struct App {
     /// Held files dragged out in this run that are still there: one that
     /// goes later was moved by the drop, not lost.
     dragged: HashSet<PathBuf>,
+    /// The listed files' previews from Windows' thumbnail service, for
+    /// painting.
+    previews: PreviewCache,
+    /// Fetches previews on a worker thread; the UI thread never calls the
+    /// Shell.
+    thumbs: Thumbs,
+    /// What the previews were last asked for. `None` asks again after the
+    /// next message, whatever else changed.
+    previews_asked: Option<PreviewAsk>,
 }
 
 impl App {
@@ -1214,6 +1241,7 @@ impl App {
         for path in paths {
             self.remove_row(path);
         }
+        self.previews_rows_changed();
         if gone.len() >= model::UNDO_FROM {
             let line = model::removed_line(gone.len());
             self.say(line.clone());
@@ -1259,6 +1287,7 @@ impl App {
             );
             back.push(i);
         }
+        self.previews_rows_changed();
         self.files.select_only(&back);
         self.inspect(paths);
         self.say(model::restored_line(back.len()));
@@ -1299,6 +1328,7 @@ impl App {
         self.files.clear();
         self.rows.clear();
         self.notes.clear();
+        self.previews_rows_changed();
         self.scroll = 0.0;
         self.status.clear();
         self.held_changed();
@@ -3616,6 +3646,9 @@ impl App {
                 self.rows[i].settled = Some(now);
             }
         }
+        // A moved file is listed at its new place: its previews there are
+        // asked for, and those of where it was are dropped.
+        self.previews_rows_changed();
         self.say(actions::moved_summary(ok, failed, &m.dest));
         if failed > 0 {
             self.alert = Some(self.status.clone());
@@ -5437,6 +5470,98 @@ impl App {
         self.tips = tips;
     }
 
+    // Previews.
+
+    /// Device pixels per layout DIP: the screen's scale times the Text
+    /// size zoom.
+    fn px_per_dip(&self) -> f32 {
+        layout::px_per_unit(self.dpi, self.zoom)
+    }
+
+    /// The key for row `i`'s preview at `size`, as the list knows the file
+    /// now. It reads nothing from the disk: the file's time is the one the
+    /// list holds.
+    fn preview_key(&self, i: usize, size: PreviewSize) -> Option<PreviewKey> {
+        let e = self.files.entries().get(i)?;
+        Some(PreviewKey {
+            path: e.path.clone(),
+            modified: e.modified,
+            size,
+            pixels: previews::pixel_size(size, self.px_per_dip()),
+        })
+    }
+
+    /// Ask the thumbnail worker for the previews the window needs now,
+    /// most wanted first, in place of what it was asked for before. Run
+    /// after every message, it asks only when what the previews depend on
+    /// has changed: the selection, the rows in view (scrolling, a resize),
+    /// the files listed, or the screen's scale. It reads nothing from the
+    /// disk and never calls the Shell.
+    fn ask_previews(&mut self) {
+        if self.destroyed {
+            return;
+        }
+        let ask = PreviewAsk {
+            selected: self.files.selected(),
+            visible: self.visible_rows(),
+            total: self.files.len(),
+            px_per_dip: self.px_per_dip(),
+        };
+        if self.previews_asked.as_ref() == Some(&ask) {
+            return;
+        }
+        let keys: Vec<PreviewKey> =
+            previews::request_order(ask.selected, ask.visible.clone(), ask.total)
+                .into_iter()
+                .filter_map(|(i, size)| self.preview_key(i, size))
+                .collect();
+        // The worker's queue is replaced, so what it dropped will never
+        // come: what is pending is exactly what is asked now.
+        self.previews.clear_pending();
+        let wanted: Vec<PreviewKey> = keys
+            .into_iter()
+            .filter(|k| self.previews.pending(k))
+            .collect();
+        // Asked even when empty, so the worker stops on rows scrolled away.
+        self.thumbs.ask(wanted);
+        self.previews_asked = Some(ask);
+    }
+
+    /// Rows were removed, cleared, restored or moved: drop the previews of
+    /// files no longer listed, and ask again.
+    fn previews_rows_changed(&mut self) {
+        let listed: HashSet<&Path> = self
+            .files
+            .entries()
+            .iter()
+            .map(|e| e.path.as_path())
+            .collect();
+        self.previews.keep_paths(&|p| listed.contains(p));
+        self.previews_asked = None;
+    }
+
+    /// A preview from the worker, made from the file as it was at the
+    /// key's time. Kept only while the file is still listed and the
+    /// picture is no older than the file the list knows; a newer one means
+    /// the file changed since it was listed, and the list takes its time.
+    fn on_preview(&mut self, key: PreviewKey, preview: Preview) {
+        let Some(i) = self.files.index_of(&key.path) else {
+            return;
+        };
+        let entry = &mut self.files.entries_mut()[i];
+        if key.modified < entry.modified {
+            return;
+        }
+        entry.modified = key.modified;
+        self.previews.put(key, preview, Instant::now());
+        // Only a picture that shows needs a frame: a row in view, or the
+        // selection's in the inspector. Those asked ahead of the scroll
+        // wait in the cache.
+        if self.visible_rows().contains(&i) || self.files.selected() == Some(i) {
+            self.invalidate();
+        }
+    }
+
     // Tooltips.
 
     /// The line row `i` shows: a note standing in for it, "Saving…", or
@@ -5816,6 +5941,9 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         own_drag: Rc::new(Cell::new(false)),
         list_press: None,
         dragged: HashSet::new(),
+        previews: PreviewCache::new(CACHE_CAP),
+        thumbs: Thumbs::start(target),
+        previews_asked: None,
     });
     let app = Box::into_raw(app);
     unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, app as isize) };
@@ -6045,6 +6173,10 @@ fn after(app: &mut App, msg: u32, wparam: WPARAM) {
         let paths = std::mem::take(&mut app.queued);
         app.add(paths, false);
     }
+    // Whatever the message moved (the scroll, the size, the selection,
+    // the files, the screen), the previews follow it. Nothing is asked
+    // when none of that changed.
+    app.ask_previews();
     let sets: Vec<(String, bool)> = app
         .status_sets
         .drain(..)
@@ -6086,7 +6218,7 @@ fn sync_kind(msg: u32, timer: usize, said: bool) -> SyncKind {
     match msg {
         _ if said => SyncKind::Now,
         WM_PAINT | WM_ERASEBKGND | WM_GETOBJECT | WM_NCHITTEST | WM_SETCURSOR | WM_DESTROY
-        | WM_NCDESTROY => SyncKind::Skip,
+        | WM_NCDESTROY | WM_KILN_PREVIEW => SyncKind::Skip,
         WM_TIMER if timer == A11Y_TIMER => SyncKind::Skip,
         WM_TIMER if timer == HINT_TIMER || timer == COPIED_TIMER => SyncKind::Now,
         WM_KEYDOWN | WM_SYSKEYDOWN | WM_LBUTTONDOWN | WM_LBUTTONUP | WM_LBUTTONDBLCLK
@@ -6425,6 +6557,12 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             app.on_exported(*ex);
             Some(LRESULT(0))
         }
+        WM_KILN_PREVIEW => {
+            let arrived = unsafe { Box::from_raw(lparam.0 as *mut (PreviewKey, Preview)) };
+            let (key, preview) = *arrived;
+            app.on_preview(key, preview);
+            Some(LRESULT(0))
+        }
         // Kiln's own drag back over Kiln: the drop target ignores it too.
         WM_KILN_DRAG | WM_KILN_DROP if app.own_drag.get() => Some(LRESULT(0)),
         WM_KILN_DRAG => {
@@ -6517,6 +6655,8 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             // Stop the inspect thread with the window, without waiting
             // for a decode under way: nothing is reported after this.
             app.inspector.shutdown();
+            // The same for the thumbnail thread: nothing is posted after this.
+            app.thumbs.shutdown();
             unsafe {
                 let _ = RevokeDragDrop(hwnd);
                 PostQuitMessage(0);
@@ -6541,6 +6681,8 @@ mod tests {
         // Input and the window's own news go at once.
         assert_eq!(sync_kind(WM_KEYDOWN, 0, false), SyncKind::Now);
         assert_eq!(sync_kind(uia::WM_KILN_A11Y, 0, false), SyncKind::Now);
+        // A preview changes nothing the tree shows.
+        assert_eq!(sync_kind(WM_KILN_PREVIEW, 0, false), SyncKind::Skip);
         assert_eq!(sync_kind(WM_SETFOCUS, 0, false), SyncKind::Now);
         // Painting never builds the tree; the flush timer builds its own.
         assert_eq!(sync_kind(WM_PAINT, 0, false), SyncKind::Skip);

@@ -463,6 +463,7 @@ mod tests {
             folder: r"C:\photos".to_owned(),
             code: code.to_owned(),
             size,
+            modified: None,
             targets: targets.iter().map(|t| (*t).to_owned()).collect(),
             check: FileCheck::Ok,
             missing: None,
