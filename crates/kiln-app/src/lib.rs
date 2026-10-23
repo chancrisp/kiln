@@ -7,6 +7,7 @@ pub mod actions;
 pub mod anim;
 pub mod help;
 pub mod icons;
+pub mod inspector;
 pub mod layout;
 pub mod model;
 pub mod quality;

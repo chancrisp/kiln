@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use kiln_core::Preset;
 
 use crate::help::HelpSection;
+use crate::inspector::InspectorControl;
 use crate::layout::{
     self, Control, DialogButton, Rect, SettingsLayout, SettingsRow, SettingsTab, SheetControl,
     SheetLayout,
@@ -92,6 +93,9 @@ pub enum Id {
     SheetLine(u8),
     SheetRow(usize),
     SheetControl(SheetControl),
+    /// A control in the inspector. Its tree nodes arrive with the inspector's
+    /// drawing; the keyboard can already be on it.
+    InspectorControl(InspectorControl),
 }
 
 impl Id {
@@ -614,6 +618,7 @@ pub fn button_id(b: FocusButton) -> Id {
         FocusButton::Clear => Id::Clear,
         FocusButton::Help => Id::HelpButton,
         FocusButton::Settings => Id::SettingsButton,
+        FocusButton::Inspector(c) => Id::InspectorControl(c),
     }
 }
 
@@ -626,6 +631,7 @@ pub fn button_of(id: &Id) -> Option<FocusButton> {
         Id::Clear => Some(FocusButton::Clear),
         Id::HelpButton => Some(FocusButton::Help),
         Id::SettingsButton => Some(FocusButton::Settings),
+        Id::InspectorControl(c) => Some(FocusButton::Inspector(*c)),
         _ => None,
     }
 }

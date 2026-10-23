@@ -972,6 +972,8 @@ impl App {
             FocusButton::Clear => l.clear_button,
             FocusButton::Help => Some(l.help_button),
             FocusButton::Settings => Some(l.settings_button),
+            // The inspector isn't drawn yet, so nothing is there to be on.
+            FocusButton::Inspector(_) => None,
         }
     }
 
@@ -992,6 +994,7 @@ impl App {
             FocusButton::Clear => self.clear(),
             FocusButton::Help => self.open_help(),
             FocusButton::Settings => self.open_settings(),
+            FocusButton::Inspector(_) => {}
         }
     }
 
@@ -4646,6 +4649,8 @@ impl App {
                 !self.files.is_empty(),
                 self.export_button().is_some(),
                 self.convert_block().is_none() && !self.files.is_empty(),
+                // The inspector's controls arrive when it is drawn.
+                &[],
             );
             self.files.keyboard_used();
             self.invalidate();

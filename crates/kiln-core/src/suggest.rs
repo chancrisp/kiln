@@ -106,6 +106,19 @@ impl Habits {
             .collect()
     }
 
+    /// The targets picked for `from`, the most picked first. A tie keeps
+    /// alphabetical order. Case and a leading dot in `from` don't matter.
+    pub fn ranked(&self, from: &str) -> Vec<String> {
+        let from = from.trim_start_matches('.').to_ascii_lowercase();
+        let Some(picks) = self.0.get(&from) else {
+            return Vec::new();
+        };
+        // The map is alphabetical and the sort is stable, so a tie stays so.
+        let mut ranked: Vec<(&String, u32)> = picks.iter().map(|(to, &n)| (to, n)).collect();
+        ranked.sort_by_key(|&(_, n)| std::cmp::Reverse(n));
+        ranked.into_iter().map(|(to, _)| to.clone()).collect()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -841,6 +854,26 @@ mod tests {
         assert_eq!(owned(&habits), before);
         habits.record("mov", "mp4");
         assert_ne!(owned(&habits), before);
+    }
+
+    #[test]
+    fn ranked_lists_the_most_picked_first() {
+        let mut habits = Habits::default();
+        for _ in 0..3 {
+            habits.record("png", "jpg");
+            habits.record("png", "gif");
+        }
+        for _ in 0..5 {
+            habits.record("png", "avif");
+        }
+        // Most picked first, a tie in alphabetical order.
+        assert_eq!(habits.ranked("png"), ["avif", "gif", "jpg"]);
+        // Case and a leading dot in the source type don't matter.
+        assert_eq!(habits.ranked("PNG"), ["avif", "gif", "jpg"]);
+        assert_eq!(habits.ranked(".Png"), ["avif", "gif", "jpg"]);
+        // A type nobody has converted has none.
+        assert!(habits.ranked("mp4").is_empty());
+        assert!(Habits::default().ranked("png").is_empty());
     }
 
     fn owned(h: &Habits) -> Vec<(String, String)> {

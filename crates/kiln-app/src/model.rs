@@ -10,6 +10,7 @@ use kiln_core::{
 };
 
 use crate::actions::FileAction;
+use crate::inspector::InspectorControl;
 use crate::wheel::Action;
 
 /// Where a file's latest job stands.
@@ -313,6 +314,10 @@ fn says_why(failed: usize) -> String {
     }
 }
 
+/// What stands between the parts of a row's second line: a middle dot with
+/// two spaces either side. Prose writes it as " · ".
+pub const DETAIL_SEPARATOR: &str = "  ·  ";
+
 /// A held result that someone removed by hand.
 pub const GONE: &str = "The result is no longer there. Convert it again.";
 
@@ -612,7 +617,8 @@ pub fn convert_block(selected: usize, running: usize) -> Option<&'static str> {
     }
 }
 
-/// A header or footer button the keyboard can be on, besides the list.
+/// A header or footer button the keyboard can be on, besides the list, or
+/// a control in the inspector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusButton {
     Convert,
@@ -621,27 +627,32 @@ pub enum FocusButton {
     Clear,
     Help,
     Settings,
+    Inspector(InspectorControl),
 }
 
 /// Where Tab goes from `at`, or Shift+Tab with `back`; `None` is the list.
 /// The order is the reading order: the header's Help and Settings, the
-/// list, then the footer. With files `listed` the footer runs from the list through the footer's
-/// Convert (while it is `convert`, enabled, as a disabled control isn't
-/// a stop), Add files, Export all (where `export_all` shows) and Clear,
-/// then the header's Help and Settings, and round to the list. The empty window
-/// has no list: Add files, Help, Settings and round, with `None` before
-/// Add files.
+/// list, the inspector's controls (`inspector`, as it lists them), then
+/// the footer. With files `listed` the footer runs from the list through
+/// the inspector, then the footer's Convert (while it is `convert`,
+/// enabled, as a disabled control isn't a stop), Add files, Export all
+/// (where `export_all` shows) and Clear, then the header's Help and
+/// Settings, and round to the list. The empty window has no list and no
+/// inspector: Add files, Help, Settings and round, with `None` before Add
+/// files.
 pub fn tab_stop(
     at: Option<FocusButton>,
     back: bool,
     listed: bool,
     export_all: bool,
     convert: bool,
+    inspector: &[InspectorControl],
 ) -> Option<FocusButton> {
     use FocusButton::*;
     let order: Vec<Option<FocusButton>> = if listed {
         [Some(Help), Some(Settings), None]
             .into_iter()
+            .chain(inspector.iter().map(|&c| Some(Inspector(c))))
             .chain(convert.then_some(Some(Convert)))
             .chain([Some(AddFiles)])
             .chain(export_all.then_some(Some(ExportAll)))
@@ -904,29 +915,42 @@ impl Entry {
         }
     }
 
-    /// The secondary line under the file name, before any job, most
-    /// useful first: what Kiln found in the file, what it suggests, the
-    /// size, then the folder's own name. The row's tooltip has the whole
-    /// path.
+    /// The secondary line under the file name, before any job: what Kiln
+    /// found in the file, the size, the folder's own name, then what it
+    /// suggests. The row's tooltip has the whole path.
     pub fn detail(&self) -> String {
+        match self.detail_parts() {
+            (facts, Some(suggestion)) => format!("{facts}{DETAIL_SEPARATOR}{suggestion}"),
+            (facts, None) => facts,
+        }
+    }
+
+    /// [`Entry::detail`] in two parts, so the suggestion, which comes last,
+    /// can be drawn in its own colour: the facts, and the suggestion, as
+    /// "as WEBP about 410 KB". Joined with [`DETAIL_SEPARATOR`] they are
+    /// the whole line.
+    pub fn detail_parts(&self) -> (String, Option<String>) {
         let description = self.facts.as_ref().and_then(describe);
         if (description.is_none() && self.suggestion.is_none()) || self.check != FileCheck::Ok {
-            return self.plain_detail();
+            return (self.plain_detail(), None);
         }
         let mut parts: Vec<String> = description.into_iter().collect();
-        if let Some(s) = &self.suggestion {
-            let label = match &s.action {
-                Suggested::Convert(ext) => ext.to_ascii_uppercase(),
-                Suggested::Tool(t) => t.label().to_owned(),
-            };
-            parts.push(match s.estimate {
-                Some(bytes) => format!("Suggested: {label}, about {}", about(bytes)),
-                None => format!("Suggested: {label}"),
-            });
-        }
         parts.push(human_size(self.size));
         parts.push(self.folder_name());
-        parts.join("  ·  ")
+        let suggestion = self
+            .suggestion
+            .as_ref()
+            .map(|s| match (&s.action, s.estimate) {
+                (Suggested::Convert(ext), Some(bytes)) => {
+                    format!("as {} about {}", ext.to_ascii_uppercase(), about(bytes))
+                }
+                (Suggested::Convert(ext), None) => format!("as {}", ext.to_ascii_uppercase()),
+                (Suggested::Tool(t), Some(bytes)) => {
+                    format!("Suggested: {}, about {}", t.label(), about(bytes))
+                }
+                (Suggested::Tool(t), None) => format!("Suggested: {}", t.label()),
+            });
+        (parts.join(DETAIL_SEPARATOR), suggestion)
     }
 
     /// The row's second line as labelled parts, for a screen reader to
@@ -2898,7 +2922,7 @@ mod tests {
         });
         assert_eq!(
             e.detail(),
-            "4032 × 3024 photo  ·  Suggested: JPG, about 2 MB  ·  3.1 MB  ·  photos"
+            "4032 × 3024 photo  ·  3.1 MB  ·  photos  ·  as JPG about 2 MB"
         );
         assert_eq!(e.line(), (e.detail(), Tone::Muted));
         assert_eq!(
@@ -2913,11 +2937,11 @@ mod tests {
         assert_eq!(txt.detail(), "Converts to 12 formats  ·  3.1 MB  ·  photos");
     }
 
-    /// The spec's order: what it is, the suggestion, the size, then only
-    /// the folder's last part. The other rows' lines say something else
-    /// in their own words, and keep them.
+    /// The order: what it is, the size, the folder's last part, then the
+    /// suggestion, last so it can be drawn in its own colour. The other
+    /// rows' lines say something else in their own words, and keep them.
     #[test]
-    fn row_line_order_is_what_suggestion_size_folder() {
+    fn row_line_order_is_what_size_folder_suggestion() {
         let mut e = row("photo.png");
         e.folder = r"C:\kiln\target\samples".to_owned();
         e.size = 3_900_000;
@@ -2933,17 +2957,14 @@ mod tests {
             parts,
             [
                 "1600 × 1200 photo",
-                "Suggested: JPG, about 890 KB",
                 "3.9 MB",
-                "samples"
+                "samples",
+                "as JPG about 890 KB"
             ]
         );
-        // With only the suggestion, it leads.
+        // With only the suggestion, it still comes last.
         e.facts = None;
-        assert_eq!(
-            e.line().0,
-            "Suggested: JPG, about 890 KB  ·  3.9 MB  ·  samples"
-        );
+        assert_eq!(e.line().0, "3.9 MB  ·  samples  ·  as JPG about 890 KB");
         // Before facts, the reach stands where what it is goes.
         e.suggestion = None;
         assert_eq!(e.line().0, "Converts to 12 formats  ·  3.9 MB  ·  samples");
@@ -3024,10 +3045,56 @@ mod tests {
         });
         assert!(
             e.detail()
-                .starts_with("Suggested: Compress, about 180 MB  ·  "),
+                .ends_with("  ·  Suggested: Compress, about 180 MB"),
             "{}",
             e.detail()
         );
+    }
+
+    #[test]
+    fn detail_parts_split_the_suggestion_off() {
+        let mut e = row("harbour.png");
+        e.folder = r"C:\kiln\target\samples".to_owned();
+        e.size = 2_400_000;
+        e.facts = Some(picture(facts("png", Kind::Image), 1600, 1200, Look::Photo));
+        e.suggestion = Some(Suggestion {
+            action: Suggested::Convert("webp".into()),
+            reason: String::new(),
+            estimate: Some(410_000),
+        });
+        let (facts_part, suggestion) = e.detail_parts();
+        assert_eq!(facts_part, "1600 × 1200 photo  ·  2.4 MB  ·  samples");
+        let suggestion = suggestion.unwrap();
+        assert!(suggestion.starts_with("as "), "{suggestion}");
+        assert_eq!(suggestion, "as WEBP about 410 KB");
+        // Joined, the two parts are the whole line.
+        assert_eq!(
+            format!("{facts_part}{DETAIL_SEPARATOR}{suggestion}"),
+            e.detail()
+        );
+        assert_eq!(e.line().0, e.detail());
+        // A suggestion without a size estimate is just "as WEBP".
+        e.suggestion = Some(Suggestion {
+            action: Suggested::Convert("webp".into()),
+            reason: String::new(),
+            estimate: None,
+        });
+        assert_eq!(e.detail_parts().1.as_deref(), Some("as WEBP"));
+        // No suggestion: the facts are the whole line.
+        e.suggestion = None;
+        assert_eq!(e.detail_parts(), (e.detail(), None));
+        // Before facts: the plain line, and nothing to colour.
+        e.facts = None;
+        assert_eq!(e.detail_parts(), (e.plain_detail(), None));
+        // A file that is no good takes no suggestion either.
+        e.facts = Some(picture(facts("png", Kind::Image), 1600, 1200, Look::Photo));
+        e.suggestion = Some(Suggestion {
+            action: Suggested::Convert("webp".into()),
+            reason: String::new(),
+            estimate: None,
+        });
+        e.check = FileCheck::Mismatch;
+        assert_eq!(e.detail_parts(), (e.plain_detail(), None));
     }
 
     #[test]
@@ -3769,10 +3836,10 @@ mod tests {
     fn tab_goes_round_the_list_and_the_buttons() {
         use FocusButton::*;
         let walk = |back: bool, listed: bool, export_all: bool| {
-            let mut at = tab_stop(None, back, listed, export_all, false);
+            let mut at = tab_stop(None, back, listed, export_all, false, &[]);
             let mut seen = vec![at];
             while seen.len() < 8 {
-                at = tab_stop(at, back, listed, export_all, false);
+                at = tab_stop(at, back, listed, export_all, false, &[]);
                 seen.push(at);
             }
             seen
@@ -3817,11 +3884,17 @@ mod tests {
             walk(false, false, false)[..4],
             [Some(Help), Some(Settings), Some(AddFiles), Some(Help)]
         );
-        assert_eq!(tab_stop(None, true, false, false, false), Some(AddFiles));
-        // A button that's gone starts the path again.
-        assert_eq!(tab_stop(Some(ExportAll), false, true, false, false), None);
         assert_eq!(
-            tab_stop(Some(Clear), false, false, false, false),
+            tab_stop(None, true, false, false, false, &[]),
+            Some(AddFiles)
+        );
+        // A button that's gone starts the path again.
+        assert_eq!(
+            tab_stop(Some(ExportAll), false, true, false, false, &[]),
+            None
+        );
+        assert_eq!(
+            tab_stop(Some(Clear), false, false, false, false, &[]),
             Some(Help)
         );
     }
@@ -3829,20 +3902,82 @@ mod tests {
     #[test]
     fn convert_is_the_first_stop_after_the_list_while_it_is_enabled() {
         use FocusButton::*;
-        assert_eq!(tab_stop(None, false, true, false, true), Some(Convert));
+        assert_eq!(tab_stop(None, false, true, false, true, &[]), Some(Convert));
         assert_eq!(
-            tab_stop(Some(Convert), false, true, false, true),
+            tab_stop(Some(Convert), false, true, false, true, &[]),
             Some(AddFiles)
         );
-        assert_eq!(tab_stop(Some(Convert), true, true, false, true), None);
+        assert_eq!(tab_stop(Some(Convert), true, true, false, true, &[]), None);
         assert_eq!(
-            tab_stop(Some(AddFiles), true, true, true, true),
+            tab_stop(Some(AddFiles), true, true, true, true, &[]),
             Some(Convert)
         );
         // Disabled, it isn't a stop at all.
-        assert_eq!(tab_stop(None, false, true, false, false), Some(AddFiles));
+        assert_eq!(
+            tab_stop(None, false, true, false, false, &[]),
+            Some(AddFiles)
+        );
         // The empty window has no Convert, and starts at the header.
-        assert_eq!(tab_stop(None, false, false, false, true), Some(Help));
+        assert_eq!(tab_stop(None, false, false, false, true, &[]), Some(Help));
+    }
+
+    #[test]
+    fn tab_runs_header_list_inspector_footer() {
+        use crate::inspector::InspectorControl as C;
+        use FocusButton::*;
+        let inspector = [C::Target(0), C::More];
+        let go = |at, back| tab_stop(at, back, true, false, true, &inspector);
+        // From the list: the inspector's controls, then the footer.
+        assert_eq!(go(None, false), Some(Inspector(C::Target(0))));
+        assert_eq!(
+            go(Some(Inspector(C::Target(0))), false),
+            Some(Inspector(C::More))
+        );
+        assert_eq!(go(Some(Inspector(C::More)), false), Some(Convert));
+        // Shift+Tab goes back through them to the list.
+        assert_eq!(go(Some(Convert), true), Some(Inspector(C::More)));
+        assert_eq!(
+            go(Some(Inspector(C::More)), true),
+            Some(Inspector(C::Target(0)))
+        );
+        assert_eq!(go(Some(Inspector(C::Target(0))), true), None);
+        // The whole round, with Convert off, from Help.
+        let mut at = Some(Help);
+        let mut seen = vec![];
+        for _ in 0..8 {
+            at = tab_stop(at, false, true, true, false, &inspector);
+            seen.push(at);
+        }
+        assert_eq!(
+            seen,
+            [
+                Some(Settings),
+                None,
+                Some(Inspector(C::Target(0))),
+                Some(Inspector(C::More)),
+                Some(AddFiles),
+                Some(ExportAll),
+                Some(Clear),
+                Some(Help),
+            ]
+        );
+        // A control that is gone hands the focus back to the list.
+        assert_eq!(
+            tab_stop(
+                Some(Inspector(C::Retry)),
+                false,
+                true,
+                false,
+                true,
+                &inspector
+            ),
+            None
+        );
+        // The empty window has no inspector to stop at.
+        assert_eq!(
+            tab_stop(Some(Settings), false, false, false, false, &inspector),
+            Some(AddFiles)
+        );
     }
 
     #[test]
