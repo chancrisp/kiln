@@ -10,6 +10,7 @@ pub mod icons;
 pub mod inspector;
 pub mod layout;
 pub mod model;
+pub mod previews;
 pub mod quality;
 pub mod settings;
 pub mod theme;
