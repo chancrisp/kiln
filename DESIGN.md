@@ -13,14 +13,21 @@ them changes, so a palette change is always a deliberate one.
 1. **One metaphor, used consistently.** The menu is a glaze wheel and
    progress is a temperature line. A finished file cools into place, and an
    error is a crack. Don't add other metaphors: no rockets, sparkles or mascots.
-2. **Restraint.** The UI uses two neutrals and one accent. The accent marks
-   only the active selection, keyboard focus, the primary action,
-   progress and the suggestion dot. There are no gradients except the progress glow.
+2. **Restraint.** The UI uses two neutrals, one accent, and a glaze per kind
+   of file. The accent marks only the active selection, keyboard focus, the
+   primary action, progress and the suggestion dot. A glaze says only which
+   kind a file is. The only gradients are the progress glow, a converting
+   row's wash and the faint glow at the top of the window.
 3. **Material, not decoration.** Surfaces look like matte stoneware.
-   - The window ground carries one faint grain at about 3%. It is
-     pre-rendered and never animates.
+   - The window ground carries one faint grain at about 3%, which is
+     pre-rendered and never animates, and a celadon glow at 6% at its top
+     centre.
    - Pressed controls get a soft inner shadow.
-   - Flat surfaces have no drop shadows.
+   - Each surface level has one soft shadow; nothing else does. It sits 10 px
+     below the surface, with a 30 px blur and a spread of −18 px, in `#0E0D0C`
+     at 45% in dark and `#3C2D1E` at 18% in light.
+   - A raised surface also has a 1 px highlight along its top edge: bone at
+     5% in dark, bone ground at 60% in light.
 4. **Motion with weight.** Animations last 120 to 180 ms and ease out.
    Nothing bounces. With Windows' Animation effects off, every pour, slide
    and fade is instant and progress lines stop breathing; progress still
@@ -67,7 +74,45 @@ deepens the colours that must read on its pale ground.
 - The theme follows the Windows app mode unless Settings says Dark or Light.
 - Under a Windows contrast theme Kiln draws in the theme's own colours
   (window, window text, highlight, highlight text, grey text, hot light).
-  Washes, glows, grain and shadows go; outlines and solid fills stand in.
+  Washes, glows, grain, shadows and glazes go; outlines and solid fills
+  stand in.
+
+### Glazes
+
+Each kind of file has a glaze, so a person can tell kinds apart at a glance.
+Code asks for `palette.glaze(g)` or `palette.glaze_ink(g)`, with `g` from
+`theme::glaze_of(kind)`.
+
+| Kind of file | Dark glaze | Dark ink | Light glaze | Light ink |
+|---|---|---|---|---|
+| Images (celadon) | `#7FB5A0` | `#83B7A2` | `#467966` | `#395D4F` |
+| Video | `#8FA6C9` | `#99ADCB` | `#4D6489` | `#445775` |
+| Audio (ki-seto yellow) | `#C8BA83` | `#C8BA83` | `#756835` | `#61562F` |
+| Documents | `#B3A5CF` | `#B3A5CF` | `#6A5B8C` | `#5C4F77` |
+| Other | `#A89E8F` | `#B4AA9C` | `#6E665B` | `#5B554C` |
+
+- Documents are also spreadsheets, presentations, subtitles and ebooks.
+  Other is any file whose kind Kiln doesn't know.
+- The glaze fills and outlines things. Words drawn in a glaze use its ink,
+  which is the glaze toned toward the text colour until it reaches 4.5:1 on a
+  chip's fill, the panel, a selected row and a hovered row. The glazes alone
+  fall short of that on one or more of those grounds, as low as 3.2:1 in
+  light.
+- A **chip** is an opaque fill of the glaze at 16% over the surface, a 1 px
+  outline of the glaze at 35%, and text in the ink.
+- A glaze appears in:
+  - chips;
+  - a preview's fallback tile, when the file has no picture to show;
+  - the heat of a converting row's progress line, and the wash at the row's
+    left edge (9% there);
+  - the suggestion text;
+  - the wash across the top of the inspector.
+- Celadon stays the one accent: focus, selection and buttons never take a
+  glaze, though images share its colour.
+- Under a Windows contrast theme every glaze and ink is the theme's window
+  text, so no colour tells kinds apart there.
+- The audio yellow is held to hue 48° and saturation 0.38: a warmer or
+  stronger yellow reads as orange, which `no_orange_anywhere` forbids.
 
 Never use orange, pure black (`#000000`) or pure white (`#FFFFFF`). The token
 test enforces this.
@@ -78,12 +123,13 @@ test enforces this.
 |---|---|---|
 | App name, wheel centre, dialog titles | Fraunces SemiBold (bundled, Latin subset, 32 KB, OFL) | 22 |
 | Empty-state headline | Segoe UI Variable, falling back to Segoe UI | 16 |
+| The inspector's file name | Segoe UI Variable, falling back to Segoe UI | 15 |
 | UI text | Segoe UI Variable, falling back to Segoe UI | 14 |
 | Captions, status, secondary lines | Segoe UI Variable, falling back to Segoe UI | 13 |
 | Format codes | Cascadia Mono, falling back to Consolas; uppercase, 0.06em tracking | 13 |
 | The wheel's group names | Segoe UI Variable, falling back to Segoe UI | 12 |
 
-- The scale is 12, 13, 14, 16, 22 and 32. Use at most four sizes in any one view. 12 is only the wheel's group names, which have to fit a ring band 64 DIPs wide.
+- The scale is 12, 13, 14, 15, 16, 22 and 32. Use at most four sizes in any one view. 12 is only the wheel's group names, which have to fit a ring band 64 DIPs wide, and 15 is only the inspector's file name.
 - The serif appears in exactly three places: the app name, the wheel's centre label and dialog titles.
 - Format codes (PNG, MP4, DOCX) always use the monospace style. This is a signature element, so use it wherever a format is shown.
 

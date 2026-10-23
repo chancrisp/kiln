@@ -64,10 +64,87 @@ pub mod tokens {
     pub const UMBER_DEEP: Rgb = Rgb::hex(0x544C42);
     /// Bisque darkened, same hue: the same outline on the light panel.
     pub const TAUPE: Rgb = Rgb::hex(0x837A6E);
+
+    // Glazes: one colour per kind of file. The plain name is the dark
+    // theme's, `_DEEP` the light theme's. Images are celadon itself
+    // (`CELADON`, `CELADON_DEEP`) and Other is stone, so only their inks
+    // are new.
+    pub const GLAZE_VIDEO: Rgb = Rgb::hex(0x8FA6C9);
+    pub const GLAZE_VIDEO_DEEP: Rgb = Rgb::hex(0x4D6489);
+    /// Ki-seto yellow. Kept at hue 48 degrees and saturation 0.38: a
+    /// warmer or stronger yellow trips `no_orange_anywhere`.
+    pub const GLAZE_AUDIO: Rgb = Rgb::hex(0xC8BA83);
+    pub const GLAZE_AUDIO_DEEP: Rgb = Rgb::hex(0x756835);
+    pub const GLAZE_DOCUMENT: Rgb = Rgb::hex(0xB3A5CF);
+    pub const GLAZE_DOCUMENT_DEEP: Rgb = Rgb::hex(0x6A5B8C);
+    pub const GLAZE_OTHER: Rgb = Rgb::hex(0xA89E8F);
+    pub const GLAZE_OTHER_DEEP: Rgb = Rgb::hex(0x6E665B);
+
+    // Glaze inks: text drawn in a glaze. Each is its glaze mixed toward the
+    // theme's text colour just far enough to reach 4.5:1 on a chip fill, the
+    // panel, a selected row and a hovered row. Where the glaze already does
+    // (audio and documents in dark) the ink is the glaze itself.
+    pub const INK_IMAGE: Rgb = Rgb::hex(0x83B7A2);
+    pub const INK_IMAGE_DEEP: Rgb = Rgb::hex(0x395D4F);
+    pub const INK_VIDEO: Rgb = Rgb::hex(0x99ADCB);
+    pub const INK_VIDEO_DEEP: Rgb = Rgb::hex(0x445775);
+    pub const INK_AUDIO: Rgb = Rgb::hex(0xC8BA83);
+    pub const INK_AUDIO_DEEP: Rgb = Rgb::hex(0x61562F);
+    pub const INK_DOCUMENT: Rgb = Rgb::hex(0xB3A5CF);
+    pub const INK_DOCUMENT_DEEP: Rgb = Rgb::hex(0x5C4F77);
+    pub const INK_OTHER: Rgb = Rgb::hex(0xB4AA9C);
+    pub const INK_OTHER_DEEP: Rgb = Rgb::hex(0x5B554C);
+
+    /// The shadow under a raised surface: soot-black in dark, a warm umber
+    /// in light. Their opacities are the palette's `shadow_alpha`.
+    pub const SHADOW_DARK: Rgb = Rgb::hex(0x0E0D0C);
+    pub const SHADOW_LIGHT: Rgb = Rgb::hex(0x3C2D1E);
+}
+
+/// The colour a kind of file is drawn in. Spreadsheets, presentations,
+/// subtitles and ebooks share the documents' glaze; anything Kiln has no
+/// kind for is Other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Glaze {
+    Image,
+    Video,
+    Audio,
+    Document,
+    Other,
+}
+
+impl Glaze {
+    /// Every glaze, in the order the palette's `glazes` and `glaze_inks`
+    /// are indexed.
+    pub const ALL: [Glaze; 5] = [
+        Glaze::Image,
+        Glaze::Video,
+        Glaze::Audio,
+        Glaze::Document,
+        Glaze::Other,
+    ];
+
+    fn index(self) -> usize {
+        self as usize
+    }
+}
+
+/// The glaze of a file of this kind, or Other where its kind is unknown.
+pub fn glaze_of(kind: Option<kiln_core::Kind>) -> Glaze {
+    use kiln_core::Kind;
+    match kind {
+        Some(Kind::Image) => Glaze::Image,
+        Some(Kind::Video) => Glaze::Video,
+        Some(Kind::Audio) => Glaze::Audio,
+        Some(Kind::Document | Kind::Spreadsheet | Kind::Presentation | Kind::Subtitle) => {
+            Glaze::Document
+        }
+        None => Glaze::Other,
+    }
 }
 
 /// What each colour is for. Code asks for roles, never raw tokens.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Palette {
     pub name: &'static str,
     /// Window background.
@@ -101,9 +178,41 @@ pub struct Palette {
     /// Links such as "Show details": muted in Kiln's own themes, the
     /// system's hyperlink colour under a contrast theme.
     pub link: Rgb,
+    /// The glaze of each kind of file, indexed in `Glaze::ALL` order: chip
+    /// fills and outlines, the fallback preview tile, heat and washes.
+    /// Read them with `glaze`.
+    pub glazes: [Rgb; 5],
+    /// Text drawn in a glaze, same order: the glaze toned to reach 4.5:1 on
+    /// a chip fill, the panel, a selected row and a hovered row. Read them
+    /// with `glaze_ink`.
+    pub glaze_inks: [Rgb; 5],
+    /// The soft shadow under a raised surface, and its opacity.
+    pub shadow: Rgb,
+    pub shadow_alpha: f32,
+    /// The 1 px light along the top edge of a raised surface, and its
+    /// opacity.
+    pub highlight: Rgb,
+    pub highlight_alpha: f32,
     /// Drawn with a Windows contrast theme's colours: no washes, glows,
     /// shadows or grain, only solid fills and outlines.
     pub high_contrast: bool,
+}
+
+impl Palette {
+    /// The glaze for a kind of file.
+    pub fn glaze(&self, g: Glaze) -> Rgb {
+        self.glazes[g.index()]
+    }
+
+    /// The text colour for words drawn in a glaze.
+    pub fn glaze_ink(&self, g: Glaze) -> Rgb {
+        self.glaze_inks[g.index()]
+    }
+
+    /// A chip's opaque fill: the glaze at `CHIP_FILL` over the surface.
+    pub fn chip_fill(&self, g: Glaze) -> Rgb {
+        over(self.glaze(g), effects::CHIP_FILL, self.surface)
+    }
 }
 
 pub const DARK: Palette = Palette {
@@ -122,6 +231,24 @@ pub const DARK: Palette = Palette {
     grain_light: tokens::BONE,
     grain_dark: tokens::SOOT,
     link: tokens::STONE,
+    glazes: [
+        tokens::CELADON,
+        tokens::GLAZE_VIDEO,
+        tokens::GLAZE_AUDIO,
+        tokens::GLAZE_DOCUMENT,
+        tokens::GLAZE_OTHER,
+    ],
+    glaze_inks: [
+        tokens::INK_IMAGE,
+        tokens::INK_VIDEO,
+        tokens::INK_AUDIO,
+        tokens::INK_DOCUMENT,
+        tokens::INK_OTHER,
+    ],
+    shadow: tokens::SHADOW_DARK,
+    shadow_alpha: 0.45,
+    highlight: tokens::BONE,
+    highlight_alpha: 0.05,
     high_contrast: false,
 };
 
@@ -141,6 +268,24 @@ pub const LIGHT: Palette = Palette {
     grain_light: tokens::BONE_GROUND,
     grain_dark: tokens::UMBER,
     link: tokens::UMBER,
+    glazes: [
+        tokens::CELADON_DEEP,
+        tokens::GLAZE_VIDEO_DEEP,
+        tokens::GLAZE_AUDIO_DEEP,
+        tokens::GLAZE_DOCUMENT_DEEP,
+        tokens::GLAZE_OTHER_DEEP,
+    ],
+    glaze_inks: [
+        tokens::INK_IMAGE_DEEP,
+        tokens::INK_VIDEO_DEEP,
+        tokens::INK_AUDIO_DEEP,
+        tokens::INK_DOCUMENT_DEEP,
+        tokens::INK_OTHER_DEEP,
+    ],
+    shadow: tokens::SHADOW_LIGHT,
+    shadow_alpha: 0.18,
+    highlight: tokens::BONE_GROUND,
+    highlight_alpha: 0.60,
     high_contrast: false,
 };
 
@@ -156,9 +301,10 @@ pub struct SysColors {
 }
 
 /// The palette for a Windows contrast theme: the person's own colours,
-/// each in the role Windows gives it. Window text stands in for muted text
-/// and errors, since a contrast theme has no colour for either; gray text
-/// draws borders and dividers; the highlight marks selection and progress.
+/// each in the role Windows gives it. Window text stands in for muted text,
+/// errors and every glaze, since a contrast theme has no colour for any of
+/// them; gray text draws borders and dividers; the highlight marks selection
+/// and progress. There is no shadow or highlight, only outlines.
 pub fn theme_from_system(c: SysColors) -> Palette {
     Palette {
         name: "high-contrast",
@@ -176,6 +322,12 @@ pub fn theme_from_system(c: SysColors) -> Palette {
         grain_light: c.window,
         grain_dark: c.window,
         link: c.hotlight,
+        glazes: [c.window_text; 5],
+        glaze_inks: [c.window_text; 5],
+        shadow: c.window,
+        shadow_alpha: 0.0,
+        highlight: c.window,
+        highlight_alpha: 0.0,
         high_contrast: true,
     }
 }
@@ -222,6 +374,42 @@ pub const NON_TEXT: Option<f32> = Some(3.0);
 /// threshold applies, and the name says why.
 pub type ContrastPair = (&'static str, Rgb, Rgb, f32, Option<f32>);
 
+/// The names of the four glaze-ink pairs for each glaze, in `Glaze::ALL`
+/// order: on its chip fill, on the panel, on a selected row, on a hovered
+/// row. The report names every pair once, so each carries its glaze.
+const GLAZE_INK_PAIRS: [[&str; 4]; 5] = [
+    [
+        "Glaze ink on its chip fill (images)",
+        "Glaze ink on the panel (images)",
+        "Glaze ink on selected row (images)",
+        "Glaze ink on hovered row (images)",
+    ],
+    [
+        "Glaze ink on its chip fill (video)",
+        "Glaze ink on the panel (video)",
+        "Glaze ink on selected row (video)",
+        "Glaze ink on hovered row (video)",
+    ],
+    [
+        "Glaze ink on its chip fill (audio)",
+        "Glaze ink on the panel (audio)",
+        "Glaze ink on selected row (audio)",
+        "Glaze ink on hovered row (audio)",
+    ],
+    [
+        "Glaze ink on its chip fill (documents)",
+        "Glaze ink on the panel (documents)",
+        "Glaze ink on selected row (documents)",
+        "Glaze ink on hovered row (documents)",
+    ],
+    [
+        "Glaze ink on its chip fill (other)",
+        "Glaze ink on the panel (other)",
+        "Glaze ink on selected row (other)",
+        "Glaze ink on hovered row (other)",
+    ],
+];
+
 /// Every pair in the Phase 1 contrast table (docs/ux/phase1/
 /// accessibility.md), named as it names them, plus the cues added since,
 /// measured from `p` as `win/render.rs` draws Kiln's own themes. Washes
@@ -243,7 +431,7 @@ pub fn contrast_report(p: &Palette) -> Vec<ContrastPair> {
         p.muted_on_wash,
         p.accent_strong,
     );
-    let pairs: Vec<(&'static str, Rgb, Rgb, Option<f32>)> = vec![
+    let mut pairs: Vec<(&'static str, Rgb, Rgb, Option<f32>)> = vec![
         ("Body text: file name, row label", p.text, s, TEXT),
         ("Body text on selected row", p.text, wash, TEXT),
         ("Muted second line (13 px caption)", muted, s, MUTED),
@@ -384,6 +572,16 @@ pub fn contrast_report(p: &Palette) -> Vec<ContrastPair> {
         ("Link underline (muted 80%)", underline, s, NON_TEXT),
         ("Scroll thumb (muted 80%)", thumb, s, NON_TEXT),
     ];
+    // Each glaze's ink is measured on the four grounds it meets, so a
+    // glaze that fails is named.
+    for g in Glaze::ALL {
+        let ink = p.glaze_ink(g);
+        let names = &GLAZE_INK_PAIRS[g.index()];
+        pairs.push((names[0], ink, p.chip_fill(g), TEXT));
+        pairs.push((names[1], ink, s, TEXT));
+        pairs.push((names[2], ink, wash, TEXT));
+        pairs.push((names[3], ink, hover, TEXT));
+    }
     pairs
         .into_iter()
         .map(|(name, fg, bg, need)| (name, fg, bg, contrast(fg, bg), need))
@@ -396,10 +594,12 @@ pub mod type_scale {
     pub const SMALL: f32 = 12.0;
     pub const CAPTION: f32 = 13.0;
     pub const BODY: f32 = 14.0;
+    /// The file name at the top of the inspector.
+    pub const INSPECTOR_TITLE: f32 = 15.0;
     pub const LEAD: f32 = 16.0;
     pub const TITLE: f32 = 22.0;
     pub const DISPLAY: f32 = 32.0;
-    pub const ALL: [f32; 6] = [SMALL, CAPTION, BODY, LEAD, TITLE, DISPLAY];
+    pub const ALL: [f32; 7] = [SMALL, CAPTION, BODY, INSPECTOR_TITLE, LEAD, TITLE, DISPLAY];
 
     /// Letter spacing for format codes, as a fraction of the font size.
     pub const CODE_TRACKING_EM: f32 = 0.06;
@@ -530,6 +730,46 @@ pub mod effects {
     pub const GRAIN_OPACITY: f32 = 0.03;
     /// Side of the pre-rendered grain tile, in pixels.
     pub const GRAIN_TILE: u32 = 128;
+    /// Opacity of a glaze over the surface in a chip's opaque fill.
+    pub const CHIP_FILL: f32 = 0.16;
+    /// Opacity of a chip's 1 px glaze outline.
+    pub const CHIP_OUTLINE: f32 = 0.35;
+    /// Opacity of the celadon glow at the top centre of the ground.
+    pub const GROUND_GLOW: f32 = 0.06;
+    /// Opacity of a converting row's glaze wash at its left edge.
+    pub const ROW_WASH: f32 = 0.09;
+}
+
+/// Depth: one soft shadow under each raised surface.
+pub mod depth {
+    /// How far the shadow sits below the surface, in DIPs.
+    pub const OFFSET_Y: f32 = 10.0;
+    /// How far it spreads, in DIPs.
+    pub const BLUR: f32 = 30.0;
+    /// How far it is pulled in from the surface's edge (negative is in).
+    pub const SPREAD: f32 = -18.0;
+
+    const LAYERS: usize = 8;
+
+    /// The shadow as stacked layers, nearest first: each is the surface's
+    /// rounded rectangle grown by `grow` DIPs (CSS `0 10 30 -18` reaches
+    /// from the spread out to `SPREAD + BLUR`), drawn with its share of the
+    /// shadow's alpha. Shares follow a Gaussian over `grow` centred on the
+    /// spread, so the shadow is densest at its core and fades smoothly,
+    /// and they add up to 1.
+    pub fn shadow_layers() -> Vec<(f32, f32)> {
+        let sigma = BLUR / 6.0;
+        let step = BLUR / (LAYERS - 1) as f32;
+        let layers: Vec<(f32, f32)> = (0..LAYERS)
+            .map(|i| {
+                let grow = SPREAD + i as f32 * step;
+                let d = grow - SPREAD;
+                (grow, (-(d * d) / (2.0 * sigma * sigma)).exp())
+            })
+            .collect();
+        let total: f32 = layers.iter().map(|l| l.1).sum();
+        layers.into_iter().map(|(g, w)| (g, w / total)).collect()
+    }
 }
 
 /// A deterministic noise tile for the window grain, premultiplied BGRA.
@@ -578,6 +818,26 @@ pub fn describe() -> String {
         ("kiln-umber-deep", tokens::UMBER_DEEP),
         ("kiln-flint", tokens::FLINT),
         ("kiln-taupe", tokens::TAUPE),
+        ("kiln-glaze-video", tokens::GLAZE_VIDEO),
+        ("kiln-glaze-video-deep", tokens::GLAZE_VIDEO_DEEP),
+        ("kiln-glaze-audio", tokens::GLAZE_AUDIO),
+        ("kiln-glaze-audio-deep", tokens::GLAZE_AUDIO_DEEP),
+        ("kiln-glaze-document", tokens::GLAZE_DOCUMENT),
+        ("kiln-glaze-document-deep", tokens::GLAZE_DOCUMENT_DEEP),
+        ("kiln-glaze-other", tokens::GLAZE_OTHER),
+        ("kiln-glaze-other-deep", tokens::GLAZE_OTHER_DEEP),
+        ("kiln-ink-image", tokens::INK_IMAGE),
+        ("kiln-ink-image-deep", tokens::INK_IMAGE_DEEP),
+        ("kiln-ink-video", tokens::INK_VIDEO),
+        ("kiln-ink-video-deep", tokens::INK_VIDEO_DEEP),
+        ("kiln-ink-audio", tokens::INK_AUDIO),
+        ("kiln-ink-audio-deep", tokens::INK_AUDIO_DEEP),
+        ("kiln-ink-document", tokens::INK_DOCUMENT),
+        ("kiln-ink-document-deep", tokens::INK_DOCUMENT_DEEP),
+        ("kiln-ink-other", tokens::INK_OTHER),
+        ("kiln-ink-other-deep", tokens::INK_OTHER_DEEP),
+        ("kiln-shadow-dark", tokens::SHADOW_DARK),
+        ("kiln-shadow-light", tokens::SHADOW_LIGHT),
     ];
     s.push_str("[tokens]\n");
     for (name, c) in tok {
@@ -603,6 +863,23 @@ pub fn describe() -> String {
         ] {
             s.push_str(&format!("{role} = {}\n", c.to_hex()));
         }
+        for (name, g) in [
+            ("image", Glaze::Image),
+            ("video", Glaze::Video),
+            ("audio", Glaze::Audio),
+            ("document", Glaze::Document),
+            ("other", Glaze::Other),
+        ] {
+            s.push_str(&format!("glaze_{name} = {}\n", p.glaze(g).to_hex()));
+            s.push_str(&format!("glaze_ink_{name} = {}\n", p.glaze_ink(g).to_hex()));
+        }
+        s.push_str(&format!(
+            "shadow = {}\nshadow_alpha = {}\nhighlight = {}\nhighlight_alpha = {}\n",
+            p.shadow.to_hex(),
+            p.shadow_alpha,
+            p.highlight.to_hex(),
+            p.highlight_alpha
+        ));
     }
     s.push_str("\n[type]\n");
     s.push_str(&format!("scale = {:?}\n", type_scale::ALL));
@@ -649,6 +926,23 @@ pub fn describe() -> String {
         effects::UNDERLINE,
         effects::THUMB
     ));
+    s.push_str(&format!(
+        "chip_fill = {}\nchip_outline = {}\nground_glow = {}\nrow_wash = {}\n",
+        effects::CHIP_FILL,
+        effects::CHIP_OUTLINE,
+        effects::GROUND_GLOW,
+        effects::ROW_WASH
+    ));
+    s.push_str("\n[depth]\n");
+    s.push_str(&format!(
+        "offset_y = {}\nblur = {}\nspread = {}\n",
+        depth::OFFSET_Y,
+        depth::BLUR,
+        depth::SPREAD
+    ));
+    for (grow, share) in depth::shadow_layers() {
+        s.push_str(&format!("layer = {grow:.2} {share:.4}\n"));
+    }
     s
 }
 
@@ -690,7 +984,11 @@ mod tests {
                 p.grain_light,
                 p.grain_dark,
                 p.link,
+                p.shadow,
+                p.highlight,
             ]);
+            v.extend(p.glazes);
+            v.extend(p.glaze_inks);
         }
         v
     }
@@ -849,17 +1147,22 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_contrast_theme_takes_the_system_colours() {
-        // High Contrast Black and White as Windows ships them.
-        let black = SysColors {
+    /// High Contrast Black as Windows ships it.
+    fn contrast_black() -> SysColors {
+        SysColors {
             window: Rgb::hex(0x000000),
             window_text: Rgb::hex(0xFFFFFF),
             highlight: Rgb::hex(0x1AEBFF),
             highlight_text: Rgb::hex(0x000000),
             gray_text: Rgb::hex(0x3FF23F),
             hotlight: Rgb::hex(0xFFFF00),
-        };
+        }
+    }
+
+    #[test]
+    fn a_contrast_theme_takes_the_system_colours() {
+        // High Contrast Black and White as Windows ships them.
+        let black = contrast_black();
         let p = theme_from_system(black);
         assert!(p.high_contrast);
         assert_eq!((p.ground, p.surface), (black.window, black.window));
@@ -892,6 +1195,127 @@ mod tests {
         assert_eq!(q.accent_strong, white.highlight);
         assert_ne!(p, q, "a new contrast theme is a new palette");
         const { assert!(!DARK.high_contrast && !LIGHT.high_contrast) };
+    }
+
+    #[test]
+    fn every_kind_has_a_glaze() {
+        use kiln_core::Kind::*;
+        assert_eq!(glaze_of(Some(Image)), Glaze::Image);
+        assert_eq!(glaze_of(Some(Video)), Glaze::Video);
+        assert_eq!(glaze_of(Some(Audio)), Glaze::Audio);
+        for k in [Document, Spreadsheet, Presentation, Subtitle] {
+            assert_eq!(glaze_of(Some(k)), Glaze::Document);
+        }
+        assert_eq!(glaze_of(None), Glaze::Other);
+    }
+
+    #[test]
+    fn glazes_are_the_designed_colours() {
+        assert_eq!(DARK.glaze(Glaze::Audio), Rgb::hex(0xC8BA83));
+        assert_eq!(LIGHT.glaze_ink(Glaze::Image), Rgb::hex(0x395D4F));
+        assert_eq!(DARK.glaze(Glaze::Image), tokens::CELADON);
+    }
+
+    #[test]
+    fn glaze_ink_reads_on_every_ground_it_meets() {
+        for p in [&DARK, &LIGHT] {
+            let wash = over(p.accent, effects::HOVER_FILL, p.surface);
+            let hover = over(p.line, effects::ROW_HOVER, p.surface);
+            for g in Glaze::ALL {
+                let ink = p.glaze_ink(g);
+                for bg in [p.chip_fill(g), p.surface, wash, hover] {
+                    assert!(
+                        contrast(ink, bg) >= 4.5,
+                        "{} {:?} on {}",
+                        p.name,
+                        g,
+                        bg.to_hex()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_contrast_theme_has_no_glazes() {
+        let p = theme_from_system(contrast_black());
+        for g in Glaze::ALL {
+            assert_eq!(p.glaze(g), p.text);
+            assert_eq!(p.glaze_ink(g), p.text);
+        }
+        assert_eq!((p.shadow_alpha, p.highlight_alpha), (0.0, 0.0));
+    }
+
+    #[test]
+    fn shadow_layers_fade_out_and_sum_to_one() {
+        let l = depth::shadow_layers();
+        assert!(l.len() >= 6);
+        assert!(l.windows(2).all(|w| w[0].0 < w[1].0 && w[0].1 >= w[1].1));
+        let sum: f32 = l.iter().map(|x| x.1).sum();
+        assert!((sum - 1.0).abs() < 1e-3);
+        assert!(l.last().unwrap().0 <= depth::BLUR / 2.0 + depth::SPREAD.abs());
+    }
+
+    #[test]
+    fn the_shadow_spans_from_its_spread_to_its_blur() {
+        // CSS "0 10 30 -18": the core is pulled in by the spread, and the
+        // softest layer reaches the spread plus the blur (12 DIPs out).
+        let l = depth::shadow_layers();
+        assert_eq!(l.len(), 8);
+        assert!((l[0].0 - depth::SPREAD).abs() < 1e-4);
+        assert!((l[7].0 - (depth::SPREAD + depth::BLUR)).abs() < 1e-4);
+        // Most of the weight is in the layers nearest the edge.
+        assert!(l[0].1 > 0.3 && l[0].1 > l[1].1);
+    }
+
+    #[test]
+    fn the_shadow_and_highlight_are_the_designed_ones() {
+        assert_eq!((DARK.shadow, DARK.shadow_alpha), (Rgb::hex(0x0E0D0C), 0.45));
+        assert_eq!(
+            (LIGHT.shadow, LIGHT.shadow_alpha),
+            (Rgb::hex(0x3C2D1E), 0.18)
+        );
+        assert_eq!((DARK.highlight, DARK.highlight_alpha), (tokens::BONE, 0.05));
+        assert_eq!(
+            (LIGHT.highlight, LIGHT.highlight_alpha),
+            (tokens::BONE_GROUND, 0.60)
+        );
+    }
+
+    #[test]
+    fn a_chip_is_the_glaze_at_sixteen_percent_over_the_surface() {
+        for p in [&DARK, &LIGHT] {
+            for g in Glaze::ALL {
+                assert_eq!(p.chip_fill(g), over(p.glaze(g), 0.16, p.surface));
+            }
+        }
+        assert_eq!(effects::CHIP_FILL, 0.16);
+        assert_eq!(effects::CHIP_OUTLINE, 0.35);
+        assert_eq!(effects::GROUND_GLOW, 0.06);
+        assert_eq!(effects::ROW_WASH, 0.09);
+    }
+
+    #[test]
+    fn the_report_measures_each_glaze_ink_on_every_ground() {
+        for p in [&DARK, &LIGHT] {
+            let report = contrast_report(p);
+            for what in [
+                "Glaze ink on its chip fill",
+                "Glaze ink on the panel",
+                "Glaze ink on selected row",
+                "Glaze ink on hovered row",
+            ] {
+                let rows: Vec<_> = report.iter().filter(|r| r.0.starts_with(what)).collect();
+                assert_eq!(rows.len(), Glaze::ALL.len(), "{} {what}", p.name);
+                assert!(rows.iter().all(|r| r.4 == TEXT), "{} {what}", p.name);
+            }
+        }
+    }
+
+    #[test]
+    fn the_inspector_title_joins_the_type_scale() {
+        assert_eq!(type_scale::INSPECTOR_TITLE, 15.0);
+        assert!(type_scale::ALL.contains(&type_scale::INSPECTOR_TITLE));
     }
 
     #[test]
