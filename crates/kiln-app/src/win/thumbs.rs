@@ -230,8 +230,14 @@ fn work(
         };
         // The file's time now, read before it is fetched: the answer is
         // about the file as it is, which may have changed since it was
-        // listed. The window sorts out which is newer.
-        let modified = std::fs::metadata(&key.path).and_then(|m| m.modified()).ok();
+        // listed. The window sorts out which is newer. When the time can't
+        // be read (the file is gone, or its share is offline), the answer
+        // keeps the time it was asked with, so the window caches it under
+        // the key it asked for and doesn't ask again.
+        let modified = std::fs::metadata(&key.path)
+            .and_then(|m| m.modified())
+            .ok()
+            .or(key.modified);
         let preview = match fetch(&key.path, key.pixels) {
             Some(px) => Preview::Ready(Arc::new(px)),
             None => Preview::None,
@@ -382,6 +388,27 @@ mod tests {
         assert_eq!(answer.modified, Some(now));
         assert_eq!(answer.path, path);
         assert_eq!(answer.pixels, (34, 34));
+    }
+
+    #[test]
+    fn a_file_whose_time_cant_be_read_keeps_the_time_it_was_asked_with() {
+        // Gone since it was listed, or on a share that went offline: its
+        // "no picture" answer is kept under the key the window asked for,
+        // so it is cached once instead of asked for again and again.
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("gone.png");
+        let listed = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let (thumbs, release, _started, posted) = gated();
+        let asked = PreviewKey {
+            modified: Some(listed),
+            ..key(&gone)
+        };
+        thumbs.ask(vec![asked.clone()]);
+        let _ = release.send(());
+
+        let (answer, preview) = posted.recv_timeout(WAIT).unwrap();
+        assert_eq!(answer, asked);
+        assert_eq!(preview, Preview::None);
     }
 
     #[test]

@@ -1656,6 +1656,26 @@ impl FileList {
         true
     }
 
+    /// A preview of `path` has arrived, made from the file as it was at
+    /// `modified`. Returns the row to keep it for, or `None` to drop it:
+    /// the file is no longer listed, or the picture is older than the file
+    /// the row knows. A newer time means the file changed since it was
+    /// listed, and the row takes it.
+    ///
+    /// An unknown time (`None`) counts as older than any known one. A row
+    /// that couldn't tell its file's time learns it from a preview that
+    /// could; a preview without a time is kept only by a row without one,
+    /// as a row with a time would never look it up.
+    pub fn preview_arrived(&mut self, path: &Path, modified: Option<SystemTime>) -> Option<usize> {
+        let i = self.index_of(path)?;
+        let e = &mut self.entries[i];
+        if modified < e.modified {
+            return None;
+        }
+        e.modified = modified;
+        Some(i)
+    }
+
     /// Drop every row's facts and suggestion, as when Suggestions is
     /// turned off.
     pub fn forget_facts(&mut self) {
@@ -2405,6 +2425,70 @@ mod tests {
         // So does an undone Remove.
         let back = list.remove(0).unwrap().restored();
         assert_eq!(back.modified, Some(changed));
+    }
+
+    #[test]
+    fn a_preview_is_kept_only_for_a_listed_file_as_new_as_its_row() {
+        let t1 = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let t2 = SystemTime::UNIX_EPOCH + Duration::from_secs(2_000);
+        let t3 = SystemTime::UNIX_EPOCH + Duration::from_secs(3_000);
+        let mut list = FileList::default();
+        list.insert(0, row("a.png"));
+        list.insert(
+            1,
+            Entry {
+                modified: Some(t2),
+                ..row("b.png")
+            },
+        );
+        let b = PathBuf::from("photos").join("b.png");
+
+        // No longer listed: dropped.
+        let gone = PathBuf::from("photos").join("gone.png");
+        assert_eq!(list.preview_arrived(&gone, Some(t2)), None);
+        // Made before the file the row knows: dropped, and the row keeps
+        // its time.
+        assert_eq!(list.preview_arrived(&b, Some(t1)), None);
+        assert_eq!(list.entries()[1].modified, Some(t2));
+        // As new as the row: kept for it.
+        assert_eq!(list.preview_arrived(&b, Some(t2)), Some(1));
+        assert_eq!(list.entries()[1].modified, Some(t2));
+        // Newer: the file changed since it was listed, and the row takes
+        // the new time.
+        assert_eq!(list.preview_arrived(&b, Some(t3)), Some(1));
+        assert_eq!(list.entries()[1].modified, Some(t3));
+        // The other row is untouched by any of it.
+        assert_eq!(list.entries()[0].modified, None);
+    }
+
+    #[test]
+    fn an_unknown_time_counts_as_older_than_any_known_one() {
+        let t = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let a = PathBuf::from("photos").join("a.png");
+        let b = PathBuf::from("photos").join("b.png");
+        let mut list = FileList::default();
+        list.insert(0, row("a.png"));
+        list.insert(
+            1,
+            Entry {
+                modified: Some(t),
+                ..row("b.png")
+            },
+        );
+
+        // A row that couldn't tell its file's time learns it from a
+        // preview that could.
+        assert_eq!(list.preview_arrived(&a, Some(t)), Some(0));
+        assert_eq!(list.entries()[0].modified, Some(t));
+        // A preview with no time is no use to a row that has one: the
+        // window would never look it up. Dropped, and the row keeps its
+        // time.
+        assert_eq!(list.preview_arrived(&b, None), None);
+        assert_eq!(list.entries()[1].modified, Some(t));
+        // Unknown against unknown is as new.
+        list.entries_mut()[0].modified = None;
+        assert_eq!(list.preview_arrived(&a, None), Some(0));
+        assert_eq!(list.entries()[0].modified, None);
     }
 
     #[test]

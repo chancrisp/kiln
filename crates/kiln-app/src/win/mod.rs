@@ -5541,18 +5541,12 @@ impl App {
     }
 
     /// A preview from the worker, made from the file as it was at the
-    /// key's time. Kept only while the file is still listed and the
-    /// picture is no older than the file the list knows; a newer one means
-    /// the file changed since it was listed, and the list takes its time.
+    /// key's time. The list decides whether it is kept, and for which row
+    /// (`FileList::preview_arrived`).
     fn on_preview(&mut self, key: PreviewKey, preview: Preview) {
-        let Some(i) = self.files.index_of(&key.path) else {
+        let Some(i) = self.files.preview_arrived(&key.path, key.modified) else {
             return;
         };
-        let entry = &mut self.files.entries_mut()[i];
-        if key.modified < entry.modified {
-            return;
-        }
-        entry.modified = key.modified;
         self.previews.put(key, preview, Instant::now());
         // Only a picture that shows needs a frame: a row in view, or the
         // selection's in the inspector. Those asked ahead of the scroll
