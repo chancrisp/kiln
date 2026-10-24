@@ -63,7 +63,7 @@ use crate::settings::{self, Engine, Settings};
 use crate::theme::{self, Palette};
 use crate::update::{Reply, UpdateState};
 use crate::ways_in::{self, MenuItem, RowState};
-use crate::wheel::{self, Action, Spot, Wheel, WheelKind};
+use crate::wheel::{self, Action, Pour, Spot, Wheel, WheelKind};
 use drop::{DragEvent, DropTarget, DRAG_ENTER, DRAG_LEAVE, DRAG_OVER, WM_KILN_DRAG, WM_KILN_DROP};
 use inspect::Inspector;
 use motion::{new_content, same_page, sheet_rise, ButtonId, Fading, Motion, Shows};
@@ -3181,7 +3181,14 @@ impl App {
 
     // The wheel.
 
-    fn open_wheel(&mut self, kind: WheelKind, paths: Vec<PathBuf>, at: (f32, f32), keyboard: bool) {
+    fn open_wheel(
+        &mut self,
+        kind: WheelKind,
+        paths: Vec<PathBuf>,
+        at: (f32, f32),
+        keyboard: bool,
+        pour: Pour,
+    ) {
         let (w, h) = self.renderer.size_dips();
         let (items, more) = wheel::split_common(wheel::items_for(
             kind,
@@ -3197,17 +3204,14 @@ impl App {
             scale: 1.0,
             source_code: wheel::source_code(&paths),
         };
-        // Placed so the outer ring fits too, should More be opened. Poured
-        // over the list beside the inspector, as from a row, it keeps to
-        // the list, so it never covers the inspector.
+        // Placed so the outer ring fits too, should More be opened. A wheel
+        // asked for from a key or beside a row keeps to the list beside the
+        // inspector, so it never covers it; one under a dragging pointer
+        // opens at the pointer. `pour` says which, not where the pointer is.
         let l = self.layout();
-        (wheel.center, wheel.scale) = match l.inspector {
-            Some(_) if l.list.contains(at.0, at.1) => {
-                let across = (l.list.x, l.list.right());
-                wheel::place_within(at.0, at.1, w, h, wheel.extent(), across)
-            }
-            _ => wheel::place(at.0, at.1, w, h, wheel.extent()),
-        };
+        let list = l.inspector.map(|_| (l.list.x, l.list.right()));
+        (wheel.center, wheel.scale) =
+            wheel::place_pour(pour, at.0, at.1, w, h, wheel.extent(), list);
         let suggestion = self.wheel_suggestion(kind, &paths);
         // From the keyboard it starts on the suggestion, or on More when
         // the suggestion is in it.
@@ -3291,7 +3295,9 @@ impl App {
                 self.alert(text);
                 self.invalidate();
             }
-            None => self.open_wheel(kind, paths, at, keyboard),
+            // Every way in here is a key or a row's own: the wheel keeps to
+            // the list.
+            None => self.open_wheel(kind, paths, at, keyboard, Pour::OverList),
         }
     }
 
@@ -5618,7 +5624,8 @@ impl App {
                 if self.drag_paths.is_empty() {
                     return;
                 }
-                self.open_wheel(k, self.drag_paths.clone(), at, false);
+                // Opens at the pointer, whatever is under it.
+                self.open_wheel(k, self.drag_paths.clone(), at, false, Pour::AtPointer);
             }
             (Some(_), None) => self.close_wheel(),
             _ => {}

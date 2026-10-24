@@ -209,7 +209,7 @@ Everything moves the same way: fast at first, then settling gently, never past i
 
 - **Opening.** The wheel opens at the pointer while a modifier is held during a drag.
   - By default Shift opens Convert, Ctrl opens Tools and Alt opens Actions. Settings can reassign them, one key per wheel.
-  - From the keyboard, Enter (with the modifier) opens it beside the row the keyboard is on, or in the middle of the list when there is none. Beside the inspector, a wheel poured from the list keeps to the list, More's ring included, and is made a little smaller when the list is narrower than it, so it never covers the inspector.
+  - From the keyboard, Enter (with the modifier) opens it beside the row the keyboard is on, or in the middle of the list when there is none. Beside the inspector, a wheel opened from the keyboard or beside a row (its link, the right-click menu, the footer's Convert) keeps to the list, More's ring included, and is made a little smaller when the list is narrower than it, so it never covers the inspector. A wheel opened by a drag stays at the pointer, wherever that is.
 - **Size.** The outer radius is 136 DIPs and the inner radius 56. The pointer still counts as on an item up to 48 DIPs past the edge. The wheel always stays 8 DIPs inside the window.
 - **Bloom.** The wheel opens over 200 ms, scaling from 86% and turning from −8° as it fades in, like glaze spreading from the pointer. Its segments follow, each 10 ms after the one before, so the last has landed by 300 ms.
 - **Items.** Items are segments clockwise from the top. Each shows its icon, then its label. Format codes are in monospace and tool names in UI text.

@@ -626,6 +626,39 @@ pub fn place_within(
     ((cx, cy), scale)
 }
 
+/// How a wheel was asked for, which alone decides whether it keeps to the
+/// list. Set by whoever opens the wheel, never worked out from where the
+/// pointer is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pour {
+    /// From a key or beside a row: the Enter key, a row's link, the
+    /// right-click menu, the footer's Convert. It keeps to the list, so it
+    /// never covers the inspector.
+    OverList,
+    /// Under the pointer of a modifier-drag. It opens at the pointer, as
+    /// far as the window allows, so a release there picks nothing.
+    AtPointer,
+}
+
+/// Where a wheel reaching `extent` DIPs from its centre goes, poured as
+/// `pour` says, and its scale. `list` is the list's left and right edges
+/// while the inspector shows beside it, `None` when there is no inspector
+/// to keep clear of.
+pub fn place_pour(
+    pour: Pour,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    extent: f32,
+    list: Option<(f32, f32)>,
+) -> ((f32, f32), f32) {
+    match (pour, list) {
+        (Pour::OverList, Some(across)) => place_within(x, y, w, h, extent, across),
+        _ => place(x, y, w, h, extent),
+    }
+}
+
 /// Keep a plain wheel inside a `w` x `h` window.
 pub fn clamp_center(x: f32, y: f32, w: f32, h: f32) -> (f32, f32) {
     place(x, y, w, h, R_OUTER).0
@@ -939,6 +972,66 @@ mod tests {
         assert!(cx + R_MORE_OUTER * s <= list.right() + 0.01);
         assert!(cx + R_MORE_OUTER * s < inspector.x);
         assert!(cx - R_MORE_OUTER * s >= list.x - 0.01);
+    }
+
+    #[test]
+    fn only_a_wheel_poured_over_the_list_keeps_to_it() {
+        // R54: whether a wheel keeps to the list is the way it was asked
+        // for, not where the pointer is.
+        let (w, h) = (1300.0, 800.0);
+        let l = crate::layout::layout(w, h, 5);
+        let (list, inspector) = (l.list, l.inspector.expect("an inspector"));
+        let across = Some((list.x, list.right()));
+        let at = |x, y, pour| place_pour(pour, x, y, w, h, R_OUTER, across);
+
+        // A drag wheel right by the inspector's rule, within the wheel's
+        // reach of it: it opens at the pointer, not moved to the left.
+        let (px, py) = (list.right() - 30.0, list.y + 200.0);
+        assert!(px + R_OUTER + EDGE_GAP > list.right(), "near the rule");
+        let (c, s) = at(px, py, Pour::AtPointer);
+        assert_eq!((c, s), ((px, py), 1.0));
+        assert_eq!((c, s), place(px, py, w, h, R_OUTER));
+        // The pointer starts in the hole, on no format, so releasing there
+        // converts nothing.
+        let drag = Wheel {
+            center: c,
+            scale: s,
+            ..wheel(5)
+        };
+        assert_eq!(hit(&drag, px, py, false), None);
+
+        // The same point poured from a key or a row keeps to the list.
+        let (c, s) = at(px, py, Pour::OverList);
+        assert!(c.0 < px, "moved left, off the rule: {c:?}");
+        assert!(c.0 + R_OUTER * s <= list.right() - EDGE_GAP + 0.01);
+        assert!(c.0 + R_OUTER * s < inspector.x);
+        assert_eq!(
+            c,
+            place_within(px, py, w, h, R_OUTER, (list.x, list.right())).0
+        );
+
+        // Which way it was asked for decides it, not the point: a point
+        // past the list, as the footer's Convert is, keeps to the list too
+        // when poured over it, and stays put when dragged.
+        let (fx, fy) = (inspector.x + 40.0, h - 30.0);
+        assert!(!list.contains(fx, fy));
+        let (c, s) = at(fx, fy, Pour::OverList);
+        assert!(c.0 + R_OUTER * s < inspector.x, "{c:?}");
+        assert_eq!(at(fx, fy, Pour::AtPointer).0 .0, fx);
+
+        // Well inside the list, or with no inspector to keep clear of, the
+        // two agree.
+        let mid = (list.x + list.w / 2.0, list.y + list.h / 2.0);
+        assert_eq!(
+            at(mid.0, mid.1, Pour::OverList),
+            at(mid.0, mid.1, Pour::AtPointer)
+        );
+        for pour in [Pour::OverList, Pour::AtPointer] {
+            assert_eq!(
+                place_pour(pour, px, py, w, h, R_OUTER, None),
+                place(px, py, w, h, R_OUTER)
+            );
+        }
     }
 
     #[test]
