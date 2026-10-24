@@ -157,11 +157,20 @@ const POPULAR: &[&str] = &[
     "dbk", "fb2", "ipynb",
 ];
 
-fn rank(ext: &str) -> usize {
+/// Where `ext` comes in [`POPULAR`]; one past its end for a format not
+/// in it.
+pub(crate) fn rank(ext: &str) -> usize {
     POPULAR
         .iter()
         .position(|p| *p == ext)
         .unwrap_or(POPULAR.len())
+}
+
+/// `exts`, lowercase extensions, most popular first ([`rank`]), and those
+/// that rank alike alphabetically. The wheel and the inspector both order
+/// formats this way, so they agree.
+pub(crate) fn sort_popular(exts: &mut [String]) {
+    exts.sort_by(|a, b| rank(a).cmp(&rank(b)).then_with(|| a.cmp(b)));
 }
 
 pub fn icon_for_tool(tool: Tool) -> &'static str {
@@ -194,7 +203,7 @@ pub fn items_for(
                 });
             }
             let mut exts = common.unwrap_or_default();
-            exts.sort_by(|a, b| rank(a).cmp(&rank(b)).then_with(|| a.cmp(b)));
+            sort_popular(&mut exts);
             exts.into_iter()
                 .filter_map(|ext| {
                     let f = kiln.registry().format(&ext)?;

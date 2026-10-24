@@ -10,9 +10,9 @@ use kiln_core::{about, describe_format, Facts, Habits, Kind, Suggested};
 
 use crate::a11y::percent;
 use crate::model::{
-    doing, get_label, human_size, left_text, time_left, Entry, FileList, JobState, Tone,
+    doing, get_label, human_size, left_text, time_left, Entry, FileList, JobState, Tone, GONE,
 };
-use crate::wheel::{offer_sentence, Action, Offer, WheelKind};
+use crate::wheel::{offer_sentence, sort_popular, Action, Offer, WheelKind};
 
 /// A control in the inspector, by what it is. The same names stand for
 /// the Tab order, the keyboard focus and what assistive tools are told.
@@ -69,6 +69,10 @@ pub enum Inspector {
         /// isn't installed: the button that opens its download page, as
         /// the row's link says it ("Get FFmpeg").
         helper: Option<&'static str>,
+        /// When the file has nothing to offer, not even a helper app to
+        /// get: why, as its row says it ("Isn't really a DOCX file"), and
+        /// the tone the row says it in. It stands where `what` would.
+        reason: Option<(String, Tone)>,
     },
     Converting {
         row: usize,
@@ -86,6 +90,9 @@ pub enum Inspector {
         change: Option<String>,
         /// Where the result is, and so what can be done with it.
         kept: Kept,
+        /// The line that stands in for the row's own, as the row shows it,
+        /// and its tone: a result that's gone, or an export that failed.
+        note: Option<(String, Tone)>,
     },
     /// A job that failed or was cancelled.
     Failed {
@@ -103,14 +110,21 @@ pub enum Inspector {
         rows: Vec<usize>,
         /// The kinds in words: "3 images, 1 video".
         kinds: String,
-        /// The formats every selected file can become, none suggested.
+        /// At most [`MAX_TARGETS`] of the formats every selected file can
+        /// become, none suggested, the most popular first.
         targets: Vec<Target>,
+        /// Whether they share more formats than `targets` shows.
+        more: bool,
         /// When `targets` is empty: why, and what to do about it.
         none_shared: Option<String>,
         /// When `targets` is empty and there is more than one kind of file:
         /// each kind's type code and how many files, most files first and a
         /// tie in the order they were met. Empty otherwise.
         offered: Vec<(String, usize)>,
+        /// When every file waits on the same helper app that isn't
+        /// installed: the button that opens its download page ("Get
+        /// FFmpeg"), in place of the kinds.
+        helper: Option<&'static str>,
     },
 }
 
@@ -124,6 +138,8 @@ pub enum Kept {
     /// Dragged out and dropped somewhere Kiln doesn't know: there is
     /// nothing to save and no folder to show.
     Dropped,
+    /// Kiln held it, and it isn't there any more: nothing to export.
+    Gone,
 }
 
 /// The most targets the inspector lists before More.
@@ -186,6 +202,9 @@ pub struct Lookups<'a> {
     pub kind_of: &'a dyn Fn(&Entry) -> Option<Kind>,
     /// How big the file at a path is, if it can be read.
     pub size_of: &'a dyn Fn(&Path) -> Option<u64>,
+    /// The note standing in for a row's own line, by the row's file, and
+    /// its tone: see [`crate::model::Notes`].
+    pub note_of: &'a dyn Fn(&Path) -> Option<(String, Tone)>,
 }
 
 /// What the inspector says for the files selected in `files`. `habits`
@@ -227,6 +246,9 @@ fn one(row: usize, e: &Entry, look: &Lookups, habits: &Habits) -> Inspector {
             // A file action (Move) leaves nothing in the holding folder:
             // the file is where it went, and its size is no result to compare.
             let in_place = matches!(action, Action::File(_));
+            // The row's note stands in for its line: the panel says it too.
+            let note = (look.note_of)(&e.path);
+            let gone = note.as_ref().is_some_and(|(line, _)| line == GONE);
             let kept = if in_place {
                 // The moved file's own folder.
                 if e.folder.is_empty() {
@@ -238,6 +260,8 @@ fn one(row: usize, e: &Entry, look: &Lookups, habits: &Habits) -> Inspector {
                 Kept::InFolder
             } else if saved.is_some() {
                 Kept::Dropped
+            } else if gone {
+                Kept::Gone
             } else {
                 Kept::Held
             };
@@ -253,6 +277,7 @@ fn one(row: usize, e: &Entry, look: &Lookups, habits: &Habits) -> Inspector {
                 result: e.results_named().unwrap_or_else(|| e.name.clone()),
                 change,
                 kept,
+                note,
             }
         }
         // A cancelled file has the same way forward as a failed one.
@@ -294,8 +319,8 @@ fn waiting(row: usize, e: &Entry, habits: &Habits) -> Inspector {
     lines.push(("Folder", e.folder_name()));
 
     // The suggestion first, then what is usually picked for this type of
-    // file, then the rest as the row has them. The row lists codes
-    // ("WEBP"); the rest of Kiln speaks extensions.
+    // file, then the rest as the wheel ranks them, so the two agree. The
+    // row lists codes ("WEBP"); the rest of Kiln speaks extensions.
     let offered: Vec<String> = e.targets.iter().map(|t| t.to_ascii_lowercase()).collect();
     let suggested = match e.suggestion.as_ref().map(|s| &s.action) {
         Some(Suggested::Convert(ext)) => {
@@ -313,11 +338,14 @@ fn waiting(row: usize, e: &Entry, habits: &Habits) -> Inspector {
     for ext in habits.ranked(&from) {
         take(&mut order, &offered, &ext);
     }
-    for ext in &offered {
+    let mut rest = offered.clone();
+    sort_popular(&mut rest);
+    for ext in &rest {
         take(&mut order, &offered, ext);
     }
 
     let more = order.len() > MAX_TARGETS;
+    let order_empty = order.is_empty();
     let targets = order
         .into_iter()
         .take(MAX_TARGETS)
@@ -337,13 +365,18 @@ fn waiting(row: usize, e: &Entry, habits: &Habits) -> Inspector {
             }
         })
         .collect();
+    let helper = e.needs_helper().map(get_label);
+    // With nothing to offer, not even a helper app to get, it says why, as
+    // its row does, where what the format is would be.
+    let reason = (order_empty && helper.is_none()).then(|| (e.reach(), e.line().1));
     Inspector::Waiting {
         row,
-        what: describe_format(&e.code),
+        what: describe_format(&e.code).filter(|_| reason.is_none()),
         facts: lines,
         targets,
         more,
-        helper: e.needs_helper().map(get_label),
+        helper,
+        reason,
     }
 }
 
@@ -351,9 +384,10 @@ fn several(rows: &[usize], entries: &[Entry], look: &Lookups) -> Inspector {
     let picked: Vec<&Entry> = rows.iter().map(|&i| &entries[i]).collect();
     let kinds: Vec<Option<Kind>> = picked.iter().map(|e| (look.kind_of)(e)).collect();
 
-    // What every file can become, in the first file's order. Each file's
-    // codes are lowercased once, into a set the shared ones are checked
-    // against, and once nothing is shared the rest aren't looked at.
+    // What every file can become. Each file's codes are lowercased once,
+    // into a set the shared ones are checked against, and once nothing is
+    // shared the rest aren't looked at. Then they are ranked as the wheel
+    // ranks them.
     let mut shared: Vec<String> = vec![];
     for t in &picked[0].targets {
         let ext = t.to_ascii_lowercase();
@@ -370,11 +404,21 @@ fn several(rows: &[usize], entries: &[Entry], look: &Lookups) -> Inspector {
         theirs.extend(e.targets.iter().map(|t| t.to_ascii_lowercase()));
         shared.retain(|ext| theirs.contains(ext));
     }
+    sort_popular(&mut shared);
+
+    // Every file waiting on the same helper app that isn't installed: what
+    // the wheel says for them, and the button that gets it.
+    let first_helper = picked[0].needs_helper();
+    let helper = first_helper.filter(|&b| picked.iter().all(|e| e.needs_helper() == Some(b)));
 
     // With nothing in common, the kinds present, most files first and a
     // tie in the order they were met, as the wheel says it. With only one
     // kind there is none else to narrow to, so none is offered.
-    let (none_shared, offered) = if shared.is_empty() {
+    let (none_shared, offered) = if let Some(backend) = helper {
+        let code = type_code(picked[0]).to_owned();
+        let offer = Offer::NeedsHelper(backend.to_owned(), code);
+        (offer_sentence(WheelKind::Convert, &offer), vec![])
+    } else if shared.is_empty() {
         let mut codes: Vec<(String, usize)> = vec![];
         for e in &picked {
             let code = type_code(e);
@@ -401,6 +445,7 @@ fn several(rows: &[usize], entries: &[Entry], look: &Lookups) -> Inspector {
     Inspector::Several {
         rows: rows.iter().copied().take(3).collect(),
         kinds: kinds_line(&kinds),
+        more: shared.len() > MAX_TARGETS,
         targets: shared
             .into_iter()
             .take(MAX_TARGETS)
@@ -413,6 +458,7 @@ fn several(rows: &[usize], entries: &[Entry], look: &Lookups) -> Inspector {
             .collect(),
         none_shared,
         offered,
+        helper: helper.map(get_label),
     }
 }
 
@@ -434,18 +480,27 @@ impl Inspector {
                 .chain((*more).then_some(C::More))
                 .chain(helper.map(|_| C::GetHelper))
                 .collect(),
-            // The shared formats, or with none, each kind to narrow to.
+            // The shared formats and More; with none, Get for the helper
+            // app they all wait on, or else each kind to narrow to.
             Inspector::Several {
-                targets, offered, ..
-            } => match targets.is_empty() {
-                false => (0..targets.len()).map(C::Target).collect(),
-                true => (0..offered.len()).map(C::Kind).collect(),
+                targets,
+                more,
+                offered,
+                helper,
+                ..
+            } => match (targets.is_empty(), helper) {
+                (false, _) => (0..targets.len())
+                    .map(C::Target)
+                    .chain((*more).then_some(C::More))
+                    .collect(),
+                (true, Some(_)) => vec![C::GetHelper],
+                (true, None) => (0..offered.len()).map(C::Kind).collect(),
             },
             Inspector::Converting { .. } => vec![C::Cancel],
             Inspector::Done { kept, .. } => match kept {
                 Kept::Held => vec![C::Export],
                 Kept::InFolder => vec![C::ShowInFolder],
-                Kept::Dropped => vec![],
+                Kept::Dropped | Kept::Gone => vec![],
             },
             Inspector::Failed { retry, details, .. } => (*retry)
                 .then_some(C::Retry)
@@ -459,7 +514,10 @@ impl Inspector {
     /// and Get as the row's link says it, "Get FFmpeg".
     pub fn label(&self, c: InspectorControl) -> Option<&'static str> {
         match (c, self) {
-            (InspectorControl::GetHelper, Inspector::Waiting { helper, .. }) => *helper,
+            (
+                InspectorControl::GetHelper,
+                Inspector::Waiting { helper, .. } | Inspector::Several { helper, .. },
+            ) => *helper,
             _ => c.label(),
         }
     }
@@ -631,6 +689,10 @@ mod tests {
         None
     }
 
+    fn no_note(_: &Path) -> Option<(String, Tone)> {
+        None
+    }
+
     fn selecting(entries: Vec<Entry>, rows: &[usize]) -> FileList {
         let mut list = FileList::default();
         for (i, e) in entries.into_iter().enumerate() {
@@ -644,6 +706,7 @@ mod tests {
         let look = Lookups {
             kind_of: &kind_by_code,
             size_of: &no_size,
+            note_of: &no_note,
         };
         inspect(list, &look, habits)
     }
@@ -667,12 +730,14 @@ mod tests {
             targets,
             more,
             helper,
+            reason,
         } = i
         else {
             panic!("{i:?}")
         };
         assert_eq!(row, 0);
         assert_eq!(helper, None);
+        assert_eq!(reason, None);
         assert_eq!(what, Some("a lossless image with transparency"));
         assert_eq!(facts[0], ("Size", "2.4 MB".to_owned()));
         assert_eq!(facts[1], ("Pixels", "1600 × 1200".to_owned()));
@@ -722,7 +787,7 @@ mod tests {
     }
 
     #[test]
-    fn without_a_suggestion_or_habit_the_targets_keep_their_order() {
+    fn without_a_suggestion_or_habit_the_targets_come_as_the_wheel_ranks_them() {
         let mut e = harbour();
         e.suggestion = None;
         e.facts = None;
@@ -742,8 +807,9 @@ mod tests {
         // Without facts, only the size and the folder are known.
         let names: Vec<_> = facts.iter().map(|f| f.0).collect();
         assert_eq!(names, ["Size", "Folder"]);
+        // JPG, PDF and WEBP are the wheel's first three of these five.
         let exts: Vec<_> = targets.iter().map(|t| t.ext.as_str()).collect();
-        assert_eq!(exts, ["jpg", "webp", "avif"]);
+        assert_eq!(exts, ["jpg", "pdf", "webp"]);
         assert!(targets.iter().all(|t| !t.suggested && t.estimate.is_none()));
         assert!(more);
         // Three targets or fewer are all shown, and there is no More.
@@ -774,7 +840,7 @@ mod tests {
             panic!()
         };
         let exts: Vec<_> = targets.iter().map(|t| t.ext.as_str()).collect();
-        assert_eq!(exts, ["gif", "jpg", "webp"]);
+        assert_eq!(exts, ["gif", "jpg", "pdf"]);
         assert!(targets.iter().all(|t| !t.suggested));
     }
 
@@ -911,6 +977,7 @@ mod tests {
         let look = Lookups {
             kind_of: &kind_by_code,
             size_of: &seen,
+            note_of: &no_note,
         };
         assert_eq!(
             inspect(&list, &look, &Habits::default()),
@@ -918,7 +985,8 @@ mod tests {
                 row: 0,
                 result: "harbour.webp".to_owned(),
                 change: Some("2.4 MB → 410 KB, 83% smaller".to_owned()),
-                kept: Kept::Held
+                kept: Kept::Held,
+                note: None,
             }
         );
         // Without the output's size there is no before and after.
@@ -928,7 +996,8 @@ mod tests {
                 row: 0,
                 result: "harbour.webp".to_owned(),
                 change: None,
-                kept: Kept::Held
+                kept: Kept::Held,
+                note: None,
             }
         );
         let kept_of = |e: &Entry| {
@@ -981,6 +1050,7 @@ mod tests {
         let look = Lookups {
             kind_of: &kind_by_code,
             size_of: &sized,
+            note_of: &no_note,
         };
         let list = selecting(vec![e.clone()], &[0]);
         let Inspector::Done { result, change, .. } = inspect(&list, &look, &Habits::default())
@@ -1138,17 +1208,22 @@ mod tests {
             rows,
             kinds,
             targets,
+            more,
             none_shared,
             offered,
+            helper,
         } = i
         else {
             panic!("{i:?}")
         };
         assert_eq!(rows, [0, 1, 2]);
         assert_eq!(kinds, "4 images");
-        // The first row's order, the first three, none suggested.
+        // The four they share, as the wheel ranks them: the first three,
+        // none suggested, and More for the fourth.
         let exts: Vec<_> = targets.iter().map(|t| t.ext.as_str()).collect();
-        assert_eq!(exts, ["jpg", "webp", "avif"]);
+        assert_eq!(exts, ["jpg", "webp", "gif"]);
+        assert!(more);
+        assert_eq!(helper, None);
         assert!(targets.iter().all(|t| !t.suggested && t.estimate.is_none()));
         assert_eq!(
             targets[1].name(),
@@ -1169,15 +1244,18 @@ mod tests {
             rows,
             kinds,
             targets,
+            more,
             none_shared,
             offered,
+            helper,
         } = &i
         else {
             panic!("{i:?}")
         };
         assert_eq!(rows, &[0, 1, 2]);
         assert_eq!(kinds, "2 videos, 1 document");
-        assert!(targets.is_empty());
+        assert!(targets.is_empty() && !more);
+        assert_eq!(*helper, None);
         // The phase 3 sentence, with the kinds most files first.
         let mixed = Offer::Mixed(vec![("MP4".to_owned(), 2), ("DOCX".to_owned(), 1)]);
         assert_eq!(
@@ -1228,6 +1306,272 @@ mod tests {
         assert_eq!(i.controls(), []);
     }
     #[test]
+    fn an_mp4_with_no_suggestion_or_habits_is_offered_what_the_wheel_shows_first() {
+        // The registry lists a file's formats alphabetically, which would
+        // put 3GP, AAC and AC3 first. The wheel ranks them by what people
+        // reach for, and the inspector agrees with it.
+        let codes = [
+            "3gp", "aac", "ac3", "aiff", "avi", "flac", "flv", "gif", "m4a", "m4v", "mkv", "mov",
+            "mp3", "mpg", "ogg", "ogv", "opus", "ts", "wav", "webm", "wma", "wmv",
+        ];
+        let e = entry("clip.mp4", "MP4", 40_000_000, &codes);
+        let list = selecting(vec![e], &[0]);
+        let i = inspect_plain(&list, &Habits::default());
+        let Inspector::Waiting { targets, more, .. } = &i else {
+            panic!("{i:?}")
+        };
+        let exts: Vec<_> = targets.iter().map(|t| t.ext.as_str()).collect();
+        assert_eq!(exts, ["mp3", "gif", "wav"]);
+        assert!(*more);
+        // The same order the wheel sorts the same formats in.
+        let mut wheel: Vec<String> = codes.iter().map(|c| (*c).to_owned()).collect();
+        crate::wheel::sort_popular(&mut wheel);
+        assert_eq!(&wheel[..3], exts);
+    }
+
+    #[test]
+    fn three_pngs_share_their_formats_most_popular_first_and_more() {
+        let codes = ["avif", "bmp", "gif", "ico", "jpg", "pdf", "tiff", "webp"];
+        let png = |name: &str| entry(name, "PNG", 1_000, &codes);
+        let list = selecting(vec![png("a.png"), png("b.png"), png("c.png")], &[0, 1, 2]);
+        let i = inspect_plain(&list, &Habits::default());
+        let Inspector::Several {
+            targets,
+            more,
+            none_shared,
+            helper,
+            ..
+        } = &i
+        else {
+            panic!("{i:?}")
+        };
+        let exts: Vec<_> = targets.iter().map(|t| t.ext.as_str()).collect();
+        assert_eq!(exts, ["jpg", "pdf", "webp"]);
+        assert!(*more && none_shared.is_none() && helper.is_none());
+        use InspectorControl as C;
+        assert_eq!(
+            i.controls(),
+            [C::Target(0), C::Target(1), C::Target(2), C::More]
+        );
+        // Three formats or fewer in common are all shown, with no More.
+        let few = |name: &str| entry(name, "PNG", 1_000, &["webp", "gif", "jpg"]);
+        let list = selecting(vec![few("a.png"), few("b.png")], &[0, 1]);
+        let i = inspect_plain(&list, &Habits::default());
+        let Inspector::Several { targets, more, .. } = &i else {
+            panic!("{i:?}")
+        };
+        let exts: Vec<_> = targets.iter().map(|t| t.ext.as_str()).collect();
+        assert_eq!(exts, ["jpg", "webp", "gif"]);
+        assert!(!more);
+    }
+
+    #[test]
+    fn several_files_waiting_on_one_helper_app_offer_to_get_it() {
+        use InspectorControl as C;
+        let needs = |name: &str, code: &str, backend: &str| {
+            let mut e = entry(name, code, 1_000, &[]);
+            e.missing = Some((backend.to_owned(), 12));
+            e
+        };
+        // Two MP4s while FFmpeg is missing: what the wheel would say, and
+        // Get where the kinds would be.
+        let list = selecting(
+            vec![
+                needs("a.mp4", "MP4", "ffmpeg"),
+                needs("b.mp4", "MP4", "ffmpeg"),
+            ],
+            &[0, 1],
+        );
+        let i = inspect_plain(&list, &Habits::default());
+        let Inspector::Several {
+            targets,
+            more,
+            none_shared,
+            offered,
+            helper,
+            ..
+        } = &i
+        else {
+            panic!("{i:?}")
+        };
+        assert!(targets.is_empty() && !more && offered.is_empty());
+        let wheel = Offer::NeedsHelper("ffmpeg".to_owned(), "MP4".to_owned());
+        assert_eq!(
+            none_shared,
+            &crate::wheel::offer_sentence(WheelKind::Convert, &wheel)
+        );
+        assert_eq!(
+            none_shared.as_deref(),
+            Some("MP4 files need FFmpeg, which isn't installed. Use Get FFmpeg to download it.")
+        );
+        assert_eq!(*helper, Some("Get FFmpeg"));
+        assert_eq!(i.controls(), [C::GetHelper]);
+        assert_eq!(i.label(C::GetHelper), Some("Get FFmpeg"));
+
+        // Two types that both wait on FFmpeg: one Get still does it.
+        let list = selecting(
+            vec![
+                needs("a.mkv", "MKV", "ffmpeg"),
+                needs("b.avi", "AVI", "ffmpeg"),
+            ],
+            &[0, 1],
+        );
+        let i = inspect_plain(&list, &Habits::default());
+        assert!(matches!(
+            &i,
+            Inspector::Several { helper: Some("Get FFmpeg"), offered, .. } if offered.is_empty()
+        ));
+        assert_eq!(i.controls(), [C::GetHelper]);
+
+        // Each waiting on a different app: the explanation and the kinds.
+        let list = selecting(
+            vec![
+                needs("a.mkv", "MKV", "ffmpeg"),
+                needs("b.docx", "DOCX", "pandoc"),
+            ],
+            &[0, 1],
+        );
+        let i = inspect_plain(&list, &Habits::default());
+        let Inspector::Several {
+            none_shared,
+            offered,
+            helper,
+            ..
+        } = &i
+        else {
+            panic!("{i:?}")
+        };
+        assert_eq!(*helper, None);
+        assert!(none_shared
+            .as_deref()
+            .unwrap()
+            .starts_with("These files have no format in common"));
+        assert_eq!(offered, &[("MKV".to_owned(), 1), ("DOCX".to_owned(), 1)]);
+        assert_eq!(i.controls(), [C::Kind(0), C::Kind(1)]);
+
+        // One waiting on FFmpeg beside one Kiln can't convert at all: the
+        // helper wouldn't do for both, so no Get.
+        let list = selecting(
+            vec![
+                needs("a.mkv", "MKV", "ffmpeg"),
+                entry("b.xyz", "XYZ", 1_000, &[]),
+            ],
+            &[0, 1],
+        );
+        let i = inspect_plain(&list, &Habits::default());
+        assert!(matches!(&i, Inspector::Several { helper: None, .. }));
+        assert_eq!(i.controls(), [C::Kind(0), C::Kind(1)]);
+    }
+
+    #[test]
+    fn a_done_file_whose_result_is_gone_says_so_and_offers_no_export() {
+        let out = PathBuf::from("held").join("harbour.webp");
+        let mut e = harbour();
+        e.job = JobState::Done {
+            action: Action::Convert("webp".to_owned()),
+            outputs: vec![out],
+            saved: None,
+        };
+        let file = e.path.clone();
+        let list = selecting(vec![e], &[0]);
+        let inspect_noted = |note: Option<(String, Tone)>| {
+            let noted = |p: &Path| note.clone().filter(|_| p == file);
+            let look = Lookups {
+                kind_of: &kind_by_code,
+                size_of: &no_size,
+                note_of: &noted,
+            };
+            inspect(&list, &look, &Habits::default())
+        };
+        // Removed by hand: the row's note, in its tone, and no Export,
+        // which would have nothing to export.
+        let gone = (crate::model::GONE.to_owned(), Tone::Crack);
+        let i = inspect_noted(Some(gone.clone()));
+        let Inspector::Done { kept, note, .. } = &i else {
+            panic!("{i:?}")
+        };
+        assert_eq!(*kept, Kept::Gone);
+        assert_eq!(note.as_ref(), Some(&gone));
+        assert_eq!(i.controls(), []);
+        // An export that failed: its note is said, and Export is still
+        // the way to try again.
+        let failed = ("Couldn't save to photos.".to_owned(), Tone::Crack);
+        let i = inspect_noted(Some(failed.clone()));
+        let Inspector::Done { kept, note, .. } = &i else {
+            panic!("{i:?}")
+        };
+        assert_eq!(*kept, Kept::Held);
+        assert_eq!(note.as_ref(), Some(&failed));
+        assert_eq!(i.controls(), [InspectorControl::Export]);
+        // With no note, the row says its own line, and so does the panel.
+        let i = inspect_noted(None);
+        assert!(matches!(
+            i,
+            Inspector::Done {
+                kept: Kept::Held,
+                note: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_file_with_nothing_to_offer_says_why_as_its_row_does() {
+        // Ruled out on adding: the row's reason, in the row's tone, where
+        // what the format is would be.
+        let mut ruled_out = entry("report.docx", "DOCX", 2_000_000, &[]);
+        ruled_out.check = kiln_core::FileCheck::Mismatch;
+        assert_eq!(ruled_out.line().1, Tone::Crack);
+        let i = inspect_plain(&selecting(vec![ruled_out], &[0]), &Habits::default());
+        let Inspector::Waiting {
+            what,
+            reason,
+            targets,
+            helper,
+            ..
+        } = &i
+        else {
+            panic!("{i:?}")
+        };
+        assert_eq!(
+            reason.as_ref(),
+            Some(&("Isn't really a DOCX file".to_owned(), Tone::Crack))
+        );
+        assert_eq!(*what, None);
+        assert!(targets.is_empty() && helper.is_none());
+        assert_eq!(i.controls(), []);
+        // An empty file says so, without the size its facts already give.
+        let mut empty = entry("blank.png", "PNG", 0, &[]);
+        empty.check = kiln_core::FileCheck::Empty;
+        let i = inspect_plain(&selecting(vec![empty], &[0]), &Habits::default());
+        assert!(matches!(
+            &i,
+            Inspector::Waiting { reason: Some((r, Tone::Crack)), .. } if r == "Empty file (0 bytes)"
+        ));
+        // A type Kiln has no formats for, said as quietly as the row does.
+        let none = entry("notes.xyz", "XYZ", 1_000, &[]);
+        let i = inspect_plain(&selecting(vec![none], &[0]), &Habits::default());
+        assert!(matches!(
+            &i,
+            Inspector::Waiting { reason: Some((r, Tone::Muted)), .. } if r == "No formats for this type"
+        ));
+        // A file with formats, or one with Get, has no reason to give.
+        let i = inspect_plain(&selecting(vec![harbour()], &[0]), &Habits::default());
+        assert!(matches!(i, Inspector::Waiting { reason: None, .. }));
+        let mut needs = entry("clip.mkv", "MKV", 1_000, &[]);
+        needs.missing = Some(("ffmpeg".to_owned(), 12));
+        let i = inspect_plain(&selecting(vec![needs], &[0]), &Habits::default());
+        assert!(matches!(
+            i,
+            Inspector::Waiting {
+                reason: None,
+                helper: Some(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn nothing_selected_is_nothing() {
         let habits = Habits::default();
         assert_eq!(
@@ -1255,6 +1599,7 @@ mod tests {
             targets: (0..n).map(|i| target(&format!("f{i}"))).collect(),
             more,
             helper: None,
+            reason: None,
         };
         assert_eq!(
             waiting(3, true).controls(),
@@ -1282,6 +1627,7 @@ mod tests {
             result: "a.webp".to_owned(),
             change: None,
             kept,
+            note: None,
         };
         assert_eq!(done(Kept::Held).controls(), [C::Export]);
         assert_eq!(done(Kept::InFolder).controls(), [C::ShowInFolder]);
@@ -1304,6 +1650,8 @@ mod tests {
             targets,
             none_shared: None,
             offered,
+            more: false,
+            helper: None,
         };
         assert_eq!(
             several(vec![target("jpg"), target("gif")], vec![]).controls(),
@@ -1314,6 +1662,22 @@ mod tests {
             several(vec![], vec![("MP4".to_owned(), 2), ("DOCX".to_owned(), 1)]).controls(),
             [C::Kind(0), C::Kind(1)]
         );
+        // More after the shared formats, as for one file.
+        let mut more = several(vec![target("jpg"); 3], vec![]);
+        if let Inspector::Several { more, .. } = &mut more {
+            *more = true;
+        }
+        assert_eq!(
+            more.controls(),
+            [C::Target(0), C::Target(1), C::Target(2), C::More]
+        );
+        // Files all waiting on one helper app have Get, and no kinds.
+        let mut needs = several(vec![], vec![]);
+        if let Inspector::Several { helper, .. } = &mut needs {
+            *helper = Some("Get FFmpeg");
+        }
+        assert_eq!(needs.controls(), [C::GetHelper]);
+        assert_eq!(needs.label(C::GetHelper), Some("Get FFmpeg"));
         assert_eq!(Inspector::Nothing.controls(), []);
     }
 

@@ -1,7 +1,7 @@
 //! The list of dropped files. Platform-independent so it can be tested
 //! anywhere.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -323,6 +323,65 @@ pub const GONE: &str = "The result is no longer there. Convert it again.";
 
 /// A row whose held results a drag moved out.
 pub const DROPPED: &str = "Saved where you dropped it.";
+
+/// Lines that stand in for a row's own second line, by the row's file: an
+/// export that failed, or a held result that's gone. Each change moves
+/// [`Notes::revision`], which the inspector is built from, so the panel
+/// says what the row says and never goes stale.
+#[derive(Debug, Default)]
+pub struct Notes {
+    by_file: HashMap<PathBuf, (String, Tone)>,
+    revision: u64,
+}
+
+impl Notes {
+    /// The note standing in for `file`'s row's line, and its tone.
+    pub fn get(&self, file: &Path) -> Option<&(String, Tone)> {
+        self.by_file.get(file)
+    }
+
+    /// Whether `file`'s note says its held result is gone ([`GONE`]).
+    pub fn gone(&self, file: &Path) -> bool {
+        self.get(file).is_some_and(|(line, _)| line == GONE)
+    }
+
+    /// Put `note` in place of `file`'s row's line.
+    pub fn insert(&mut self, file: PathBuf, note: (String, Tone)) {
+        if self.by_file.get(&file) != Some(&note) {
+            self.by_file.insert(file, note);
+            self.changed();
+        }
+    }
+
+    /// `file`'s row says its own line again.
+    pub fn remove(&mut self, file: &Path) {
+        if self.by_file.remove(file).is_some() {
+            self.changed();
+        }
+    }
+
+    /// Every row says its own line again.
+    pub fn clear(&mut self) {
+        if !self.by_file.is_empty() {
+            self.by_file.clear();
+            self.changed();
+        }
+    }
+
+    /// Moves with every change to the notes, and only then.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Every note, by its row's file, as the rows draw them.
+    pub fn by_file(&self) -> &HashMap<PathBuf, (String, Tone)> {
+        &self.by_file
+    }
+
+    fn changed(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+}
 
 /// The footer when Windows wouldn't start a drag of held results.
 pub const DRAG_FAILED: &str = "Couldn't start the drag.";
@@ -1016,9 +1075,23 @@ impl Entry {
     /// converts to, in the place of what it is, then its size and folder.
     pub fn plain_detail(&self) -> String {
         let folder = self.folder_name();
-        let reach = match self.check {
+        match self.check {
             // Nothing in it: the size would only say the same.
-            FileCheck::Empty => return format!("Empty file (0 bytes)  ·  {folder}"),
+            FileCheck::Empty => format!("{}  ·  {folder}", self.reach()),
+            _ => format!(
+                "{}  ·  {}  ·  {folder}",
+                self.reach(),
+                human_size(self.size)
+            ),
+        }
+    }
+
+    /// The first part of [`Entry::plain_detail`]: what the file converts
+    /// to, or why it converts to nothing ("Converts to 5 formats", "Isn't
+    /// really a DOCX file", "Needs FFmpeg to convert").
+    pub fn reach(&self) -> String {
+        match self.check {
+            FileCheck::Empty => "Empty file (0 bytes)".to_owned(),
             FileCheck::Mismatch => format!("Isn't really a {} file", self.code),
             FileCheck::Unreadable => {
                 "Can't read this file. Check it isn't open in another app.".to_owned()
@@ -1036,8 +1109,7 @@ impl Entry {
                 (1, None) => format!("Converts to {}", self.targets[0]),
                 (n, None) => format!("Converts to {n} formats"),
             },
-        };
-        format!("{reach}  ·  {}  ·  {folder}", human_size(self.size))
+        }
     }
 
     /// The last part of the file's folder: "samples" for
@@ -4318,5 +4390,41 @@ mod tests {
         assert_eq!(human_size(14_200), "14 KB");
         assert_eq!(human_size(3_140_000), "3.1 MB");
         assert_eq!(human_size(2_000_000_000_000_000), "2000 TB");
+    }
+    #[test]
+    fn notes_move_their_revision_with_every_change_and_only_then() {
+        let mut notes = Notes::default();
+        let a = PathBuf::from("a.png");
+        let r0 = notes.revision();
+        // Nothing to remove or clear: nothing changes.
+        notes.remove(&a);
+        notes.clear();
+        assert_eq!(notes.revision(), r0);
+
+        notes.insert(a.clone(), (GONE.to_owned(), Tone::Crack));
+        let r1 = notes.revision();
+        assert_ne!(r1, r0);
+        assert!(notes.gone(&a));
+        assert_eq!(notes.get(&a), Some(&(GONE.to_owned(), Tone::Crack)));
+        // The same note again is no change.
+        notes.insert(a.clone(), (GONE.to_owned(), Tone::Crack));
+        assert_eq!(notes.revision(), r1);
+        // Another note for the same row is.
+        notes.insert(
+            a.clone(),
+            ("Couldn't save to photos.".to_owned(), Tone::Crack),
+        );
+        let r2 = notes.revision();
+        assert_ne!(r2, r1);
+        assert!(!notes.gone(&a));
+
+        notes.remove(&a);
+        assert_ne!(notes.revision(), r2);
+        assert!(notes.get(&a).is_none());
+        notes.insert(a, (GONE.to_owned(), Tone::Crack));
+        let r3 = notes.revision();
+        notes.clear();
+        assert_ne!(notes.revision(), r3);
+        assert!(notes.by_file().is_empty());
     }
 }

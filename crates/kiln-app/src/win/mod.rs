@@ -766,7 +766,7 @@ struct App {
     last_export: Option<PathBuf>,
     /// Lines that stand in for a row's own second line, by the row's file:
     /// an export that failed, or a held result that's gone.
-    notes: HashMap<PathBuf, (String, Tone)>,
+    notes: model::Notes,
     export_hover: bool,
     export_pressed: bool,
     /// How many held results Windows was last told about, to explain why
@@ -896,8 +896,8 @@ struct App {
 }
 
 /// What the inspector is built from: the list's revision, the window's
-/// own (`App::panel_rev`) and the window's size in DIPs.
-type PanelInputs = (u64, u64, (f32, f32));
+/// own (`App::panel_rev`), the rows' notes' and the window's size in DIPs.
+type PanelInputs = (u64, u64, u64, (f32, f32));
 
 /// A job's news as the runner's thread posts it: the event and, for a
 /// finished job, its results' sizes, read there and then.
@@ -1091,15 +1091,8 @@ impl App {
     /// Export all skips them.
     fn export_all_count(&self) -> usize {
         let entries = self.files.entries();
-        self.files.held_count_except(
-            |i| {
-                !self
-                    .notes
-                    .get(&entries[i].path)
-                    .is_some_and(|(l, _)| l == model::GONE)
-            },
-            &self.saving_files(),
-        )
+        self.files
+            .held_count_except(|i| !self.notes.gone(&entries[i].path), &self.saving_files())
     }
 
     fn invalidate(&self) {
@@ -1337,6 +1330,7 @@ impl App {
         let inputs = (
             self.files.revision(),
             self.panel_rev,
+            self.notes.revision(),
             self.renderer.size_dips(),
         );
         if self.panel_built == Some(inputs) {
@@ -1350,11 +1344,14 @@ impl App {
         let model = {
             let kiln = &self.kiln;
             let sizes = &self.result_sizes;
+            let notes = &self.notes;
             let kind = |e: &model::Entry| kind_of(kiln, e);
             let size = |p: &Path| sizes.get(p).copied();
+            let note = |p: &Path| notes.get(p).cloned();
             let look = insp::Lookups {
                 kind_of: &kind,
                 size_of: &size,
+                note_of: &note,
             };
             insp::inspect(&self.files, &look, &self.settings.habits)
         };
@@ -1636,8 +1633,9 @@ impl App {
     /// Do what inspector control `c` is for, from a click, a key
     /// (`keyboard`) or an assistive tool. A format converts the files the
     /// inspector shows, counted in habits as a pick from the wheel is; More
-    /// opens the format choice; a kind narrows the selection to its files;
-    /// the buttons do what the row's own would.
+    /// opens the format choice for them; a kind narrows the selection to
+    /// its files; Get opens the download page of the helper app they wait
+    /// on; the buttons do what the row's own would.
     fn panel_act(&mut self, c: InspectorControl, keyboard: bool) {
         use insp::Inspector as I;
         use InspectorControl as C;
@@ -1669,17 +1667,31 @@ impl App {
                     self.open_choice(WheelKind::Convert, vec![file], from, keyboard);
                 }
             }
+            // Every selected file, as their shared formats are.
+            (C::More, I::Several { rows, .. }) => {
+                let from = at
+                    .map(|r| (r.x + r.w / 2.0, r.y + r.h / 2.0))
+                    .or_else(|| rows.first().map(|&i| self.row_centre(i)));
+                if let Some(from) = from {
+                    let paths = self.selected_paths();
+                    self.open_choice(WheelKind::Convert, paths, from, keyboard);
+                }
+            }
             (C::Kind(k), I::Several { offered, .. }) => {
                 if let Some((code, _)) = offered.get(k) {
                     self.select_kind(code, keyboard);
                 }
             }
-            // The row's own way to get its helper app.
-            (C::GetHelper, I::Waiting { row, .. }) => {
-                let backend = self
-                    .files
-                    .entries()
-                    .get(*row)
+            // The row's own way to get its helper app. Several files are
+            // offered Get only when they all wait on the same one.
+            (C::GetHelper, I::Waiting { .. } | I::Several { .. }) => {
+                let row = match &model {
+                    I::Waiting { row, .. } => Some(*row),
+                    I::Several { rows, .. } => rows.first().copied(),
+                    _ => None,
+                };
+                let backend = row
+                    .and_then(|i| self.files.entries().get(i))
                     .and_then(|e| e.needs_helper())
                     .map(str::to_owned);
                 if let Some(backend) = backend {
@@ -2405,7 +2417,7 @@ impl App {
             .map(|e| (e.path.clone(), e.is_gone(|p| p.exists())))
             .collect();
         for (path, gone) in rows {
-            let noted = self.notes.get(&path).is_some_and(|(l, _)| l == model::GONE);
+            let noted = self.notes.gone(&path);
             if gone && !noted {
                 self.notes
                     .insert(path, (model::GONE.to_owned(), Tone::Crack));
@@ -2625,11 +2637,7 @@ impl App {
         };
         let source = e.path.clone();
         self.check_gone();
-        if self
-            .notes
-            .get(&source)
-            .is_some_and(|(l, _)| l == model::GONE)
-        {
+        if self.notes.gone(&source) {
             return;
         }
         // One dialog for one result or many: the folder to save into.
@@ -2702,11 +2710,7 @@ impl App {
         let entries = self.files.entries();
         self.files
             .held_files(|i| {
-                mask.get(i).copied().unwrap_or(false)
-                    && !self
-                        .notes
-                        .get(&entries[i].path)
-                        .is_some_and(|(l, _)| l == model::GONE)
+                mask.get(i).copied().unwrap_or(false) && !self.notes.gone(&entries[i].path)
             })
             .into_iter()
             .filter(|f| !saving.contains(f))
@@ -6190,7 +6194,7 @@ impl App {
             selection_y: (selected.len() == 1).then(|| self.motion.selection_at(now)),
             button: &button,
             entries,
-            notes: &self.notes,
+            notes: self.notes.by_file(),
             saving: &saving,
             export_all: export_all.as_deref(),
             selected,
@@ -6847,7 +6851,7 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         dpi,
         holding,
         last_export: None,
-        notes: HashMap::new(),
+        notes: model::Notes::default(),
         export_hover: false,
         export_pressed: false,
         shutdown_told: 0,

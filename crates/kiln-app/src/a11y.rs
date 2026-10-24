@@ -10,12 +10,12 @@ use std::time::{Duration, Instant};
 use kiln_core::Preset;
 
 use crate::help::HelpSection;
-use crate::inspector::{Inspector, InspectorControl, Kept, Target, NOTHING_TITLE};
+use crate::inspector::{Inspector, InspectorControl, Target, NOTHING_TITLE};
 use crate::layout::{
     self, Control, DialogButton, InspectorLayout, Rect, SettingsLayout, SettingsRow, SettingsTab,
     SheetControl, SheetLayout,
 };
-use crate::model::{Entry, FocusButton, JobState, DRAG_HINT};
+use crate::model::{Entry, FocusButton, JobState};
 use crate::quality::{QualityDefaults, Value};
 use crate::settings::{KeyMap, ThemeChoice};
 use crate::ways_in::EmptyLines;
@@ -624,7 +624,8 @@ pub const INSPECTOR_NAME: &str = "Selected file";
 /// ("Convert to WEBP, a small image for the web, about 410 KB"), a kind
 /// by what choosing it does, and the rest with the file they act on:
 /// "Cancel harbour.png", or the result for Export and Show in folder,
-/// "Export harbour.webp".
+/// "Export harbour.webp". Several files' More is named with their kinds,
+/// "More formats for 3 images".
 pub fn inspector_name(c: InspectorControl, model: &Inspector, file: &str) -> String {
     use InspectorControl as C;
     let result = match model {
@@ -641,6 +642,7 @@ pub fn inspector_name(c: InspectorControl, model: &Inspector, file: &str) -> Str
             None => String::new(),
         },
         (C::Target(_) | C::Kind(_), _) => String::new(),
+        (C::More, Inspector::Several { kinds, .. }) => format!("More formats for {kinds}"),
         (C::More, _) => format!("More formats for {file}"),
         (C::Cancel, _) => format!("Cancel {file}"),
         (C::Export, _) => format!("Export {result}"),
@@ -967,9 +969,15 @@ fn inspector(input: &Input, ins: &InspectorIn) -> Node {
             lines.push((input.empty.keys.clone(), line(0)));
             lines.push((input.empty.privacy.to_owned(), line(1)));
         }
-        Inspector::Waiting { what, facts, .. } => {
+        Inspector::Waiting {
+            what,
+            facts,
+            reason,
+            ..
+        } => {
             lines.push((ins.file.to_owned(), l.title));
-            lines.extend(what.map(|w| (w.to_owned(), line(0))));
+            let first = reason.as_ref().map(|(r, _)| r.as_str()).or(*what);
+            lines.extend(first.map(|w| (w.to_owned(), line(0))));
             for ((label, value), r) in facts.iter().zip(&l.facts) {
                 lines.push((format!("{label} {value}"), *r));
             }
@@ -983,14 +991,14 @@ fn inspector(input: &Input, ins: &InspectorIn) -> Node {
             result,
             change,
             kept,
+            note,
             ..
         } => {
             lines.push((ins.file.to_owned(), l.title));
             lines.push((result.clone(), line(0)));
             lines.extend(change.as_ref().map(|c| (c.clone(), line(1))));
-            if *kept == Kept::Held {
-                lines.push((DRAG_HINT.to_owned(), line(2)));
-            }
+            // The row's note, or the drag-out hint while it is held.
+            lines.extend(layout::done_note(note, *kept).map(|n| (n.to_owned(), line(2))));
         }
         Inspector::Failed { sentence, .. } => {
             lines.push((ins.file.to_owned(), l.title));
@@ -2280,6 +2288,7 @@ mod tests {
             ],
             more: true,
             helper: None,
+            reason: None,
         }
     }
 
@@ -2389,6 +2398,7 @@ mod tests {
             result: "voice memo.mp3".to_owned(),
             change: None,
             kept,
+            note: None,
         };
         let done_held = done(Kept::Held);
         assert_eq!(
@@ -2434,6 +2444,8 @@ mod tests {
             targets: vec![],
             none_shared: Some("These files have no format in common.".to_owned()),
             offered: vec![("MP4".to_owned(), 2), ("DOCX".to_owned(), 1)],
+            more: false,
+            helper: None,
         };
         assert_eq!(
             inspector_name(C::Kind(0), &several, ""),
@@ -2451,6 +2463,7 @@ mod tests {
             targets: vec![],
             more: false,
             helper: Some("Get FFmpeg"),
+            reason: None,
         };
         assert_eq!(
             inspector_name(C::GetHelper, &needs, "clip.mkv"),
@@ -2473,6 +2486,7 @@ mod tests {
             targets: vec![],
             more: false,
             helper: Some("Get FFmpeg"),
+            reason: None,
         };
         let size = (1300.0, 760.0);
         let shape = InspectorShape::Waiting {
@@ -2509,6 +2523,208 @@ mod tests {
         i.focus_button = Some(FocusButton::Inspector(C::GetHelper));
         let t = tree(&i);
         assert_eq!(t.focused().unwrap().id, Id::InspectorControl(C::GetHelper));
+    }
+
+    #[test]
+    fn several_files_waiting_on_one_helper_app_have_get_in_the_tree() {
+        use InspectorControl as C;
+        let lines = empty_lines(&Settings::default());
+        let es = [
+            entry("a.mp4", JobState::Idle),
+            entry("b.mp4", JobState::Idle),
+        ];
+        let model = Inspector::Several {
+            rows: vec![0, 1],
+            kinds: "2 videos".to_owned(),
+            targets: vec![],
+            more: false,
+            none_shared: Some(
+                "MP4 files need FFmpeg, which isn't installed. Use Get FFmpeg to download it."
+                    .to_owned(),
+            ),
+            offered: vec![],
+            helper: Some("Get FFmpeg"),
+        };
+        let size = (1300.0, 760.0);
+        let shape = InspectorShape::Several {
+            targets: 0,
+            none_h: 40.0,
+            more: None,
+            buttons: 1,
+        };
+        let (rect, il) = inspector_at(size, es.len(), shape);
+        // Get takes the button slot, where the kinds would be.
+        assert_eq!(
+            inspector_controls(&model, &il),
+            [(C::GetHelper, il.buttons[0])]
+        );
+        let mut i = input(&lines, rows(&es));
+        i.size = size;
+        i.row_links = false;
+        i.inspector = Some(InspectorIn {
+            rect,
+            model: &model,
+            layout: &il,
+            file: "",
+        });
+        let t = tree(&i);
+        sound(&t);
+        let pane = t.find(&Id::Inspector).unwrap();
+        named(
+            pane,
+            Role::Text,
+            "MP4 files need FFmpeg, which isn't installed. Use Get FFmpeg to download it.",
+        );
+        let get = named(&t, Role::Button, "Get FFmpeg");
+        assert_eq!(get.id, Id::InspectorControl(C::GetHelper));
+        assert_eq!(get.rect, il.buttons[0]);
+        assert!(get.states.focusable && get.patterns().invoke);
+        // Tab onto it: it has the focus.
+        i.focus_button = Some(FocusButton::Inspector(C::GetHelper));
+        let t = tree(&i);
+        assert_eq!(t.focused().unwrap().id, Id::InspectorControl(C::GetHelper));
+    }
+
+    #[test]
+    fn several_files_have_more_formats_after_their_shared_ones() {
+        use InspectorControl as C;
+        let lines = empty_lines(&Settings::default());
+        let es = [
+            entry("a.png", JobState::Idle),
+            entry("b.png", JobState::Idle),
+            entry("c.png", JobState::Idle),
+        ];
+        let target = |ext: &str| Target {
+            ext: ext.to_owned(),
+            why: kiln_core::describe_format(ext),
+            estimate: None,
+            suggested: false,
+        };
+        let model = Inspector::Several {
+            rows: vec![0, 1, 2],
+            kinds: "3 images".to_owned(),
+            targets: vec![target("jpg"), target("pdf"), target("webp")],
+            more: true,
+            none_shared: None,
+            offered: vec![],
+            helper: None,
+        };
+        let size = (1300.0, 760.0);
+        let shape = InspectorShape::Several {
+            targets: 3,
+            none_h: 0.0,
+            more: Some(MORE_W),
+            buttons: 0,
+        };
+        let (rect, il) = inspector_at(size, es.len(), shape);
+        let mut i = input(&lines, rows(&es));
+        i.size = size;
+        i.row_links = false;
+        i.inspector = Some(InspectorIn {
+            rect,
+            model: &model,
+            layout: &il,
+            file: "",
+        });
+        let t = tree(&i);
+        sound(&t);
+        let more = named(&t, Role::Button, "More formats for 3 images");
+        assert_eq!(more.id, Id::InspectorControl(C::More));
+        assert_eq!(Some(more.rect), il.more);
+        // In reading order: the three formats, then More.
+        let pane = t.find(&Id::Inspector).unwrap();
+        let order: Vec<&Id> = pane
+            .children
+            .iter()
+            .filter(|c| c.role == Role::Button)
+            .map(|c| &c.id)
+            .collect();
+        assert_eq!(
+            order,
+            [C::Target(0), C::Target(1), C::Target(2), C::More]
+                .map(Id::InspectorControl)
+                .iter()
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn the_inspector_reads_the_rows_own_note_and_reason() {
+        use InspectorControl as C;
+        let lines = empty_lines(&Settings::default());
+        let es = [entry("harbour.png", JobState::Idle)];
+        let size = (1300.0, 760.0);
+        let read = |model: &Inspector, shape: InspectorShape| {
+            let (rect, il) = inspector_at(size, es.len(), shape);
+            let mut i = input(&lines, rows(&es));
+            i.size = size;
+            i.row_links = false;
+            i.inspector = Some(InspectorIn {
+                rect,
+                model,
+                layout: &il,
+                file: "harbour.png",
+            });
+            let t = tree(&i);
+            sound(&t);
+            (t, il)
+        };
+        // A held result removed by hand: the row's note where the drag-out
+        // hint would be, and no Export.
+        let gone = Inspector::Done {
+            row: 0,
+            result: "harbour.webp".to_owned(),
+            change: None,
+            kept: Kept::Gone,
+            note: Some((crate::model::GONE.to_owned(), crate::model::Tone::Crack)),
+        };
+        let (t, il) = read(
+            &gone,
+            InspectorShape::Done {
+                change: false,
+                drag_h: 34.0,
+                buttons: 0,
+            },
+        );
+        let pane = t.find(&Id::Inspector).unwrap();
+        assert_eq!(
+            named(pane, Role::Text, crate::model::GONE).rect,
+            il.line(2).unwrap()
+        );
+        assert!(pane
+            .children
+            .iter()
+            .all(|c| c.name != crate::model::DRAG_HINT));
+        assert!(t.find(&Id::InspectorControl(C::Export)).is_none());
+        // A file ruled out on adding: why, where what it is would be.
+        let ruled_out = Inspector::Waiting {
+            row: 0,
+            what: None,
+            facts: vec![("Size", "2.0 MB".to_owned())],
+            targets: vec![],
+            more: false,
+            helper: None,
+            reason: Some((
+                "Isn't really a DOCX file".to_owned(),
+                crate::model::Tone::Crack,
+            )),
+        };
+        let (t, il) = read(
+            &ruled_out,
+            InspectorShape::Waiting {
+                what_h: 20.0,
+                facts: 1,
+                targets: 0,
+                more: None,
+                buttons: 0,
+            },
+        );
+        let pane = t.find(&Id::Inspector).unwrap();
+        assert_eq!(
+            named(pane, Role::Text, "Isn't really a DOCX file").rect,
+            il.line(0).unwrap()
+        );
+        assert!(pane.children.iter().all(|c| c.role != Role::Button));
     }
 
     #[test]
@@ -2673,6 +2889,7 @@ mod tests {
             result: "harbour.webp".to_owned(),
             change: Some("2.4 MB → 410 KB, 83% smaller".to_owned()),
             kept: Kept::Held,
+            note: None,
         };
         let done_shape = InspectorShape::Done {
             change: true,
@@ -2711,12 +2928,16 @@ mod tests {
             targets: vec![],
             none_shared: Some("These files have no format in common.".to_owned()),
             offered: vec![("MP4".to_owned(), 2), ("DOCX".to_owned(), 1)],
+            more: false,
+            helper: None,
         };
         let pane = read(
             &several,
             InspectorShape::Several {
                 targets: 2,
                 none_h: 20.0,
+                more: None,
+                buttons: 0,
             },
             "",
         );
@@ -2785,6 +3006,7 @@ mod tests {
             result: "harbour.webp".to_owned(),
             change: Some("2.4 MB → 410 KB, 83% smaller".to_owned()),
             kept: Kept::Held,
+            note: None,
         };
         let finished = InspectorShape::Done {
             change: true,

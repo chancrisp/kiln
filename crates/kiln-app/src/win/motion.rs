@@ -834,6 +834,7 @@ mod tests {
             targets: vec![],
             more: false,
             helper: None,
+            reason: None,
         }
     }
 
@@ -871,6 +872,7 @@ mod tests {
             result: "b.webp".to_owned(),
             change: None,
             kept,
+            note: None,
         };
         assert!(!new_content(
             &shows(&done(Kept::Held), ["b.png"]),
@@ -900,6 +902,8 @@ mod tests {
             targets: vec![],
             none_shared: None,
             offered: vec![],
+            more: false,
+            helper: None,
         };
         assert!(!new_content(
             &shows(&several("2 files"), ["a.png", "b.png"]),

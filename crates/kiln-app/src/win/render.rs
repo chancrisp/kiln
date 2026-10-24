@@ -21,7 +21,7 @@ use kiln_core::{Kind, Preset};
 use crate::anim;
 use crate::help::{self, HelpSection, Placed};
 use crate::icons::{self, Cmd, Icon, Style};
-use crate::inspector::{self as insp, Inspector, InspectorControl, Kept};
+use crate::inspector::{self as insp, Inspector, InspectorControl};
 use crate::layout::{
     self, Control, DialogButton, InspectorLayout, Layout, Rect, SettingsLayout, SettingsTab,
     SheetControl, SheetLayout, Wrapped, CHIP_HEIGHT, CHIP_MIN_WIDTH, PROGRESS_HEIGHT, ROW_HEIGHT,
@@ -2087,6 +2087,12 @@ impl Draw<'_> {
                 self.label(text, format, &at, c, 1.0);
             }
         };
+        // A line in the tone the row says it in.
+        let toned = |tone: &Tone| match tone {
+            Tone::Crack => p.crack,
+            Tone::Result => p.text,
+            Tone::Muted => muted,
+        };
         match iv.model {
             Inspector::Nothing => {
                 if l.hero.h > 0.0 {
@@ -2107,11 +2113,19 @@ impl Draw<'_> {
                 say(1, privacy, &self.text.caption_block_center, muted);
             }
             Inspector::Waiting {
-                row, what, facts, ..
+                row,
+                what,
+                facts,
+                reason,
+                ..
             } => {
                 self.one_file(*row, l, v)?;
-                if let Some(what) = what {
-                    say(0, what, &self.text.caption_block, muted);
+                // Why it has nothing to offer, as its row says it, or what
+                // the format is.
+                match (reason, what) {
+                    (Some((why, tone)), _) => say(0, why, &self.text.caption_block, toned(tone)),
+                    (None, Some(what)) => say(0, what, &self.text.caption_block, muted),
+                    (None, None) => {}
                 }
                 for ((label, value), f) in facts.iter().zip(&l.facts) {
                     self.label(label, &self.text.caption, f, muted, 1.0);
@@ -2137,6 +2151,7 @@ impl Draw<'_> {
                 result,
                 change,
                 kept,
+                note,
             } => {
                 self.one_file(*row, l, v)?;
                 if l.hero.h > 0.0 {
@@ -2149,8 +2164,10 @@ impl Draw<'_> {
                 if let Some(change) = change {
                     say(1, change, &self.text.caption, muted);
                 }
-                if *kept == Kept::Held {
-                    say(2, model::DRAG_HINT, &self.text.caption_block, muted);
+                // The row's note in its tone, or the drag-out hint.
+                if let Some(said) = layout::done_note(note, *kept) {
+                    let c = note.as_ref().map_or(muted, |(_, tone)| toned(tone));
+                    say(2, said, &self.text.caption_block, c);
                 }
             }
             Inspector::Failed {
@@ -2161,12 +2178,7 @@ impl Draw<'_> {
             } => {
                 self.one_file(*row, l, v)?;
                 // In the tone the row says it in.
-                let c = match tone {
-                    Tone::Crack => p.crack,
-                    Tone::Result => p.text,
-                    Tone::Muted => muted,
-                };
-                say(0, sentence, &self.text.caption_block, c);
+                say(0, sentence, &self.text.caption_block, toned(tone));
             }
             Inspector::Several {
                 rows,

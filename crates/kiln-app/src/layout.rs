@@ -4,7 +4,7 @@
 use kiln_core::{Knob, Preset};
 
 use crate::inspector::{Inspector, InspectorControl, Kept, NOTHING_TITLE};
-use crate::model::DRAG_HINT;
+use crate::model::{Tone, DRAG_HINT};
 use crate::quality::DefaultSetting;
 use crate::settings::{Engine, ThemeChoice};
 use crate::theme::shape::{GRID, PANEL_PADDING};
@@ -1375,7 +1375,8 @@ pub enum InspectorShape {
         privacy_h: f32,
     },
     /// One file nothing has been done to. `what_h` is the height of what
-    /// the format is, wrapped (0 for none); `facts` the labelled facts;
+    /// the format is, or why it has nothing to offer, wrapped (0 for
+    /// none); `facts` the labelled facts;
     /// `targets` the formats offered; `more` how wide More's words are,
     /// when it follows them. Then its `buttons`, where the formats would
     /// be: Get, for a file waiting on its helper app.
@@ -1391,9 +1392,9 @@ pub enum InspectorShape {
     /// (Cancel). Without the percentage its place is taken by nothing.
     Converting { figure: bool, buttons: usize },
     /// A finished job. Its body holds a 20 DIP line for the result, one
-    /// for the change when `change`, and then the hint that the result can
-    /// be dragged out, `drag_h` tall once wrapped (0 for none); then its
-    /// `buttons`.
+    /// for the change when `change`, and then the row's note or else the
+    /// hint that the result can be dragged out, `drag_h` tall once wrapped
+    /// (0 for neither); then its `buttons`.
     Done {
         change: bool,
         drag_h: f32,
@@ -1405,8 +1406,15 @@ pub enum InspectorShape {
     /// Several files. `targets` counts whichever list is shown: the
     /// formats they all share or, when they share none, the kinds
     /// offered. `none_h` is the height of the sentence saying why there
-    /// is no shared format (0 when there is one).
-    Several { targets: usize, none_h: f32 },
+    /// is no shared format (0 when there is one); `more` how wide More's
+    /// words are, when it follows the shared formats; then its `buttons`:
+    /// Get, when they all wait on one helper app.
+    Several {
+        targets: usize,
+        none_h: f32,
+        more: Option<f32>,
+        buttons: usize,
+    },
 }
 
 /// Where the inspector's parts go. A part the shape doesn't have, or that
@@ -1422,11 +1430,11 @@ pub struct InspectorLayout {
     /// The texts under the title, one rect each, in the order the shape
     /// has them whether or not there is one to show:
     /// - Nothing: the key hint, then the privacy line;
-    /// - Waiting: what the format is;
+    /// - Waiting: what the format is, or why it has nothing to offer;
     /// - Converting: the 40 DIP percentage (0 tall without one), then the
     ///   20 DIP time line;
-    /// - Done: the 20 DIP result, the 20 DIP change, then the drag-out
-    ///   hint;
+    /// - Done: the 20 DIP result, the 20 DIP change, then the row's note
+    ///   or the drag-out hint;
     /// - Failed: the sentence;
     /// - Several: why the files share no format.
     ///
@@ -1520,9 +1528,13 @@ pub fn inspector_shape(
             facts,
             targets,
             more,
+            reason,
             ..
         } => InspectorShape::Waiting {
-            what_h: wrapped(*what, Wrapped::Body(BODY_LINES)),
+            what_h: wrapped(
+                reason.as_ref().map(|(r, _)| r.as_str()).or(*what),
+                Wrapped::Body(BODY_LINES),
+            ),
             facts: facts.len(),
             targets: targets.len(),
             more: more.then_some(more_w),
@@ -1532,12 +1544,11 @@ pub fn inspector_shape(
             figure: percent.is_some(),
             buttons,
         },
-        Inspector::Done { change, kept, .. } => InspectorShape::Done {
+        Inspector::Done {
+            change, kept, note, ..
+        } => InspectorShape::Done {
             change: change.is_some(),
-            drag_h: wrapped(
-                (*kept == Kept::Held).then_some(DRAG_HINT),
-                Wrapped::Body(DRAG_LINES),
-            ),
+            drag_h: wrapped(done_note(note, *kept), Wrapped::Body(DRAG_LINES)),
             buttons,
         },
         Inspector::Failed { sentence, .. } => InspectorShape::Failed {
@@ -1546,6 +1557,7 @@ pub fn inspector_shape(
         },
         Inspector::Several {
             targets,
+            more,
             none_shared,
             offered,
             ..
@@ -1557,7 +1569,19 @@ pub fn inspector_shape(
                 targets.len()
             },
             none_h: wrapped(none_shared.as_deref(), Wrapped::Body(BODY_LINES)),
+            more: more.then_some(more_w),
+            buttons,
         },
+    }
+}
+
+/// What a finished file's third text says: the row's note when it has one,
+/// or else, while its result is held, the hint that it can be dragged
+/// out. The layout, the drawing and the tree all say the same.
+pub fn done_note(note: &Option<(String, Tone)>, kept: Kept) -> Option<&str> {
+    match note {
+        Some((line, _)) => Some(line),
+        None => (kept == Kept::Held).then_some(DRAG_HINT),
     }
 }
 
@@ -1659,7 +1683,12 @@ fn inspector_stack(
             sentence_h,
             buttons,
         } => (TITLE, vec![sentence_h], 0, 0, None, buttons),
-        InspectorShape::Several { targets, none_h } => (TITLE, vec![none_h], 0, targets, None, 0),
+        InspectorShape::Several {
+            targets,
+            none_h,
+            more,
+            buttons,
+        } => (TITLE, vec![none_h], 0, targets, more, buttons),
     };
 
     // Without the hero the stack starts at the title, and when the hero
@@ -3009,7 +3038,7 @@ mod tests {
     const MORE_W: f32 = 88.0;
 
     /// Every shape the inspector can take, with the most parts it has.
-    fn every_shape() -> [InspectorShape; 9] {
+    fn every_shape() -> [InspectorShape; 12] {
         [
             InspectorShape::Nothing {
                 title_h: 40.0,
@@ -3039,10 +3068,14 @@ mod tests {
             InspectorShape::Several {
                 targets: 3,
                 none_h: 0.0,
+                more: None,
+                buttons: 0,
             },
             InspectorShape::Several {
                 targets: 0,
                 none_h: 80.0,
+                more: None,
+                buttons: 0,
             },
             // A file waiting on its helper app: Get where its formats
             // would be.
@@ -3058,6 +3091,26 @@ mod tests {
                 figure: false,
                 buttons: 1,
             },
+            // Several sharing more formats than show, and several waiting
+            // on one helper app.
+            InspectorShape::Several {
+                targets: 3,
+                none_h: 0.0,
+                more: Some(88.0),
+                buttons: 0,
+            },
+            InspectorShape::Several {
+                targets: 0,
+                none_h: 60.0,
+                more: None,
+                buttons: 1,
+            },
+            // A finished file whose result is gone: its note, no buttons.
+            InspectorShape::Done {
+                change: true,
+                drag_h: 34.0,
+                buttons: 0,
+            },
         ]
     }
 
@@ -3072,7 +3125,12 @@ mod tests {
                 buttons,
                 ..
             } => (facts, targets, more.is_some(), buttons),
-            InspectorShape::Several { targets, .. } => (0, targets, false, 0),
+            InspectorShape::Several {
+                targets,
+                more,
+                buttons,
+                ..
+            } => (0, targets, more.is_some(), buttons),
             InspectorShape::Converting { buttons, .. }
             | InspectorShape::Done { buttons, .. }
             | InspectorShape::Failed { buttons, .. } => (0, 0, false, buttons),
@@ -3246,6 +3304,8 @@ mod tests {
             &InspectorShape::Several {
                 targets: 3,
                 none_h: 0.0,
+                more: None,
+                buttons: 0,
             },
         );
         assert_eq!(shared.body.h, 0.0);
@@ -3256,6 +3316,8 @@ mod tests {
             &InspectorShape::Several {
                 targets: 2,
                 none_h: 80.0,
+                more: None,
+                buttons: 0,
             },
         );
         assert_eq!(none.body.h, 80.0);
@@ -3266,9 +3328,38 @@ mod tests {
             &InspectorShape::Several {
                 targets: 0,
                 none_h: 80.0,
+                more: None,
+                buttons: 0,
             },
         );
         assert!(no_list.label.is_none() && no_list.targets.is_empty());
+        // More follows the shared formats, as for one file.
+        let more = inspector_layout(
+            &r,
+            &InspectorShape::Several {
+                targets: 3,
+                none_h: 0.0,
+                more: Some(88.0),
+                buttons: 0,
+            },
+        );
+        let at = more.more.expect("More is placed");
+        assert_eq!(at.y, more.targets[2].bottom() + 6.0);
+        assert_eq!(at.w, 88.0 + LINK_PAD);
+        // Files waiting on one helper app: the sentence, then Get in the
+        // button slot, where the kinds would be.
+        let get = inspector_layout(
+            &r,
+            &InspectorShape::Several {
+                targets: 0,
+                none_h: 60.0,
+                more: None,
+                buttons: 1,
+            },
+        );
+        assert!(get.targets.is_empty() && get.label.is_none());
+        assert_eq!(get.buttons.len(), 1);
+        assert_eq!(get.buttons[0].y, get.body.bottom() + 12.0);
 
         // Nothing selected: the mark's hero, a title and a body as tall as
         // they wrap, and no facts, targets or buttons.
@@ -3404,6 +3495,7 @@ mod tests {
             targets: vec![target("webp"), target("avif")],
             more: true,
             helper: None,
+            reason: None,
         };
         assert_eq!(
             shape(&waiting),
@@ -3423,6 +3515,7 @@ mod tests {
             targets: vec![],
             more: false,
             helper: Some("Get FFmpeg"),
+            reason: None,
         };
         assert_eq!(
             shape(&needs),
@@ -3464,6 +3557,7 @@ mod tests {
             result: "a.webp".to_owned(),
             change: Some("1 MB → 1 KB".to_owned()),
             kept,
+            note: None,
         };
         assert_eq!(
             shape(&done(Kept::Held)),
@@ -3479,6 +3573,31 @@ mod tests {
                 change: true,
                 drag_h: 0.0,
                 buttons: 0
+            }
+        );
+        // A row's note takes the hint's place: a result that's gone has
+        // nothing to export, and one whose export failed keeps Export.
+        let noted = |kept, note: &str| {
+            let mut d = done(kept);
+            if let Inspector::Done { note: n, .. } = &mut d {
+                *n = Some((note.to_owned(), Tone::Crack));
+            }
+            d
+        };
+        assert_eq!(
+            shape(&noted(Kept::Gone, "gone")),
+            InspectorShape::Done {
+                change: true,
+                drag_h: 2004.0,
+                buttons: 0
+            }
+        );
+        assert_eq!(
+            shape(&noted(Kept::Held, "failed")),
+            InspectorShape::Done {
+                change: true,
+                drag_h: 2006.0,
+                buttons: 1
             }
         );
         let failed = Inspector::Failed {
@@ -3502,12 +3621,16 @@ mod tests {
             targets,
             none_shared: none.map(str::to_owned),
             offered,
+            more: false,
+            helper: None,
         };
         assert_eq!(
             shape(&several(vec![target("jpg"); MAX_TARGETS], None, vec![])),
             InspectorShape::Several {
                 targets: 3,
-                none_h: 0.0
+                none_h: 0.0,
+                more: None,
+                buttons: 0,
             }
         );
         let kinds = vec![("MP4".to_owned(), 2), ("DOCX".to_owned(), 1)];
@@ -3515,9 +3638,53 @@ mod tests {
             shape(&several(vec![], Some("ab"), kinds)),
             InspectorShape::Several {
                 targets: 2,
-                none_h: 4002.0
+                none_h: 4002.0,
+                more: None,
+                buttons: 0,
             }
         );
+        // More when they share more than show; Get as a button when they
+        // all wait on one helper app.
+        let mut more = several(vec![target("jpg"); MAX_TARGETS], None, vec![]);
+        if let Inspector::Several { more, .. } = &mut more {
+            *more = true;
+        }
+        assert_eq!(
+            shape(&more),
+            InspectorShape::Several {
+                targets: 3,
+                none_h: 0.0,
+                more: Some(MORE_W),
+                buttons: 0,
+            }
+        );
+        let mut needs = several(vec![], Some("abc"), vec![]);
+        if let Inspector::Several { helper, .. } = &mut needs {
+            *helper = Some("Get FFmpeg");
+        }
+        assert_eq!(
+            shape(&needs),
+            InspectorShape::Several {
+                targets: 0,
+                none_h: 4003.0,
+                more: None,
+                buttons: 1,
+            }
+        );
+        // Why a file has nothing to offer stands where what it is would.
+        let ruled_out = Inspector::Waiting {
+            row: 0,
+            what: None,
+            facts: vec![],
+            targets: vec![],
+            more: false,
+            helper: None,
+            reason: Some(("abcdefg".to_owned(), Tone::Crack)),
+        };
+        assert!(matches!(
+            shape(&ruled_out),
+            InspectorShape::Waiting { what_h, buttons: 0, .. } if what_h == 4007.0
+        ));
     }
 
     #[test]
