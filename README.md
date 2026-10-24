@@ -2,9 +2,7 @@
 
 <img src="docs/readme/banner.png" alt="Kiln, a native Windows file converter" width="820">
 
-### Fire raw files into finished ones
-
-A native Windows file converter. Drop a file, hold a key, pick a format. Nothing is uploaded.
+A native Windows file converter. Drop a file, hold a key, pick a format.
 
 <a href="https://github.com/chancrisp/kiln/releases"><img src="https://img.shields.io/badge/DOWNLOAD-Windows_10_%26_11-7FB5A0?style=for-the-badge&logo=windows&logoColor=white&labelColor=1C1B19" alt="Download for Windows 10 and 11"></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/LICENSE-Apache_2.0-9A8F80?style=for-the-badge&labelColor=1C1B19" alt="Apache 2.0 license"></a>
@@ -27,7 +25,6 @@ background, right on your PC. Or select a file and press **Convert**.
 - **Suggestions.** Kiln looks inside the files you add and, when one choice clearly helps, points at it with a reason.
 - **Quality you can set.** Resolution, frame rate, bitrate and page DPI, offered only where they fit the file, with an estimate of the result.
 - **Progress you can read.** A converting row says how far it has got and about how long is left, as in `Converting to WEBM · 38% · about 2 min`. **Cancel** is on the row, or in the panel for the selected file. A failed row says what went wrong in one plain line, and offers **Retry** when trying again can help. While Kiln works, its taskbar button shows the progress. When the last job ends while Kiln is behind other windows, the button flashes and a notification names the result.
-- **Offline.** Converting never touches the network. Nothing is uploaded, ever.
 - **Results wait for you.** A finished file waits in Kiln until you export it to a folder you pick, one at a time or all at once, or drag it out. With **Save results next to the original** on, each result is saved beside its file as soon as it's ready. Kiln asks about this once, the first time a result is ready, and Settings changes it. Kiln never overwrites a file without asking: exporting into a folder makes a taken name `name (1).jpg`.
 - **Files are checked when added.** An empty file, a file that isn't what its name says, or one Windows won't let Kiln read says so on its row, and isn't offered for converting. Kiln offers only what it can make with the helper apps it finds, and a file that needs a missing one says which, with **Get FFmpeg** (or the app it needs) to open its download page: a button in the panel, or a link on the row.
 - **Folders too.** Drop, paste or send a folder to Kiln and it adds its files, and those of the folders directly inside it, and says how many: `Added 12 files from Holiday.`
@@ -87,7 +84,7 @@ clearly helps, Kiln says nothing.
 - **Your picks.** When you have picked the same format for a type of file at least three times, and it is the one you pick most, Kiln suggests it from then on.
 - **What it looks at.** The size and look of a picture, whether it has transparency or motion, the length and bitrate of audio and video, black bars, and whether a PDF has text. Images are read by Kiln itself, except HEIC, AVIF and JXL, which FFmpeg reads like audio and video.
 
-Nothing is uploaded, and picks are counted only in `settings.toml`. Turn
+Picks are counted only in `settings.toml`. Turn
 suggestions off with **Suggestions** in **Settings > General**. **Reset
 suggestions**, beside it, clears the picks Kiln has counted.
 
