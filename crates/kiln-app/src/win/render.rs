@@ -18,6 +18,7 @@ use windows_numerics::{Matrix3x2, Vector2};
 
 use kiln_core::{Kind, Preset};
 
+use crate::anim;
 use crate::help::{self, HelpSection, Placed};
 use crate::icons::{self, Cmd, Icon, Style};
 use crate::inspector::{self as insp, Inspector, InspectorControl, Kept};
@@ -25,7 +26,7 @@ use crate::layout::{
     self, Control, DialogButton, InspectorLayout, Layout, Rect, SettingsLayout, SettingsTab,
     SheetControl, SheetLayout, Wrapped, CHIP_HEIGHT, CHIP_MIN_WIDTH, PROGRESS_HEIGHT, ROW_HEIGHT,
 };
-use crate::model::{self, Entry, JobState, Tone};
+use crate::model::{self, Entry, FocusButton, JobState, Tone};
 use crate::previews::{cover_source, Pixels, PreviewSize};
 use crate::quality::{QualityDefaults, Value};
 use crate::settings::{KeyMap, ThemeChoice};
@@ -43,8 +44,11 @@ pub struct WheelView<'a> {
     pub hover: Option<Spot>,
     /// 0 to 1: how far More's outer ring has poured open.
     pub more: f32,
-    /// 0 to 1: the opening pour. Drives scale and opacity.
-    pub open: f32,
+    /// How long ago it opened, in milliseconds: the disc blooms
+    /// (`anim::bloom`) and its segments follow (`anim::segment`).
+    pub open_ms: f32,
+    /// Windows' Animation effects: with them off it is open at once.
+    pub animations: bool,
     /// 1 to 0 while closing.
     pub fade: f32,
     /// The item pulsing after a drop, and how far through the pulse.
@@ -130,10 +134,21 @@ const CARD_STEP: (f32, f32) = (12.0, 8.0);
 const CHECK_R: f32 = 14.0;
 const CHECK_INSET: f32 = 10.0;
 
-/// The inspector this frame.
+/// The inspector this frame, drawn where the layout puts it as far as the
+/// fold has slid it in: what it says now and, while that is new, what it
+/// said before.
 pub struct InspectorView<'a> {
-    /// Where it is: the right of the list's panel.
-    pub rect: Rect,
+    pub now: InspectorPage<'a>,
+    /// What it said before, fading out as `now` rises in.
+    pub before: Option<InspectorPage<'a>>,
+}
+
+/// One content of the inspector, as it was laid out, and how it shows in
+/// this frame.
+pub struct InspectorPage<'a> {
+    /// Where it was laid out: the inspector's whole place. The fold slides
+    /// it across from there to where the inspector is drawn.
+    pub laid: Rect,
     pub model: &'a Inspector,
     pub layout: &'a InspectorLayout,
     /// Its controls that are placed, in reading order, with where each is.
@@ -141,11 +156,15 @@ pub struct InspectorView<'a> {
     /// Each format's glaze, or each kind's, in the order its rows show
     /// them.
     pub glazes: &'a [Glaze],
-    pub hover: Option<InspectorControl>,
-    pub pressed: Option<InspectorControl>,
     /// What Nothing says under its title: the key hint, then the privacy
     /// line.
     pub nothing: [&'a str; 2],
+    /// How far it has faded in, and how far it still has to rise, in DIPs.
+    pub alpha: f32,
+    pub rise: f32,
+    /// Whether its controls light under the pointer: what it said before
+    /// takes no pointer.
+    pub live: bool,
 }
 
 /// A row the inspector offers: a format, or a kind of file to narrow the
@@ -176,21 +195,44 @@ pub struct SheetView<'a> {
     pub hover: Option<usize>,
     pub pressed: Option<usize>,
     pub focus: Option<usize>,
-    /// 0 to 1 as it rises; 1 to 0 as it fades.
+    /// 0 to 1 as it fades in, how far it still has to rise in DIPs
+    /// (`anim::rise`), and 1 to 0 as it fades out.
     pub open: f32,
+    pub rise: f32,
     pub fade: f32,
 }
 
 /// Per-row animation state.
 #[derive(Clone, Copy)]
 pub struct RowAnim {
-    /// Fade-in when the row was added.
+    /// The pour: how far the row has faded in since it was added, and how
+    /// far it still has to rise into place, in DIPs.
     pub appear: f32,
-    /// 0 to 1 after a job finished: the result cooling into place.
+    pub rise: f32,
+    /// 0 to 1 after a job ended: a finished result cooling into place, or
+    /// a failure's sentence turning to the error colour.
     pub settle: f32,
+    /// The glaze wash a just-finished row flashes with, as it cools.
+    pub cool: f32,
+    /// How far a just-failed row's content is shaken sideways.
+    pub shake: f32,
     /// 0 to 1 after facts arrived: the second line crossing over to what
     /// Kiln found.
     pub facts: f32,
+}
+
+impl RowAnim {
+    /// A row with nothing moving, its facts `facts` of the way in.
+    pub fn at_rest(facts: f32) -> Self {
+        RowAnim {
+            appear: 1.0,
+            rise: 0.0,
+            settle: 1.0,
+            cool: 0.0,
+            shake: 0.0,
+            facts,
+        }
+    }
 }
 
 /// Everything the renderer needs to know about the app this frame.
@@ -205,8 +247,6 @@ pub struct View<'a> {
     pub saving: &'a HashSet<PathBuf>,
     /// The footer's "Export all (n)" label, while results are held.
     pub export_all: Option<&'a str>,
-    pub export_hover: bool,
-    pub export_pressed: bool,
     /// The selected rows; each draws the selected wash.
     pub selected: &'a BTreeSet<usize>,
     /// The glaze of row `i`'s kind of file.
@@ -227,6 +267,16 @@ pub struct View<'a> {
     /// The header or footer button Tab moved the keyboard to, which takes
     /// the ring instead.
     pub button_ring: Option<Rect>,
+    /// How much of the inspector shows, 0 to 1: it folds away as the
+    /// window narrows (`layout::layout_with`).
+    pub shown: f32,
+    /// Where the one selected row's wash and edge are, in DIPs from the
+    /// top of the list before scrolling, as it glides from row to row.
+    /// `None` while several rows are selected: each draws its own.
+    pub selection_y: Option<f32>,
+    /// A header, footer or inspector button's hover and press, each 0 to
+    /// 1, as they ease.
+    pub button: &'a dyn Fn(FocusButton) -> (f32, f32),
     pub hover_row: Option<usize>,
     pub hover_cancel: bool,
     pub hover_link: bool,
@@ -244,13 +294,8 @@ pub struct View<'a> {
     /// What the status says while the list is empty, shown under the Add
     /// files button. Empty when there's nothing to say.
     pub empty_status: &'a str,
-    /// The Add files button, in the empty window or the footer.
-    pub add_hover: bool,
-    pub add_pressed: bool,
     /// The footer's Convert button; disabled, it is drawn quiet and takes
     /// no hover.
-    pub convert_hover: bool,
-    pub convert_pressed: bool,
     pub convert_enabled: bool,
     /// What the footer's button says: Convert, or Cancel while the
     /// selection holds a file that is converting.
@@ -260,13 +305,9 @@ pub struct View<'a> {
     pub convert_key: bool,
     /// Rows were just removed: the footer offers Undo.
     pub undo: bool,
-    pub clear_hover: bool,
-    pub clear_pressed: bool,
     pub wheel: Option<WheelView<'a>>,
     /// The details dialog, while it's open.
     pub details: Option<DetailsView<'a>>,
-    pub settings_hover: bool,
-    pub help_hover: bool,
     pub settings: Option<SettingsView<'a>>,
     pub sheet: Option<SheetView<'a>>,
     /// The help overlay, while it's open.
@@ -282,6 +323,10 @@ pub struct HelpView<'a> {
     /// Close, its only control, which has the keyboard focus.
     pub close_hover: bool,
     pub close_pressed: bool,
+    /// 0 to 1 as it fades in, and how far it still has to rise in DIPs
+    /// (`anim::rise`).
+    pub open: f32,
+    pub rise: f32,
 }
 
 /// The details dialog this frame: what a failed job's engine said.
@@ -300,6 +345,10 @@ pub struct DetailsView<'a> {
 /// The settings panel this frame.
 pub struct SettingsView<'a> {
     pub layout: &'a SettingsLayout,
+    /// 0 to 1 as it fades in, and how far it still has to rise in DIPs
+    /// (`anim::rise`).
+    pub open: f32,
+    pub rise: f32,
     /// Where the tab marker sits, in tabs from the left.
     pub tab_marker: f32,
     /// 0 to 1 after the page changed: the new page fades in.
@@ -490,15 +539,60 @@ fn scale_at(s: f32, x: f32, y: f32) -> Matrix3x2 {
     }
 }
 
-/// `inner` applied first, then `outer`. Both are scale-and-translate only.
+/// Everything moved by `(dx, dy)`.
+fn moved(dx: f32, dy: f32) -> Matrix3x2 {
+    scale_at(1.0, dx, dy)
+}
+
+/// Turned `deg` degrees clockwise about the origin, scaled by `s`, then
+/// moved to `(x, y)`.
+fn turn_scale_at(deg: f32, s: f32, x: f32, y: f32) -> Matrix3x2 {
+    let (sin, cos) = deg.to_radians().sin_cos();
+    Matrix3x2 {
+        M11: s * cos,
+        M12: s * sin,
+        M21: -s * sin,
+        M22: s * cos,
+        M31: x,
+        M32: y,
+    }
+}
+
+/// Scaled by `s` about `(x, y)`, which stays where it is.
+fn scale_about(s: f32, x: f32, y: f32) -> Matrix3x2 {
+    scale_at(s, x * (1.0 - s), y * (1.0 - s))
+}
+
+/// `inner` applied first, then `outer`.
 fn compose(inner: &Matrix3x2, outer: &Matrix3x2) -> Matrix3x2 {
     Matrix3x2 {
-        M11: inner.M11 * outer.M11,
-        M12: 0.0,
-        M21: 0.0,
-        M22: inner.M22 * outer.M22,
-        M31: inner.M31 * outer.M11 + outer.M31,
-        M32: inner.M32 * outer.M22 + outer.M32,
+        M11: inner.M11 * outer.M11 + inner.M12 * outer.M21,
+        M12: inner.M11 * outer.M12 + inner.M12 * outer.M22,
+        M21: inner.M21 * outer.M11 + inner.M22 * outer.M21,
+        M22: inner.M21 * outer.M12 + inner.M22 * outer.M22,
+        M31: inner.M31 * outer.M11 + inner.M32 * outer.M21 + outer.M31,
+        M32: inner.M31 * outer.M12 + inner.M32 * outer.M22 + outer.M32,
+    }
+}
+
+/// `r` under a transform that only scales and moves, as `m` is when it
+/// has no turn in it.
+fn mapped(r: &Rect, m: &Matrix3x2) -> Rect {
+    Rect::new(
+        r.x * m.M11 + m.M31,
+        r.y * m.M22 + m.M32,
+        r.w * m.M11,
+        r.h * m.M22,
+    )
+}
+
+/// A state that is on or off, as an amount from 0 to 1, for controls
+/// that don't ease.
+fn amount(on: bool) -> f32 {
+    if on {
+        1.0
+    } else {
+        0.0
     }
 }
 
@@ -842,7 +936,7 @@ impl Renderer {
         self.ensure_target(v.palette)?;
         let t = self.target.as_ref().expect("target exists");
         let (w, h) = self.size_dips();
-        let l = layout::layout(w, h, v.entries.len());
+        let l = layout::layout_with(w, h, v.entries.len(), v.shown);
         let p = v.palette;
         let rt = &t.rt;
 
@@ -1019,13 +1113,16 @@ impl Draw<'_> {
         }
     }
 
-    /// The hover background of a small control: the line colour, or an
-    /// outline in the text colour under a contrast theme.
-    fn hover_back(&self, r: &Rect, radius: f32, p: &Palette) {
+    /// The hover background of a small control, `hover` of the way in: the
+    /// line colour, or under a contrast theme, which has no in-between, an
+    /// outline in the text colour once it is more than half in.
+    fn hover_back(&self, r: &Rect, radius: f32, hover: f32, p: &Palette) {
         if p.high_contrast {
-            self.border(r, radius, p.text, 1.0, shape::BORDER);
-        } else {
-            self.fill(r, radius, p.line, 1.0);
+            if hover > 0.5 {
+                self.border(r, radius, p.text, 1.0, shape::BORDER);
+            }
+        } else if hover > 0.0 {
+            self.fill(r, radius, p.line, hover);
         }
     }
 
@@ -1172,12 +1269,17 @@ impl Draw<'_> {
     /// its top edge (inside its border, if it has one), between its rounded
     /// corners. A contrast theme has none.
     fn highlight(&self, r: &Rect, radius: f32, inset: f32, p: &Palette) {
-        if p.high_contrast || p.highlight_alpha <= 0.0 {
+        self.highlight_at(r, radius, inset, 1.0, p);
+    }
+
+    /// `highlight` at `k` of its strength: a press sinks it out of sight.
+    fn highlight_at(&self, r: &Rect, radius: f32, inset: f32, k: f32, p: &Palette) {
+        if p.high_contrast || p.highlight_alpha <= 0.0 || k <= 0.0 {
             return;
         }
         let (x0, x1) = (r.x + radius, r.right() - radius);
         if x1 > x0 {
-            self.hline(x0, x1, r.y + inset, p.highlight, p.highlight_alpha);
+            self.hline(x0, x1, r.y + inset, p.highlight, p.highlight_alpha * k);
         }
     }
 
@@ -1344,15 +1446,15 @@ impl Draw<'_> {
         // The app icon: a celadon mark on the soot ground.
         self.icon("mark-solid", l.icon.x, l.icon.y, 1.0, p.accent, 1.0);
         self.label("Kiln", &self.text.display, &l.wordmark, p.text, 1.0);
-        // Help's question mark, then Settings' dial, at the right.
-        for (b, icon, hover) in [
-            (l.help_button, "help", v.help_hover),
-            (l.settings_button, "dial", v.settings_hover),
+        // Help's question mark, then Settings' dial, at the right. Hover
+        // lifts each into the line colour, as it eases.
+        for (b, icon, which) in [
+            (l.help_button, "help", FocusButton::Help),
+            (l.settings_button, "dial", FocusButton::Settings),
         ] {
-            if hover {
-                self.hover_back(&b, shape::RADIUS_CONTROL, p);
-            }
-            let c = if hover { p.text } else { p.text_muted };
+            let (hover, _) = (v.button)(which);
+            self.hover_back(&b, shape::RADIUS_CONTROL, hover, p);
+            let c = blend(p, p.text_muted, p.text, hover);
             self.icon(icon, b.x + 4.0, b.y + 4.0, 1.0, c, 1.0);
         }
         self.hline(0.0, l.header.w, l.header.bottom() - 1.0, p.edge, 1.0);
@@ -1410,7 +1512,8 @@ impl Draw<'_> {
             p.text,
             1.0,
         );
-        self.primary(lines.button, &e.button, v.add_hover, v.add_pressed, p);
+        let (hover, pressed) = (v.button)(FocusButton::AddFiles);
+        self.primary(lines.button, &e.button, hover, pressed, p);
         self.label(
             v.empty_status,
             &self.text.caption_center,
@@ -1464,11 +1567,21 @@ impl Draw<'_> {
         unsafe { self.rt.PushLayer(&params, &layer) };
         let first = (v.scroll / ROW_HEIGHT).floor().max(0.0) as usize;
         let visible = (panel.h / ROW_HEIGHT).ceil() as usize + 1;
+        // The one selected row's wash and edge, under the rows, where it has
+        // glided to; it pours in with its row.
+        if let (Some(y), Some(&i)) = (v.selection_y, v.selected.first()) {
+            let anim = (v.row_anim)(i);
+            let at = l.list.y + y - v.scroll + anim.rise;
+            let r = Rect::new(l.list.x, at, l.list.w, ROW_HEIGHT);
+            self.selection_wash(&r, anim.appear, p);
+        }
         let mut result = Ok(());
         for i in first..(first + visible).min(v.entries.len()) {
+            let anim = (v.row_anim)(i);
             let mut r = l.rows[i];
-            r.y -= v.scroll;
-            result = self.row(&r, &v.entries[i], i, v);
+            // Scrolled, and still rising as it pours in.
+            r.y += anim.rise - v.scroll;
+            result = self.row(&r, &v.entries[i], i, anim, v);
             if result.is_err() {
                 break;
             }
@@ -1514,20 +1627,26 @@ impl Draw<'_> {
         Ok(())
     }
 
-    fn row(&self, r: &Rect, e: &Entry, i: usize, v: &View) -> Result<()> {
+    /// A selected row's wash on `r`, at `a`, with a fine celadon edge on
+    /// its left, so selection never rests on the tint alone.
+    fn selection_wash(&self, r: &Rect, a: f32, p: &Palette) {
+        self.wash(r, 0.0, p.accent, effects::HOVER_FILL * a, p);
+        if !p.high_contrast {
+            let edge = Rect::new(r.x + shape::BORDER, r.y, 1.0, r.h);
+            self.fill(&edge, 0.0, p.accent_strong, a);
+        }
+    }
+
+    fn row(&self, r: &Rect, e: &Entry, i: usize, anim: RowAnim, v: &View) -> Result<()> {
         let p = v.palette;
-        let anim = (v.row_anim)(i);
         let a = anim.appear;
         let glaze = (v.glaze)(i);
         let hovered = v.hover_row == Some(i);
         let selected = v.selected.contains(&i);
         if selected {
-            self.wash(r, 0.0, p.accent, effects::HOVER_FILL * a, p);
-            // A fine celadon edge on the wash's left, so selection never
-            // rests on the tint alone.
-            if !p.high_contrast {
-                let edge = Rect::new(r.x + shape::BORDER, r.y, 1.0, r.h);
-                self.fill(&edge, 0.0, p.accent_strong, a);
+            // One selected row's wash glides, and is drawn under the rows.
+            if v.selection_y.is_none() {
+                self.selection_wash(r, a, p);
             }
         } else if hovered {
             if p.high_contrast {
@@ -1547,6 +1666,46 @@ impl Draw<'_> {
                 self.rt.FillRectangle(&rectf(r), ramp);
             }
         }
+        // A row that just finished flashes in its glaze and cools to its
+        // resting colour. A contrast theme has no washes: "Done" says it.
+        if anim.cool > 0.0 && !p.high_contrast {
+            self.fill(r, 0.0, p.glaze(glaze), anim.cool * a);
+        }
+        if i > 0 {
+            self.hline(r.x, r.right(), r.y - 0.5, p.edge, a);
+        }
+        // A row that just failed shakes its content, left then right, once.
+        let shaken = anim.shake != 0.0;
+        if shaken {
+            self.set_base(moved(anim.shake, 0.0));
+        }
+        let drawn = self.row_content(r, e, i, anim, v);
+        if shaken {
+            self.set_base(Matrix3x2::identity());
+        }
+        drawn?;
+        // The keyboard's row keeps its ring, selected or not.
+        if v.focus == Some(i) {
+            let ring = r.inset(2.0);
+            self.border(
+                &ring,
+                shape::RADIUS_CONTROL,
+                focus_colour(p),
+                a,
+                shape::ICON_STROKE,
+            );
+        }
+        Ok(())
+    }
+
+    /// What row `i` shows on its wash: its preview, chip, name and line,
+    /// its progress, and its links.
+    fn row_content(&self, r: &Rect, e: &Entry, i: usize, anim: RowAnim, v: &View) -> Result<()> {
+        let p = v.palette;
+        let a = anim.appear;
+        let glaze = (v.glaze)(i);
+        let hovered = v.hover_row == Some(i);
+        let selected = v.selected.contains(&i);
         // Muted text on a washed row is a step brighter (darker in light),
         // so it still reads.
         let muted = if selected || hovered {
@@ -1554,9 +1713,6 @@ impl Draw<'_> {
         } else {
             p.text_muted
         };
-        if i > 0 {
-            self.hline(r.x, r.right(), r.y - 0.5, p.edge, a);
-        }
 
         // The preview, then the format chip after it: monospace,
         // uppercase, tracked, in the file's glaze.
@@ -1714,17 +1870,6 @@ impl Draw<'_> {
                 a,
             );
         }
-        // The keyboard's row keeps its ring, selected or not.
-        if v.focus == Some(i) {
-            let ring = r.inset(2.0);
-            self.border(
-                &ring,
-                shape::RADIUS_CONTROL,
-                focus_colour(p),
-                a,
-                shape::ICON_STROKE,
-            );
-        }
         Ok(())
     }
 
@@ -1774,15 +1919,20 @@ impl Draw<'_> {
         }
     }
 
-    /// Draw `f` clipped to `r` with corners of `radius`.
+    /// Draw `f` clipped to `r` with corners of `radius`. `r` is where the
+    /// current transform puts it, which may only scale and move: the clip
+    /// is made where `r` lands on the target, so it lines up however it
+    /// was moved.
     fn clipped<T>(&self, r: &Rect, radius: f32, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        let base = self.base.get();
+        let at = mapped(r, &base);
         let mask = unsafe {
             self.factory
-                .CreateRoundedRectangleGeometry(&rounded(r, radius))?
+                .CreateRoundedRectangleGeometry(&rounded(&at, radius * base.M11))?
         };
         let layer = unsafe { self.rt.CreateLayer(None)? };
         let params = D2D1_LAYER_PARAMETERS {
-            contentBounds: rectf(r),
+            contentBounds: rectf(&at),
             geometricMask: std::mem::ManuallyDrop::new(Some(mask.into())),
             maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
             maskTransform: Matrix3x2::identity(),
@@ -1790,7 +1940,11 @@ impl Draw<'_> {
             opacityBrush: std::mem::ManuallyDrop::new(None),
             layerOptions: D2D1_LAYER_OPTIONS_NONE,
         };
-        unsafe { self.rt.PushLayer(&params, &layer) };
+        unsafe {
+            self.rt.SetTransform(&Matrix3x2::identity());
+            self.rt.PushLayer(&params, &layer);
+            self.rt.SetTransform(&base);
+        }
         let result = f();
         unsafe { self.rt.PopLayer() };
         // PushLayer took its own reference; release ours.
@@ -1845,10 +1999,16 @@ impl Draw<'_> {
 
     /// The inspector beside the list: the rule before it, then, inside the
     /// panel's rounded corner, the selection's glaze washing its top and
-    /// what it says for the selection, with its controls.
+    /// what it says for the selection, with its controls. It is drawn
+    /// where the layout puts it, as far as the fold has slid it in: its
+    /// content, laid out on its whole place, slides in from the panel's
+    /// right edge, and the panel's corner clips it. Folded all the way,
+    /// there is nothing of it to draw.
     fn inspector(&self, l: &Layout, iv: &InspectorView, v: &View) -> Result<()> {
         let p = v.palette;
-        let r = iv.rect;
+        let Some(r) = l.inspector else {
+            return Ok(());
+        };
         let rule = Rect::new(
             r.x - layout::INSPECTOR_RULE,
             l.panel.y + shape::BORDER,
@@ -1857,26 +2017,52 @@ impl Draw<'_> {
         );
         self.fill(&rule, 0.0, p.edge, 1.0);
         self.clipped(&l.panel, shape::RADIUS_PANEL, || {
+            // What it said before fades out under what it says now, which
+            // rises in.
+            for page in iv.before.iter().chain(std::iter::once(&iv.now)) {
+                self.inspector_page(&r, page, v)?;
+            }
+            Ok(())
+        })
+    }
+
+    /// One content of the inspector, slid across from where it was laid
+    /// out to `r`, where the inspector is drawn, at its alpha and rise:
+    /// the selection's glaze washing its top (which fades but doesn't
+    /// rise), what it says and its controls.
+    fn inspector_page(&self, r: &Rect, page: &InspectorPage, v: &View) -> Result<()> {
+        let p = v.palette;
+        if page.alpha <= 0.0 {
+            return Ok(());
+        }
+        let dx = r.x - page.laid.x;
+        let laid = page.laid;
+        self.with_opacity(page.alpha, || {
             // A contrast theme has no washes.
-            if let (Some(i), false) = (first_row(iv.model), p.high_contrast) {
-                let reach = r.h * INSPECTOR_WASH_REACH;
+            if let (Some(i), false) = (first_row(page.model), p.high_contrast) {
+                self.set_base(moved(dx, 0.0));
+                let reach = laid.h * INSPECTOR_WASH_REACH;
                 let ramp = self.glaze_ramp((v.glaze)(i));
                 unsafe {
-                    ramp.SetStartPoint(pt(r.x, r.y + reach));
-                    ramp.SetEndPoint(pt(r.x, r.y));
+                    ramp.SetStartPoint(pt(laid.x, laid.y + reach));
+                    ramp.SetEndPoint(pt(laid.x, laid.y));
                     ramp.SetOpacity(INSPECTOR_WASH);
-                    self.rt
-                        .FillRectangle(&rectf(&Rect::new(r.x, r.y, r.w, reach)), ramp);
+                    let top = Rect::new(laid.x, laid.y, laid.w, reach);
+                    self.rt.FillRectangle(&rectf(&top), ramp);
                 }
             }
-            self.inspector_says(iv, v)?;
-            self.inspector_controls(iv, p)
+            self.set_base(moved(dx, page.rise));
+            let drawn = self
+                .inspector_says(page, v)
+                .and_then(|_| self.inspector_controls(page, v));
+            self.set_base(Matrix3x2::identity());
+            drawn
         })
     }
 
     /// What the inspector says for the selection: its picture, title,
     /// body, facts and heading.
-    fn inspector_says(&self, iv: &InspectorView, v: &View) -> Result<()> {
+    fn inspector_says(&self, iv: &InspectorPage, v: &View) -> Result<()> {
         let p = v.palette;
         let l = iv.layout;
         let muted = p.text_muted;
@@ -2123,9 +2309,11 @@ impl Draw<'_> {
     }
 
     /// The inspector's controls where its layout placed them: each format
-    /// or kind as a row, More as a link, and the rest as buttons.
-    fn inspector_controls(&self, iv: &InspectorView, p: &Palette) -> Result<()> {
+    /// or kind as a row, More as a link, and the rest as buttons. Each
+    /// eases its hover and press; what it said before takes neither.
+    fn inspector_controls(&self, iv: &InspectorPage, v: &View) -> Result<()> {
         use InspectorControl as C;
+        let p = v.palette;
         let targets = match iv.model {
             Inspector::Waiting { targets, .. } | Inspector::Several { targets, .. } => &targets[..],
             _ => &[],
@@ -2135,7 +2323,11 @@ impl Draw<'_> {
             _ => &[],
         };
         for &(c, b) in iv.controls {
-            let (hot, pressed) = (iv.hover == Some(c), iv.pressed == Some(c));
+            let (hot, pressed) = if iv.live {
+                (v.button)(FocusButton::Inspector(c))
+            } else {
+                (0.0, 0.0)
+            };
             match c {
                 C::Target(k) => {
                     let Some(t) = targets.get(k) else {
@@ -2181,17 +2373,21 @@ impl Draw<'_> {
     /// A format or a kind the inspector offers, as a 6 DIP rounded row:
     /// its chip, what it is for (muted) and its estimate at the right. The
     /// suggestion has a celadon edge and wash, and its dot before the chip.
+    /// `hover` and `pressed` are how far each has eased in, 0 to 1; a
+    /// contrast theme, which has no in-between, takes either once it is
+    /// more than half in.
     fn target_row(
         &self,
         b: &Rect,
         row: &TargetRow,
-        hot: bool,
-        pressed: bool,
+        hover: f32,
+        pressed: f32,
         p: &Palette,
     ) -> Result<()> {
         let radius = shape::RADIUS_CONTROL;
-        if hot && !p.high_contrast {
-            self.fill(b, radius, p.line, 1.0);
+        let hot = hover > 0.5;
+        if hover > 0.0 && !p.high_contrast {
+            self.fill(b, radius, p.line, hover);
         }
         if row.suggested {
             self.wash(b, radius, p.accent, SUGGESTED_WASH, p);
@@ -2213,15 +2409,10 @@ impl Draw<'_> {
             };
             self.border(b, radius, edge, 1.0, shape::BORDER);
         }
-        if pressed {
-            self.press_shadow(b, p);
-        }
+        self.press_shadow(b, pressed, p);
         // Muted text on a wash is a step brighter (darker in light).
-        let muted = if hot || row.suggested {
-            p.muted_on_wash
-        } else {
-            p.text_muted
-        };
+        let washed = if row.suggested { 1.0 } else { hover };
+        let muted = blend(p, p.text_muted, p.muted_on_wash, washed);
         let cy = b.y + b.h / 2.0;
         if row.suggested {
             self.dot(b.x + TARGET_INSET / 2.0, cy, 1.0, p);
@@ -2247,11 +2438,12 @@ impl Draw<'_> {
         Ok(())
     }
 
-    /// "More formats…": an underlined link at the left of its line, full
-    /// text colour while hot. The layout made `r` as wide as its words and
-    /// a link's room past them, so they are not measured again here.
-    fn more_link(&self, r: &Rect, hot: bool, p: &Palette) {
-        let c = if hot { p.text } else { p.link };
+    /// "More formats…": an underlined link at the left of its line, easing
+    /// to full text colour as `hover` comes in. The layout made `r` as wide
+    /// as its words and a link's room past them, so they are not measured
+    /// again here.
+    fn more_link(&self, r: &Rect, hover: f32, p: &Palette) {
+        let c = blend(p, p.link, p.text, hover);
         let tw = (r.w - layout::LINK_PAD).max(0.0);
         let at = Rect::new(r.x, r.y, tw + 1.0, r.h);
         self.label(insp::MORE_FORMATS, &self.text.caption, &at, c, 1.0);
@@ -2285,7 +2477,7 @@ impl Draw<'_> {
             // The footer's one primary action stands raised: its shadow, and
             // the light along its top, which a press sinks out of sight.
             self.shadow(&convert, shape::RADIUS_CONTROL, p);
-            let (hover, pressed) = (v.convert_hover, v.convert_pressed);
+            let (hover, pressed) = (v.button)(FocusButton::Convert);
             if v.convert_key && layout::convert_keycap(&convert) {
                 // Convert names its key after the word.
                 self.primary_face(&convert, hover, pressed, p);
@@ -2293,12 +2485,10 @@ impl Draw<'_> {
             } else {
                 self.primary(v.convert_label, &convert, hover, pressed, p);
             }
-            if !pressed {
-                self.highlight(&convert, shape::RADIUS_CONTROL, 0.0, p);
-            }
+            self.highlight_at(&convert, shape::RADIUS_CONTROL, 0.0, 1.0 - pressed, p);
         } else {
             // Disabled: the label is muted and the edge flat.
-            self.button_face(&convert, false, false, false, p);
+            self.button_face(&convert, 0.0, 0.0, false, p);
             self.label(
                 "Convert",
                 &self.text.body_center,
@@ -2307,36 +2497,41 @@ impl Draw<'_> {
                 1.0,
             );
         }
-        self.button(v.empty.button, &add, v.add_hover, v.add_pressed, p);
+        let (hover, pressed) = (v.button)(FocusButton::AddFiles);
+        self.button(v.empty.button, &add, hover, pressed, p);
         if let Some((label, b)) = export {
-            self.button(label, &b, v.export_hover, v.export_pressed, p);
+            let (hover, pressed) = (v.button)(FocusButton::ExportAll);
+            self.button(label, &b, hover, pressed, p);
         }
-        self.button("Clear", &button, v.clear_hover, v.clear_pressed, p);
+        let (hover, pressed) = (v.button)(FocusButton::Clear);
+        self.button("Clear", &button, hover, pressed, p);
         Ok(())
     }
 
     /// A quiet secondary control. Pressed: a soft inner shadow, as if the
-    /// surface gave a little under the finger.
-    fn button(&self, text: &str, b: &Rect, hover: bool, pressed: bool, p: &Palette) {
+    /// surface gave a little under the finger. `hover` and `pressed` are
+    /// how far each has eased in, 0 to 1.
+    fn button(&self, text: &str, b: &Rect, hover: f32, pressed: f32, p: &Palette) {
         self.button_face(b, hover, pressed, false, p);
         self.label(text, &self.text.body_center, b, p.text, 1.0);
     }
 
-    /// A button's fill and border. Selected: the celadon wash and edge.
-    fn button_face(&self, b: &Rect, hover: bool, pressed: bool, selected: bool, p: &Palette) {
-        let fill = if hover && !p.high_contrast {
-            p.line
-        } else {
+    /// A button's fill and border, its fill lifting into the line colour
+    /// as `hover` comes in. Selected: the celadon wash and edge. A contrast
+    /// theme, which has no in-between, outlines a hover once it is more
+    /// than half in.
+    fn button_face(&self, b: &Rect, hover: f32, pressed: f32, selected: bool, p: &Palette) {
+        let fill = if p.high_contrast {
             p.surface
+        } else {
+            blend(p, p.surface, p.line, hover)
         };
         self.fill(b, shape::RADIUS_CONTROL, fill, 1.0);
         if selected && !p.high_contrast {
             self.fill(b, shape::RADIUS_CONTROL, p.accent, effects::HOVER_FILL);
         }
-        if pressed {
-            self.press_shadow(b, p);
-        }
-        let (edge, width) = match (selected, hover, p.high_contrast) {
+        self.press_shadow(b, pressed, p);
+        let (edge, width) = match (selected, hover > 0.5, p.high_contrast) {
             (true, _, true) => (p.accent, 2.0),
             (true, _, false) => (p.accent_strong, shape::BORDER),
             (false, true, true) => (p.text, shape::BORDER),
@@ -2345,20 +2540,20 @@ impl Draw<'_> {
         self.border(b, shape::RADIUS_CONTROL, edge, 1.0, width);
     }
 
-    /// The soft inner shadow of a pressed control, along its top edge.
-    /// A contrast theme has no shadows.
-    fn press_shadow(&self, b: &Rect, p: &Palette) {
-        if p.high_contrast {
+    /// The soft inner shadow of a pressed control, along its top edge, as
+    /// far as the press has eased in. A contrast theme has no shadows.
+    fn press_shadow(&self, b: &Rect, pressed: f32, p: &Palette) {
+        if p.high_contrast || pressed <= 0.0 {
             return;
         }
         for (k, alpha) in [(1.0, 0.35), (2.0, 0.2), (3.0, 0.1)] {
             let inner = Rect::new(b.x + 1.0, b.y + k, b.w - 2.0, 1.0);
-            self.fill(&inner, 0.0, p.ground, alpha);
+            self.fill(&inner, 0.0, p.ground, alpha * pressed);
         }
     }
 
     /// The emphasised button: celadon, for the one action a panel is for.
-    fn primary(&self, text: &str, b: &Rect, hover: bool, pressed: bool, p: &Palette) {
+    fn primary(&self, text: &str, b: &Rect, hover: f32, pressed: f32, p: &Palette) {
         self.primary_face(b, hover, pressed, p);
         self.label(text, &self.text.body_center, b, p.on_accent, 1.0);
     }
@@ -2384,29 +2579,24 @@ impl Draw<'_> {
         self.label(key, &self.text.caption_center, &cap, c, 1.0);
     }
 
-    /// The primary button's fill, its hover and its press.
-    fn primary_face(&self, b: &Rect, hover: bool, pressed: bool, p: &Palette) {
-        let fill = if hover {
-            blend(p, p.accent, p.text, effects::PRIMARY_HOVER)
-        } else {
-            p.accent
-        };
+    /// The primary button's fill, moving `effects::PRIMARY_HOVER` toward
+    /// the text colour as `hover` comes in, and its press.
+    fn primary_face(&self, b: &Rect, hover: f32, pressed: f32, p: &Palette) {
+        let fill = blend(p, p.accent, p.text, effects::PRIMARY_HOVER * hover);
         self.fill(b, shape::RADIUS_CONTROL, fill, 1.0);
         // A contrast theme has no in-between fill to hover to: a 2 DIP
         // line in the highlight's text colour, just inside, shows it.
-        if hover && p.high_contrast {
+        if hover > 0.5 && p.high_contrast {
             let inner = b.inset(2.0);
             self.border(&inner, shape::RADIUS_CONTROL - 2.0, p.on_accent, 1.0, 2.0);
         }
-        if pressed {
-            self.press_shadow(b, p);
-        }
+        self.press_shadow(b, pressed, p);
     }
 
     /// A control that steps through values: the value between two small
     /// chevrons. The left end steps back, the rest forward.
     fn stepper(&self, text: &str, b: &Rect, hover: bool, pressed: bool, p: &Palette) {
-        self.button_face(b, hover, pressed, false, p);
+        self.button_face(b, amount(hover), amount(pressed), false, p);
         let inner = Rect::new(b.x + 20.0, b.y, (b.w - 40.0).max(0.0), b.h);
         self.label(text, &self.text.body_center, &inner, p.text, 1.0);
         let c = if hover { p.text } else { p.text_muted };
@@ -2460,9 +2650,7 @@ impl Draw<'_> {
                 shape::BORDER,
             );
         }
-        if pressed {
-            self.press_shadow(r, p);
-        }
+        self.press_shadow(r, amount(pressed), p);
         self.label(text, &self.text.body_center, r, p.text, 1.0);
     }
 
@@ -2513,13 +2701,13 @@ impl Draw<'_> {
     /// The glaze wheel, drawn in its own coordinates around its centre.
     fn wheel(&self, wv: &WheelView, p: &Palette) -> Result<()> {
         let w = wv.wheel;
-        let opacity = (wv.open * wv.fade).clamp(0.0, 1.0);
+        // The bloom: the disc grows and turns into place as it fades in.
+        let (open, grow, turn) = anim::bloom(wv.open_ms, wv.animations);
+        let opacity = (open * wv.fade).clamp(0.0, 1.0);
         if opacity <= 0.0 {
             return Ok(());
         }
-        // The pour: the wheel spreads out from the cursor.
-        let s = (0.55 + 0.45 * wv.open) * w.scale;
-        let base = scale_at(s, w.center.0, w.center.1);
+        let base = turn_scale_at(turn, grow * w.scale, w.center.0, w.center.1);
         let result = self.with_opacity(opacity, || {
             // The wheel stands raised: one soft shadow under all of it,
             // reaching as far as More's ring has poured out.
@@ -2627,25 +2815,35 @@ impl Draw<'_> {
             }
         }
 
-        // Items: icon above, label below.
+        // Items: icon above, label below. Each segment's follows the disc
+        // in turn, growing into place about its middle as it fades in.
+        let disc = self.base.get();
         for i in 0..n {
             let (lx, ly) = wheel::label_point(i, n);
             let (icon, label, is_code) = match w.items.get(i) {
                 Some(item) => (item.icon, item.label.as_str(), item.is_code),
                 None => ("more", "More", false),
             };
-            let top = ly - 22.0;
-            self.icon(icon, lx - 12.0, top, 1.0, p.text, 1.0);
-            if wv.marks.contains(&Spot::Inner(i)) {
-                self.dot(lx, top - DOT_GAP, wv.dot, p);
+            let (a, grow) = anim::segment(wv.open_ms, i, wv.animations);
+            if a <= 0.0 {
+                continue;
             }
-            if is_code {
+            self.set_base(compose(&scale_about(grow, lx, ly - 9.0), &disc));
+            let top = ly - 22.0;
+            self.icon(icon, lx - 12.0, top, 1.0, p.text, a);
+            if wv.marks.contains(&Spot::Inner(i)) {
+                self.dot(lx, top - DOT_GAP, wv.dot * a, p);
+            }
+            let drawn = if is_code {
                 let r = Rect::new(lx - 40.0, ly + 4.0, 80.0, 16.0);
-                self.code(label, &r, p.text, 1.0)?;
+                self.code(label, &r, p.text, a).map(|_| ())
             } else {
                 let r = Rect::new(lx - 52.0, ly + 4.0, 104.0, 16.0);
-                self.label(label, &self.text.caption_center, &r, p.text, 1.0);
-            }
+                self.label(label, &self.text.caption_center, &r, p.text, a);
+                Ok(())
+            };
+            self.set_base(disc);
+            drawn?;
         }
 
         // The centre: the title "Convert · Shift" always drawn on two
@@ -2932,7 +3130,8 @@ impl Draw<'_> {
             (DialogButton::Close, "Close"),
         ] {
             let r = d.button(b);
-            self.button(text, &r, dv.hover == Some(b), dv.pressed == Some(b), p);
+            let (hover, pressed) = (dv.hover == Some(b), dv.pressed == Some(b));
+            self.button(text, &r, amount(hover), amount(pressed), p);
             if dv.focus == b {
                 self.focus_ring(&r, p);
             }
@@ -2941,10 +3140,25 @@ impl Draw<'_> {
     }
 
     /// Help, over a scrim like the details dialog: the ways in, how results
-    /// are kept, and every shortcut. The text scrolls inside the body.
+    /// are kept, and every shortcut. The text scrolls inside the body. It
+    /// rises into place as it fades in, with the scrim fading in behind it.
     fn help(&self, w: f32, h: f32, hv: &HelpView, p: &Palette) -> Result<()> {
+        let a = hv.open.clamp(0.0, 1.0);
+        if a <= 0.0 {
+            return Ok(());
+        }
+        self.scrim(w, h, a, p);
+        let result = self.with_opacity(a, || {
+            self.set_base(moved(0.0, hv.rise));
+            self.help_panel(w, h, hv, p)
+        });
+        self.set_base(Matrix3x2::identity());
+        result
+    }
+
+    /// Help's panel, its text and its Close.
+    fn help_panel(&self, w: f32, h: f32, hv: &HelpView, p: &Palette) -> Result<()> {
         let d = layout::help(w, h);
-        self.scrim(w, h, 1.0, p);
         self.raised_panel(&d.panel, p);
         self.label(help::TITLE, &self.text.display, &d.title, p.text, 1.0);
 
@@ -2977,16 +3191,32 @@ impl Draw<'_> {
             let thumb = Rect::new(d.panel.right() - 8.0, thumb_y, 2.0, thumb_h);
             self.thumb(&thumb, p);
         }
-        self.button("Close", &d.close, hv.close_hover, hv.close_pressed, p);
+        let (hover, pressed) = (amount(hv.close_hover), amount(hv.close_pressed));
+        self.button("Close", &d.close, hover, pressed, p);
         self.focus_ring(&d.close, p);
         Ok(())
     }
 
     /// The settings panel, over a scrim. Changes apply as they are made,
-    /// so there is only Close.
+    /// so there is only Close. It rises into place as it fades in, with the
+    /// scrim fading in behind it.
     fn settings(&self, w: f32, h: f32, sv: &SettingsView, p: &Palette) -> Result<()> {
+        let a = sv.open.clamp(0.0, 1.0);
+        if a <= 0.0 {
+            return Ok(());
+        }
+        self.scrim(w, h, a, p);
+        let result = self.with_opacity(a, || {
+            self.set_base(moved(0.0, sv.rise));
+            self.settings_panel(sv, p)
+        });
+        self.set_base(Matrix3x2::identity());
+        result
+    }
+
+    /// The settings panel itself: its tabs, its page and its buttons.
+    fn settings_panel(&self, sv: &SettingsView, p: &Palette) -> Result<()> {
         let l = sv.layout;
-        self.scrim(w, h, 1.0, p);
         self.raised_panel(&l.panel, p);
         self.label("Settings", &self.text.display, &l.title, p.text, 1.0);
         self.tabs(sv, p);
@@ -2996,8 +3226,10 @@ impl Draw<'_> {
         for (k, (control, r)) in l.controls.iter().enumerate() {
             let (hover, pressed) = (sv.hover == Some(k), sv.pressed == Some(k));
             match control {
-                Control::Close => self.button("Close", r, hover, pressed, p),
-                Control::CheckUpdates => self.button(sv.update_button, r, hover, pressed, p),
+                Control::Close => self.button("Close", r, amount(hover), amount(pressed), p),
+                Control::CheckUpdates => {
+                    self.button(sv.update_button, r, amount(hover), amount(pressed), p)
+                }
                 _ => continue,
             }
             if sv.focus == Some(k) {
@@ -3028,7 +3260,7 @@ impl Draw<'_> {
         };
         for &(k, t, r) in &tabs {
             if sv.hover == Some(k) && t != l.tab {
-                self.hover_back(&r, shape::RADIUS_CONTROL, p);
+                self.hover_back(&r, shape::RADIUS_CONTROL, 1.0, p);
             }
         }
         let marker = Rect::new(first.x + sv.tab_marker * first.w, first.y, first.w, first.h);
@@ -3042,7 +3274,7 @@ impl Draw<'_> {
         }
         for &(k, t, r) in &tabs {
             if sv.pressed == Some(k) {
-                self.press_shadow(&r, p);
+                self.press_shadow(&r, 1.0, p);
             }
             // The chosen tab's label sits on the marker's wash, and a
             // hovered one on the line fill: both take full text.
@@ -3097,11 +3329,11 @@ impl Draw<'_> {
             let (hover, pressed) = (sv.hover == Some(k), sv.pressed == Some(k));
             let chosen = match control {
                 Control::OutputChoose | Control::EngineChoose(_) => {
-                    self.button("Choose", r, hover, pressed, p);
+                    self.button("Choose", r, amount(hover), amount(pressed), p);
                     None
                 }
                 Control::OutputReset | Control::EngineReset(_) => {
-                    self.button("Reset", r, hover, pressed, p);
+                    self.button("Reset", r, amount(hover), amount(pressed), p);
                     None
                 }
                 Control::EngineGet(_) => {
@@ -3139,13 +3371,14 @@ impl Draw<'_> {
                     Some(chosen)
                 }
                 Control::ForgetPicks if sv.has_habits => {
+                    let (hover, pressed) = (amount(hover), amount(pressed));
                     self.button("Reset suggestions", r, hover, pressed, p);
                     None
                 }
                 Control::ForgetPicks => {
                     // Disabled: the label goes muted, with no hover or press;
                     // under a contrast theme, the theme's grey text.
-                    self.button_face(r, false, false, false, p);
+                    self.button_face(r, 0.0, 0.0, false, p);
                     let text = "Reset suggestions";
                     let c = if p.high_contrast {
                         p.line
@@ -3166,7 +3399,7 @@ impl Draw<'_> {
                     None
                 }
                 Control::Key(wheel) => {
-                    self.button_face(r, hover, pressed, false, p);
+                    self.button_face(r, amount(hover), amount(pressed), false, p);
                     let code = sv.keys.key_for(*wheel).code();
                     let (_, cw) = self.text.code_layout(code, r.w, r.h)?;
                     let label_w = self.text.measure(wheel.title(), &self.text.body);
@@ -3212,16 +3445,16 @@ impl Draw<'_> {
     }
 
     /// The options sheet: what the source is, the choices that fit it, and
-    /// what they will make. It rises a little as it fades in.
+    /// what they will make. It rises into place as it fades in, with the
+    /// scrim fading in behind it.
     fn sheet(&self, w: f32, h: f32, sv: &SheetView, p: &Palette) -> Result<()> {
         let a = (sv.open * sv.fade).clamp(0.0, 1.0);
         if a <= 0.0 {
             return Ok(());
         }
         self.scrim(w, h, a, p);
-        let rise = 8.0 * (1.0 - sv.open);
         let result = self.with_opacity(a, || {
-            self.set_base(scale_at(1.0, 0.0, rise));
+            self.set_base(moved(0.0, sv.rise));
             let l = sv.layout;
             self.raised_panel(&l.panel, p);
             self.label(sv.title, &self.text.display, &l.title, p.text, 1.0);
@@ -3249,8 +3482,12 @@ impl Draw<'_> {
                         let text = sv.rows.get(*row).map_or("", |(_, v)| v.as_str());
                         self.stepper(text, r, hover, pressed, p);
                     }
-                    SheetControl::Cancel => self.button("Cancel", r, hover, pressed, p),
-                    SheetControl::Convert => self.primary("Convert", r, hover, pressed, p),
+                    SheetControl::Cancel => {
+                        self.button("Cancel", r, amount(hover), amount(pressed), p)
+                    }
+                    SheetControl::Convert => {
+                        self.primary("Convert", r, amount(hover), amount(pressed), p)
+                    }
                 }
             }
             self.segment_group(&presets, p);

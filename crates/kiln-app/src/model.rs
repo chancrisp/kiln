@@ -623,7 +623,7 @@ pub fn convert_block(selected: usize, running: usize) -> Option<&'static str> {
 
 /// A header or footer button the keyboard can be on, besides the list, or
 /// a control in the inspector.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FocusButton {
     Convert,
     AddFiles,

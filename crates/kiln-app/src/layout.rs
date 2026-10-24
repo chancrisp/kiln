@@ -1370,9 +1370,10 @@ pub enum InspectorShape {
         more: Option<f32>,
         buttons: usize,
     },
-    /// A running job: the percentage and the time left in the body, and
-    /// its `buttons` (Cancel).
-    Converting { buttons: usize },
+    /// A running job: the percentage in the body when the engine says how
+    /// far along it is (`figure`), the time left, and its `buttons`
+    /// (Cancel). Without the percentage its place is taken by nothing.
+    Converting { figure: bool, buttons: usize },
     /// A finished job. Its body holds a 20 DIP line for the result, one
     /// for the change when `change`, and then the hint that the result can
     /// be dragged out, `drag_h` tall once wrapped (0 for none); then its
@@ -1406,7 +1407,8 @@ pub struct InspectorLayout {
     /// has them whether or not there is one to show:
     /// - Nothing: the key hint, then the privacy line;
     /// - Waiting: what the format is;
-    /// - Converting: the 40 DIP percentage, then the 20 DIP time line;
+    /// - Converting: the 40 DIP percentage (0 tall without one), then the
+    ///   20 DIP time line;
     /// - Done: the 20 DIP result, the 20 DIP change, then the drag-out
     ///   hint;
     /// - Failed: the sentence;
@@ -1510,7 +1512,10 @@ pub fn inspector_shape(
             more: more.then_some(more_w),
             buttons,
         },
-        Inspector::Converting { .. } => InspectorShape::Converting { buttons },
+        Inspector::Converting { percent, .. } => InspectorShape::Converting {
+            figure: percent.is_some(),
+            buttons,
+        },
         Inspector::Done { change, kept, .. } => InspectorShape::Done {
             change: change.is_some(),
             drag_h: wrapped(
@@ -1622,7 +1627,10 @@ fn inspector_stack(
             more,
             buttons,
         } => (TITLE, vec![what_h], facts, targets, more, buttons),
-        InspectorShape::Converting { buttons } => (TITLE, vec![FIGURE, LINE], 0, 0, None, buttons),
+        InspectorShape::Converting { figure, buttons } => {
+            let figure_h = if figure { FIGURE } else { 0.0 };
+            (TITLE, vec![figure_h, LINE], 0, 0, None, buttons)
+        }
         InspectorShape::Done {
             change,
             drag_h,
@@ -2985,7 +2993,7 @@ mod tests {
     const MORE_W: f32 = 88.0;
 
     /// Every shape the inspector can take, with the most parts it has.
-    fn every_shape() -> [InspectorShape; 8] {
+    fn every_shape() -> [InspectorShape; 9] {
         [
             InspectorShape::Nothing {
                 title_h: 40.0,
@@ -2999,7 +3007,10 @@ mod tests {
                 more: Some(MORE_W),
                 buttons: 0,
             },
-            InspectorShape::Converting { buttons: 1 },
+            InspectorShape::Converting {
+                figure: true,
+                buttons: 1,
+            },
             InspectorShape::Done {
                 change: true,
                 drag_h: 34.0,
@@ -3026,6 +3037,11 @@ mod tests {
                 more: None,
                 buttons: 1,
             },
+            // A running job whose engine can't say how far along it is.
+            InspectorShape::Converting {
+                figure: false,
+                buttons: 1,
+            },
         ]
     }
 
@@ -3041,7 +3057,7 @@ mod tests {
                 ..
             } => (facts, targets, more.is_some(), buttons),
             InspectorShape::Several { targets, .. } => (0, targets, false, 0),
-            InspectorShape::Converting { buttons }
+            InspectorShape::Converting { buttons, .. }
             | InspectorShape::Done { buttons, .. }
             | InspectorShape::Failed { buttons, .. } => (0, 0, false, buttons),
         }
@@ -3134,7 +3150,8 @@ mod tests {
 
         // A running job: the percentage, then the time left under it, and
         // Cancel follows, 12 below.
-        let running = inspector_layout(&r, &InspectorShape::Converting { buttons: 1 });
+        let shape = |figure| InspectorShape::Converting { figure, buttons: 1 };
+        let running = inspector_layout(&r, &shape(true));
         assert_eq!(running.body.h, 40.0 + 20.0);
         assert_eq!(running.line(0).unwrap().h, 40.0);
         assert_eq!(
@@ -3147,6 +3164,15 @@ mod tests {
         let cancel = running.buttons[0];
         assert_eq!(cancel.y, running.body.bottom() + 12.0);
         assert_eq!((cancel.w, cancel.h), (96.0, BUTTON_HEIGHT));
+        // Without a percentage there is no figure, and no gap where it
+        // would be: the line saying what it does is 8 under the title.
+        let unknown = inspector_layout(&r, &shape(false));
+        assert_eq!(unknown.lines[0].h, 0.0);
+        assert!(unknown.line(0).is_none());
+        let doing = unknown.line(1).unwrap();
+        assert_eq!(doing.y, unknown.title.bottom() + 8.0);
+        assert_eq!(unknown.body, doing);
+        assert_eq!(unknown.buttons[0].y, doing.bottom() + 12.0);
 
         // A failure has a slot for each button it has, 8 apart, left to
         // right, and none for one it hasn't.
@@ -3292,7 +3318,10 @@ mod tests {
         assert_eq!(at(453.0 + 32.0).hero.h, 0.0);
         // The same goes for a job's buttons: a short inspector loses the
         // picture before Cancel.
-        let running = InspectorShape::Converting { buttons: 1 };
+        let running = InspectorShape::Converting {
+            figure: true,
+            buttons: 1,
+        };
         let cancel = |h| {
             let l = inspector_layout(&Rect::new(0.0, 0.0, 300.0, h), &running);
             (l.hero.h, l.buttons.len())
@@ -3396,7 +3425,22 @@ mod tests {
         };
         assert_eq!(
             shape(&converting),
-            InspectorShape::Converting { buttons: 1 }
+            InspectorShape::Converting {
+                figure: false,
+                buttons: 1
+            }
+        );
+        let figured = Inspector::Converting {
+            row: 0,
+            percent: Some(38),
+            time: String::new(),
+        };
+        assert_eq!(
+            shape(&figured),
+            InspectorShape::Converting {
+                figure: true,
+                buttons: 1
+            }
         );
         // Only a held result says it can be dragged out.
         let done = |kept| Inspector::Done {
@@ -3556,7 +3600,10 @@ mod tests {
         // At the inspector's own width every button has its slot.
         for buttons in 0..=2 {
             for shape in [
-                InspectorShape::Converting { buttons },
+                InspectorShape::Converting {
+                    figure: true,
+                    buttons,
+                },
                 InspectorShape::Done {
                     change: true,
                     drag_h: 34.0,

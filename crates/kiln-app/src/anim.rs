@@ -89,13 +89,13 @@ pub struct Tween {
 }
 
 impl Tween {
-    /// A tween at rest at `v`.
+    /// A tween at rest at `v`: it isn't running, so it asks for no frames.
     pub fn new(v: f32, now: Instant) -> Tween {
         Tween {
             from: v,
             to: v,
             start: now,
-            ms: motion::QUICK_MS,
+            ms: 0,
         }
     }
 
@@ -260,6 +260,14 @@ mod tests {
         w.set(1.0, 200, t, false);
         assert_eq!(w.value(t), 1.0);
         assert!(!w.running(t));
+    }
+
+    #[test]
+    fn a_tween_at_rest_is_not_running() {
+        let t = t0();
+        let w = Tween::new(0.5, t);
+        assert!(!w.running(t));
+        assert_eq!(w.value(t), 0.5);
     }
 
     #[test]

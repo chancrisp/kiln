@@ -2640,7 +2640,10 @@ mod tests {
             percent: Some(38),
             time: "about 2 min".to_owned(),
         };
-        let shape = InspectorShape::Converting { buttons: 1 };
+        let shape = InspectorShape::Converting {
+            figure: true,
+            buttons: 1,
+        };
         let pane = read(&converting, shape, "harbour.png");
         assert_eq!(texts(&pane), ["harbour.png", "38%", "about 2 min"]);
         named(&pane, Role::Button, "Cancel harbour.png");
@@ -2654,8 +2657,16 @@ mod tests {
             percent: None,
             time: "Converting to WEBP".to_owned(),
         };
+        let shape = InspectorShape::Converting {
+            figure: false,
+            buttons: 1,
+        };
         let pane = read(&unknown, shape, "harbour.png");
         assert_eq!(texts(&pane), ["harbour.png", "Converting to WEBP"]);
+        // Read where it is drawn: with no figure above it, under the title.
+        let (_, il) = inspector_at(size, es.len(), shape);
+        assert_eq!(rect_of(&pane, "Converting to WEBP"), il.line(1).unwrap());
+        assert_eq!(il.line(1).unwrap().y, il.title.bottom() + 8.0);
         // Done: the result, the change, the drag-out hint and Save.
         let done = Inspector::Done {
             row: 0,
@@ -2754,7 +2765,10 @@ mod tests {
             percent: Some(38),
             time: "about 2 min".to_owned(),
         };
-        let running = InspectorShape::Converting { buttons: 1 };
+        let running = InspectorShape::Converting {
+            figure: true,
+            buttons: 1,
+        };
         // Room for the title and the percentage, but not the time under it:
         // the time is cut to nothing, so it isn't read, and nor is Cancel.
         let (said, il) = read(&converting, running, 110.0);
