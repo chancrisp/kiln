@@ -22,9 +22,16 @@ use resvg::usvg;
 
 const MASTER: &str = include_str!("../assets/kiln-seal.svg");
 
-/// The seal from the SVG master. Below 128 px the detail blocks go.
+/// From this size up the icon is the seal rendered from the SVG master;
+/// below it, a flat fill of the mark.
+const SEAL_FROM: u32 = 48;
+/// From this size up the seal keeps its grain, mottling, speckle and
+/// hand-cut displacement; below it they would turn to noise and go.
+const DETAIL_FROM: u32 = 128;
+
+/// The seal from the SVG master. Below `DETAIL_FROM` the detail blocks go.
 fn render_seal(px: u32) -> Pixmap {
-    let text = if px < 128 {
+    let text = if px < DETAIL_FROM {
         without_blocks(&without_blocks(MASTER, "detail"), "rough")
     } else {
         MASTER.to_string()
@@ -131,7 +138,7 @@ fn main() {
     let assets = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets");
     let mut dir = ico::IconDir::new(ico::ResourceType::Icon);
     for px in [16, 32, 48, 256] {
-        let pm = if px >= 48 {
+        let pm = if px >= SEAL_FROM {
             render_seal(px)
         } else {
             render_flat(px)

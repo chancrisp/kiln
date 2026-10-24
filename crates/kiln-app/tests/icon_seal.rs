@@ -10,7 +10,7 @@ fn parse(svg: &str) -> resvg::usvg::Tree {
 }
 
 #[test]
-fn the_master_is_a_120_unit_square_with_the_mark_in_it() {
+fn the_master_is_256_px_over_a_120_unit_viewbox_with_the_mark_in_it() {
     let tree = parse(MASTER);
     let size = tree.size();
     assert_eq!((size.width(), size.height()), (256.0, 256.0));

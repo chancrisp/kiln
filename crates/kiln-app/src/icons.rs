@@ -28,7 +28,6 @@ pub struct Icon {
     pub path: &'static [Cmd],
 }
 
-/// A single flame line: a teardrop with a notch where the flame splits.
 /// Kiln's mark: a K whose upper arm rises into one lick of fire. The
 /// stem, then the arm that sweeps up and leans back over the stem, then
 /// the straight leg. It spans 4.71..19.29 by 3.25..20.75, the vessel's
@@ -51,6 +50,7 @@ pub const MARK_PATH: &[Cmd] = &[
     Close,
 ];
 
+/// A single flame line: a teardrop with a notch where the flame splits.
 pub const FLAME_PATH: &[Cmd] = &[
     Move(12.0, 21.0),
     Cubic(8.5, 21.0, 6.0, 18.5, 6.0, 15.25),
@@ -466,7 +466,8 @@ pub struct AppIconLayout {
 pub fn app_icon_layout(px: f32) -> AppIconLayout {
     // The mark spans 4.71..19.29 by 3.25..20.75 on the grid, 17.5 units
     // tall like the vessel before it. It fills about 70 percent of the
-    // tile, so it reads at 16 px and doesn't crowd 48.
+    // tile, so it reads at 16 px and doesn't crowd 32. Only those two
+    // flat sizes come through here; 48 and 256 are the seal from the SVG.
     let scale = px * 0.70 / 17.5;
     let cx = 12.0 * scale;
     let cy = 12.0 * scale;

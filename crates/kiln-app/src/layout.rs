@@ -1387,8 +1387,8 @@ pub enum InspectorShape {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct InspectorLayout {
     /// The preview, [`HERO`] tall and as wide as the padding leaves. In
-    /// `Nothing` it holds the 48 DIP mark, centred. It is the first
-    /// thing to go when the inspector is short.
+    /// `Nothing` it is reserved for the 48 DIP mark, which nothing draws
+    /// yet. It is the first thing to go when the inspector is short.
     pub hero: Rect,
     pub title: Rect,
     /// What the format is, the sentence, or the lines of a running or
