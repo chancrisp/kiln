@@ -1,0 +1,26 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "docs/readme/banner.html"
+        ],
+        "createdAt": "2026-10-24T11:28:35.794Z",
+        "reason": "The banner's mock window is a ~0.6x miniature of the real app; its padding scales with it."
+      },
+      {
+        "rule": "nested-cards",
+        "value": "*",
+        "files": [
+          "docs/readme/banner.html"
+        ],
+        "createdAt": "2026-10-24T11:28:35.833Z",
+        "reason": "The mock mirrors the app's real structure: window, panel, rows and inspector."
+      }
+    ]
+  }
+}
