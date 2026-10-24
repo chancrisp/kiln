@@ -54,7 +54,9 @@ windows = { version = "0.62", features = [
 
 [dev-dependencies]
 tempfile.workspace = true
-tiny-skia = "0.12"
+# gen_icon renders assets/kiln-seal.svg. resvg brings its own tiny-skia
+# (0.11), which the example uses for every size so one Pixmap type serves.
+resvg = { version = "0.45", default-features = false }
 ico = "0.6"
 
 [build-dependencies]

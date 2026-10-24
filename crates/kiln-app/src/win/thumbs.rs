@@ -287,8 +287,8 @@ mod tests {
     fn a_png_gives_a_thumbnail_the_right_size() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("celadon.png");
-        let mut pixmap = tiny_skia::Pixmap::new(64, 48).unwrap();
-        pixmap.fill(tiny_skia::Color::from_rgba8(0x7F, 0xB5, 0xA0, 0xFF));
+        let mut pixmap = resvg::tiny_skia::Pixmap::new(64, 48).unwrap();
+        pixmap.fill(resvg::tiny_skia::Color::from_rgba8(0x7F, 0xB5, 0xA0, 0xFF));
         pixmap.save_png(&path).unwrap();
 
         let px = fetch_on_sta(path, (34, 34)).expect("Windows makes a thumbnail of a PNG");
@@ -311,8 +311,8 @@ mod tests {
         // than its alpha, or the edge glows on the dark theme.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("glaze.png");
-        let mut pixmap = tiny_skia::Pixmap::new(64, 64).unwrap();
-        let bone = tiny_skia::ColorU8::from_rgba(0xED, 0xE6, 0xDA, 64).premultiply();
+        let mut pixmap = resvg::tiny_skia::Pixmap::new(64, 64).unwrap();
+        let bone = resvg::tiny_skia::ColorU8::from_rgba(0xED, 0xE6, 0xDA, 64).premultiply();
         for y in 0..64 {
             for x in 0..32 {
                 pixmap.pixels_mut()[y * 64 + x] = bone;

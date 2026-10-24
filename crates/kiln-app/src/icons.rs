@@ -462,6 +462,27 @@ pub const ALL: [Icon; 25] = [
     stroke("more", MORE_PATH),
 ];
 
+/// `svg` without every span from `<!-- name -->` to `<!-- /name -->`, markers
+/// included. The app icon's master marks its grain and its hand-cut
+/// displacement this way, so gen_icon can render a 48 px icon that keeps the
+/// relief and loses the detail that would turn to noise. A marker without
+/// its partner leaves the text alone from there on.
+pub fn without_blocks(svg: &str, name: &str) -> String {
+    let open = format!("<!-- {name} -->");
+    let close = format!("<!-- /{name} -->");
+    let mut out = String::with_capacity(svg.len());
+    let mut rest = svg;
+    while let Some(start) = rest.find(&open) {
+        let Some(end) = rest[start..].find(&close) else {
+            break;
+        };
+        out.push_str(&rest[..start]);
+        rest = &rest[start + end + close.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// The app icon's geometry at a given pixel size: the tile's corner radius
 /// and the scale and offset that centre the vessel on it.
 pub struct AppIconLayout {
@@ -524,6 +545,14 @@ mod tests {
         for icon in ALL.iter().filter(|i| i.style == Style::Fill) {
             assert_eq!(icon.path.last(), Some(&Close), "{}", icon.name);
         }
+    }
+
+    #[test]
+    fn without_blocks_cuts_every_marked_span_and_nothing_else() {
+        let svg = "<a/>\n<!-- detail -->\n<b/>\n<!-- /detail -->\n<c>\n<!-- detail --><d/><!-- /detail -->\n</c>\n<!-- rough -->\n<e>\n<!-- /rough -->\n";
+        assert_eq!(without_blocks(svg, "detail"), "<a/>\n\n<c>\n\n</c>\n<!-- rough -->\n<e>\n<!-- /rough -->\n");
+        assert_eq!(without_blocks(svg, "rough"), "<a/>\n<!-- detail -->\n<b/>\n<!-- /detail -->\n<c>\n<!-- detail --><d/><!-- /detail -->\n</c>\n\n");
+        assert_eq!(without_blocks("<a/>", "detail"), "<a/>");
     }
 
     #[test]

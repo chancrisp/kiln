@@ -65,7 +65,7 @@
   <g filter="url(#edge)"><rect x="4" y="4" width="112" height="112" rx="25" fill="url(#dark)"/></g>
   <!-- detail -->
   <rect x="4" y="4" width="112" height="112" rx="25" filter="url(#mottle)" opacity="0.4"/>
-  <rect x="4" y="4" width="112" height="112" rx="25" filter="url(#grain)" opacity="0.25"/>
+  <rect x="4" y="4" width="112" height="112" rx="25" filter="url(#grain)" opacity="0.15"/>
   <!-- /detail -->
   <g filter="url(#deboss)">
     <!-- rough -->
