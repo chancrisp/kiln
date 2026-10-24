@@ -22,7 +22,7 @@ pub const R_MORE_OUTER: f32 = 208.0;
 /// Most formats the inner ring shows when the rest go to More.
 pub const COMMON: usize = 8;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WheelKind {
     /// Shift: convert to another format.
     Convert,

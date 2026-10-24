@@ -34,6 +34,7 @@ use crate::theme::{self, depth, effects, shape, Glaze, Palette, Rgb};
 use crate::ways_in::{self, EmptyLines};
 use crate::wheel::{self, Action, Spot, Wheel, R_INNER, R_MORE_INNER, R_MORE_OUTER, R_OUTER};
 
+use super::motion::ButtonId;
 use super::text::Text;
 
 /// How the wheel looks this frame.
@@ -191,10 +192,14 @@ pub struct SheetView<'a> {
     /// Each knob's name and its value as it reads.
     pub rows: &'a [(String, String)],
     pub preset: Preset,
-    /// Indexes into `layout.controls`.
+    /// Indexes into `layout.controls`: the segments and steppers light by
+    /// them.
     pub hover: Option<usize>,
     pub pressed: Option<usize>,
     pub focus: Option<usize>,
+    /// Cancel's and Convert's hover and press, as they ease
+    /// (`ButtonId::sheet`).
+    pub button: &'a dyn Fn(ButtonId) -> (f32, f32),
     /// 0 to 1 as it fades in, how far it still has to rise in DIPs
     /// (`anim::rise`), and 1 to 0 as it fades out.
     pub open: f32,
@@ -274,9 +279,9 @@ pub struct View<'a> {
     /// top of the list before scrolling, as it glides from row to row.
     /// `None` while several rows are selected: each draws its own.
     pub selection_y: Option<f32>,
-    /// A header, footer or inspector button's hover and press, each 0 to
-    /// 1, as they ease.
-    pub button: &'a dyn Fn(FocusButton) -> (f32, f32),
+    /// A button's hover and press, each 0 to 1, as they ease: the header's,
+    /// the footer's and the inspector's, and those on a sheet or dialog.
+    pub button: &'a dyn Fn(ButtonId) -> (f32, f32),
     pub hover_row: Option<usize>,
     pub hover_cancel: bool,
     pub hover_link: bool,
@@ -320,9 +325,9 @@ pub struct View<'a> {
 pub struct HelpView<'a> {
     pub sections: &'a [HelpSection],
     pub scroll: f32,
-    /// Close, its only control, which has the keyboard focus.
-    pub close_hover: bool,
-    pub close_pressed: bool,
+    /// Close's hover and press, as they ease (`ButtonId::Help`). It is
+    /// the only control, and has the keyboard focus.
+    pub button: &'a dyn Fn(ButtonId) -> (f32, f32),
     /// 0 to 1 as it fades in, and how far it still has to rise in DIPs
     /// (`anim::rise`).
     pub open: f32,
@@ -338,8 +343,8 @@ pub struct DetailsView<'a> {
     /// "Copy", or "Copied" for a moment after a copy.
     pub copy_label: &'static str,
     pub focus: DialogButton,
-    pub hover: Option<DialogButton>,
-    pub pressed: Option<DialogButton>,
+    /// Each button's hover and press, as they ease (`ButtonId::Details`).
+    pub button: &'a dyn Fn(ButtonId) -> (f32, f32),
 }
 
 /// The settings panel this frame.
@@ -366,9 +371,13 @@ pub struct SettingsView<'a> {
     pub keys: KeyMap,
     /// Each engine's line, and whether it is muted.
     pub engines: [(&'a str, bool); 4],
-    /// Indexes into `layout.controls`.
+    /// Indexes into `layout.controls`: the tabs, segments and steppers
+    /// light by them.
     pub hover: Option<usize>,
     pub pressed: Option<usize>,
+    /// Each button's hover and press, as they ease
+    /// (`ButtonId::settings`).
+    pub button: &'a dyn Fn(ButtonId) -> (f32, f32),
     /// The update check's note, whether it is muted, and the button label.
     pub update: (&'a str, bool),
     pub update_button: &'a str,
@@ -1452,7 +1461,7 @@ impl Draw<'_> {
             (l.help_button, "help", FocusButton::Help),
             (l.settings_button, "dial", FocusButton::Settings),
         ] {
-            let (hover, _) = (v.button)(which);
+            let (hover, _) = (v.button)(ButtonId::Window(which));
             self.hover_back(&b, shape::RADIUS_CONTROL, hover, p);
             let c = blend(p, p.text_muted, p.text, hover);
             self.icon(icon, b.x + 4.0, b.y + 4.0, 1.0, c, 1.0);
@@ -1512,7 +1521,7 @@ impl Draw<'_> {
             p.text,
             1.0,
         );
-        let (hover, pressed) = (v.button)(FocusButton::AddFiles);
+        let (hover, pressed) = (v.button)(ButtonId::Window(FocusButton::AddFiles));
         self.primary(lines.button, &e.button, hover, pressed, p);
         self.label(
             v.empty_status,
@@ -2324,7 +2333,7 @@ impl Draw<'_> {
         };
         for &(c, b) in iv.controls {
             let (hot, pressed) = if iv.live {
-                (v.button)(FocusButton::Inspector(c))
+                (v.button)(ButtonId::Window(FocusButton::Inspector(c)))
             } else {
                 (0.0, 0.0)
             };
@@ -2477,7 +2486,7 @@ impl Draw<'_> {
             // The footer's one primary action stands raised: its shadow, and
             // the light along its top, which a press sinks out of sight.
             self.shadow(&convert, shape::RADIUS_CONTROL, p);
-            let (hover, pressed) = (v.button)(FocusButton::Convert);
+            let (hover, pressed) = (v.button)(ButtonId::Window(FocusButton::Convert));
             if v.convert_key && layout::convert_keycap(&convert) {
                 // Convert names its key after the word.
                 self.primary_face(&convert, hover, pressed, p);
@@ -2497,13 +2506,13 @@ impl Draw<'_> {
                 1.0,
             );
         }
-        let (hover, pressed) = (v.button)(FocusButton::AddFiles);
+        let (hover, pressed) = (v.button)(ButtonId::Window(FocusButton::AddFiles));
         self.button(v.empty.button, &add, hover, pressed, p);
         if let Some((label, b)) = export {
-            let (hover, pressed) = (v.button)(FocusButton::ExportAll);
+            let (hover, pressed) = (v.button)(ButtonId::Window(FocusButton::ExportAll));
             self.button(label, &b, hover, pressed, p);
         }
-        let (hover, pressed) = (v.button)(FocusButton::Clear);
+        let (hover, pressed) = (v.button)(ButtonId::Window(FocusButton::Clear));
         self.button("Clear", &button, hover, pressed, p);
         Ok(())
     }
@@ -3130,8 +3139,8 @@ impl Draw<'_> {
             (DialogButton::Close, "Close"),
         ] {
             let r = d.button(b);
-            let (hover, pressed) = (dv.hover == Some(b), dv.pressed == Some(b));
-            self.button(text, &r, amount(hover), amount(pressed), p);
+            let (hover, pressed) = (dv.button)(ButtonId::Details(b));
+            self.button(text, &r, hover, pressed, p);
             if dv.focus == b {
                 self.focus_ring(&r, p);
             }
@@ -3191,7 +3200,7 @@ impl Draw<'_> {
             let thumb = Rect::new(d.panel.right() - 8.0, thumb_y, 2.0, thumb_h);
             self.thumb(&thumb, p);
         }
-        let (hover, pressed) = (amount(hv.close_hover), amount(hv.close_pressed));
+        let (hover, pressed) = (hv.button)(ButtonId::Help);
         self.button("Close", &d.close, hover, pressed, p);
         self.focus_ring(&d.close, p);
         Ok(())
@@ -3224,12 +3233,10 @@ impl Draw<'_> {
         self.with_opacity(sv.page.clamp(0.0, 1.0), || self.settings_page(sv, p))?;
 
         for (k, (control, r)) in l.controls.iter().enumerate() {
-            let (hover, pressed) = (sv.hover == Some(k), sv.pressed == Some(k));
+            let (hover, pressed) = (sv.button)(ButtonId::Settings(*control));
             match control {
-                Control::Close => self.button("Close", r, amount(hover), amount(pressed), p),
-                Control::CheckUpdates => {
-                    self.button(sv.update_button, r, amount(hover), amount(pressed), p)
-                }
+                Control::Close => self.button("Close", r, hover, pressed, p),
+                Control::CheckUpdates => self.button(sv.update_button, r, hover, pressed, p),
                 _ => continue,
             }
             if sv.focus == Some(k) {
@@ -3326,14 +3333,17 @@ impl Draw<'_> {
         // Segmented groups, outlined once each after their fills.
         let mut groups: Vec<(Control, Vec<(bool, Rect)>)> = vec![];
         for (k, (control, r)) in l.controls.iter().enumerate() {
+            // Segments and steppers light at once; buttons ease their hover
+            // and press (`lift`, `sink`).
             let (hover, pressed) = (sv.hover == Some(k), sv.pressed == Some(k));
+            let (lift, sink) = (sv.button)(ButtonId::Settings(*control));
             let chosen = match control {
                 Control::OutputChoose | Control::EngineChoose(_) => {
-                    self.button("Choose", r, amount(hover), amount(pressed), p);
+                    self.button("Choose", r, lift, sink, p);
                     None
                 }
                 Control::OutputReset | Control::EngineReset(_) => {
-                    self.button("Reset", r, amount(hover), amount(pressed), p);
+                    self.button("Reset", r, lift, sink, p);
                     None
                 }
                 Control::EngineGet(_) => {
@@ -3371,8 +3381,7 @@ impl Draw<'_> {
                     Some(chosen)
                 }
                 Control::ForgetPicks if sv.has_habits => {
-                    let (hover, pressed) = (amount(hover), amount(pressed));
-                    self.button("Reset suggestions", r, hover, pressed, p);
+                    self.button("Reset suggestions", r, lift, sink, p);
                     None
                 }
                 Control::ForgetPicks => {
@@ -3399,7 +3408,7 @@ impl Draw<'_> {
                     None
                 }
                 Control::Key(wheel) => {
-                    self.button_face(r, amount(hover), amount(pressed), false, p);
+                    self.button_face(r, lift, sink, false, p);
                     let code = sv.keys.key_for(*wheel).code();
                     let (_, cw) = self.text.code_layout(code, r.w, r.h)?;
                     let label_w = self.text.measure(wheel.title(), &self.text.body);
@@ -3483,10 +3492,12 @@ impl Draw<'_> {
                         self.stepper(text, r, hover, pressed, p);
                     }
                     SheetControl::Cancel => {
-                        self.button("Cancel", r, amount(hover), amount(pressed), p)
+                        let (hover, pressed) = (sv.button)(ButtonId::Sheet(*c));
+                        self.button("Cancel", r, hover, pressed, p)
                     }
                     SheetControl::Convert => {
-                        self.primary("Convert", r, amount(hover), amount(pressed), p)
+                        let (hover, pressed) = (sv.button)(ButtonId::Sheet(*c));
+                        self.primary("Convert", r, hover, pressed, p)
                     }
                 }
             }

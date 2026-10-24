@@ -69,7 +69,7 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThemeChoice {
     /// Follow the Windows app mode.
@@ -236,7 +236,7 @@ pub const PANDOC_DOWNLOAD: &str = "https://pandoc.org/installing.html";
 pub const LIBREOFFICE_DOWNLOAD: &str = "https://www.libreoffice.org/download/";
 pub const CALIBRE_DOWNLOAD: &str = "https://calibre-ebook.com/download";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Engine {
     Ffmpeg,
     Pandoc,

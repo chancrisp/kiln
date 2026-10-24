@@ -4,6 +4,7 @@ mod drag_out;
 mod drop;
 mod handoff;
 mod inspect;
+mod motion;
 mod render;
 mod system;
 mod text;
@@ -59,15 +60,16 @@ use crate::model::{
 use crate::previews::{self, Preview, PreviewCache, PreviewKey, PreviewSize, CACHE_CAP};
 use crate::quality::{self as q, Value};
 use crate::settings::{self, Engine, Settings};
-use crate::theme::{self, motion, Palette};
+use crate::theme::{self, Palette};
 use crate::update::{Reply, UpdateState};
 use crate::ways_in::{self, MenuItem, RowState};
 use crate::wheel::{self, Action, Spot, Wheel, WheelKind};
 use drop::{DragEvent, DropTarget, DRAG_ENTER, DRAG_LEAVE, DRAG_OVER, WM_KILN_DRAG, WM_KILN_DROP};
 use inspect::Inspector;
+use motion::{new_content, sheet_rise, ButtonId, Fading, Motion, Shows};
 use render::{
-    DetailsView, HelpView, InspectorPage, InspectorView, Renderer, RowAnim, SettingsView,
-    SheetView, View, WheelView,
+    DetailsView, HelpView, InspectorPage, InspectorView, Renderer, SettingsView, SheetView, View,
+    WheelView,
 };
 use thumbs::Thumbs;
 use tips::Tips;
@@ -138,14 +140,14 @@ const MK_LBUTTON_FLAG: u32 = 0x0001;
 /// How long More's outer ring takes to pour open.
 const OPEN_MS: u32 = 160;
 /// The pulse on a chosen item before its job starts.
-const PULSE_MS: u32 = motion::SETTLE_MS;
+const PULSE_MS: u32 = theme::motion::SETTLE_MS;
 
 /// The heat of running progress lines now. Every line shares one clock so
 /// they breathe together; with Animation effects off they hold still.
 fn heat_now() -> f32 {
     static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     let ms = EPOCH.get_or_init(Instant::now).elapsed().as_secs_f32() * 1000.0;
-    motion::breath(ms, motion::animations())
+    theme::motion::breath(ms, theme::motion::animations())
 }
 
 /// An HWND the worker threads can post to.
@@ -201,7 +203,7 @@ impl WheelUi {
     /// Whether it is still blooming open at `now`: the disc, or the last
     /// of its segments, which follow it one after another.
     fn blooming(&self, now: Instant, animations: bool) -> bool {
-        let ms = since_ms(self.opened, now);
+        let ms = anim::elapsed_ms(self.opened, now);
         let last = self.wheel.segments().saturating_sub(1);
         anim::bloom(ms, animations).0 < 1.0 || anim::segment(ms, last, animations).0 < 1.0
     }
@@ -222,12 +224,14 @@ impl WheelUi {
         match spot {
             Some(Spot::Inner(i)) if self.wheel.is_more(i) => {
                 self.more
-                    .set(1.0, OPEN_MS, Instant::now(), motion::animations())
+                    .set(1.0, OPEN_MS, Instant::now(), theme::motion::animations())
             }
-            Some(Spot::Inner(_)) => {
-                self.more
-                    .set(0.0, motion::QUICK_MS, Instant::now(), motion::animations())
-            }
+            Some(Spot::Inner(_)) => self.more.set(
+                0.0,
+                theme::motion::QUICK_MS,
+                Instant::now(),
+                theme::motion::animations(),
+            ),
             _ => {}
         }
         self.hover = spot;
@@ -542,363 +546,6 @@ struct HelpUi {
     opened: Instant,
 }
 
-/// A sheet's way in, `since` it opened: how far it has faded in, and how
-/// far it still has to rise (`anim::rise`).
-fn sheet_rise(since: Instant, now: Instant, animations: bool) -> (f32, f32) {
-    anim::rise(
-        since_ms(since, now),
-        anim::SHEET_MS,
-        anim::SHEET_RISE,
-        animations,
-    )
-}
-
-/// A row's times, which its motion is worked out from, and the job it
-/// waits on.
-struct RowTimes {
-    added: Instant,
-    /// Its place in the batch it was added with: it pours in after the
-    /// rows before it (`anim::pour`).
-    order: usize,
-    /// When the row's last job finished well: its glaze cools from then.
-    settled: Option<Instant>,
-    /// When the row's last job failed: it cracks from then.
-    cracked: Option<Instant>,
-    /// The job the row is waiting on. Only it may change the row: a job
-    /// stopped or replaced can still report late.
-    job: Option<JobId>,
-}
-
-impl RowTimes {
-    fn new(added: Instant, order: usize) -> Self {
-        RowTimes {
-            added,
-            order,
-            settled: None,
-            cracked: None,
-            job: None,
-        }
-    }
-
-    /// How long the row takes to pour in, its wait included.
-    fn pour_ms(&self) -> u32 {
-        let wait = (self.order as u64 * anim::POUR_STAGGER_MS as u64)
-            .min(anim::POUR_STAGGER_CAP_MS as u64) as u32;
-        wait + anim::POUR_MS
-    }
-
-    /// Whether the row is still pouring in, cooling or cracking at `now`.
-    fn moving_at(&self, now: Instant, animations: bool) -> bool {
-        let within =
-            |t: Option<Instant>, ms: u32| t.is_some_and(|t| anim::within(t, ms, now, animations));
-        within(Some(self.added), self.pour_ms())
-            || within(self.settled, anim::COOL_MS)
-            || within(self.cracked, anim::CRACK_MS)
-    }
-}
-
-/// Milliseconds from `t` to `now`, never negative.
-fn since_ms(t: Instant, now: Instant) -> f32 {
-    now.saturating_duration_since(t).as_secs_f32() * 1000.0
-}
-
-/// The window's own motion, as plain data: each row's times, the
-/// selection's glide, the inspector's cross-fade and fold, the newest
-/// picture's fade and the buttons' hover and press. It keeps only when
-/// each moment began and where each eased value is heading; how each
-/// looks is worked out from that when a frame is drawn (`anim`). The
-/// wheel, the sheets and a drag keep their own times.
-struct Motion {
-    /// Each listed row's times, in list order.
-    rows: Vec<RowTimes>,
-    /// Where the one selected row's wash and edge are drawn, in DIPs from
-    /// the top of the list before scrolling. It glides when one row's
-    /// selection moves to another nearby.
-    selection_y: Tween,
-    /// The one selected row as last seen, and how many rows there were
-    /// then. `None` while several rows, or none, are selected.
-    glided: Option<(usize, usize)>,
-    /// When the inspector's content last changed: the new content rises
-    /// in from then (`anim::CROSSFADE_MS`).
-    inspector_since: Option<Instant>,
-    /// How much of the inspector is shown, from 0 folded away to 1. It
-    /// follows the window's width (`layout::inspector_fits`).
-    inspector_shown: Tween,
-    /// When the newest picture in view arrived, so frames run while it
-    /// fades in.
-    preview_shown: Option<Instant>,
-    /// Each header, footer and inspector button's hover, 0 to 1. A button
-    /// is added the first time it is hovered, never on a frame.
-    button_hover: HashMap<FocusButton, Tween>,
-    /// The same for a press.
-    button_press: HashMap<FocusButton, Tween>,
-}
-
-impl Motion {
-    /// Nothing moving, with the inspector `shown` (0 or 1).
-    fn new(now: Instant, shown: f32) -> Self {
-        Motion {
-            rows: vec![],
-            selection_y: Tween::new(0.0, now),
-            glided: None,
-            inspector_since: None,
-            inspector_shown: Tween::new(shown, now),
-            preview_shown: None,
-            button_hover: HashMap::new(),
-            button_press: HashMap::new(),
-        }
-    }
-
-    /// `count` rows were added at row `at`, as one batch: each pours in
-    /// after the ones before it.
-    fn rows_added(&mut self, at: usize, count: usize, now: Instant) {
-        let at = at.min(self.rows.len());
-        self.rows
-            .splice(at..at, (0..count).map(|order| RowTimes::new(now, order)));
-    }
-
-    /// Row `i`'s job started: it has nothing left to cool or crack.
-    fn row_started(&mut self, i: usize) {
-        if let Some(r) = self.rows.get_mut(i) {
-            r.settled = None;
-            r.cracked = None;
-        }
-    }
-
-    /// Row `i`'s job finished well: it flashes in its glaze and cools.
-    fn row_finished(&mut self, i: usize, now: Instant) {
-        if let Some(r) = self.rows.get_mut(i) {
-            r.settled = Some(now);
-            r.cracked = None;
-        }
-    }
-
-    /// Row `i`'s job failed: it cracks.
-    fn row_failed(&mut self, i: usize, now: Instant) {
-        if let Some(r) = self.rows.get_mut(i) {
-            r.settled = None;
-            r.cracked = Some(now);
-        }
-    }
-
-    /// Whether anything here still moves at `now`, so frames are needed.
-    /// With Animation effects off, nothing does.
-    fn moving_at(&self, now: Instant, animations: bool) -> bool {
-        let within =
-            |t: Option<Instant>, ms: u32| t.is_some_and(|t| anim::within(t, ms, now, animations));
-        self.rows.iter().any(|r| r.moving_at(now, animations))
-            || self.selection_y.running(now)
-            || self.inspector_shown.running(now)
-            || within(self.inspector_since, anim::CROSSFADE_MS)
-            || within(self.preview_shown, anim::PREVIEW_MS)
-            || self
-                .button_hover
-                .values()
-                .chain(self.button_press.values())
-                .any(|t| t.running(now))
-    }
-
-    /// Fold the inspector away, or bring it back, for a window `w` zoomed
-    /// DIPs wide. It slides over `anim::FOLD_MS` while files are `listed`;
-    /// with none there is no inspector to watch, and it is simply there.
-    /// Returns whether a slide began.
-    fn fold_to(&mut self, w: f32, listed: bool, now: Instant, animations: bool) -> bool {
-        let to = if layout::inspector_fits(w) { 1.0 } else { 0.0 };
-        if self.inspector_shown.target() == to {
-            return false;
-        }
-        let slide = animations && listed;
-        self.inspector_shown.set(to, anim::FOLD_MS, now, slide);
-        slide
-    }
-
-    /// How much of the inspector shows at `now`, 0 to 1.
-    fn shown(&self, now: Instant) -> f32 {
-        self.inspector_shown.value(now).clamp(0.0, 1.0)
-    }
-
-    /// Whether the inspector is on its way to showing, or shows: where the
-    /// fold is heading, whatever it shows yet.
-    fn inspector_staying(&self) -> bool {
-        self.inspector_shown.target() > 0.5
-    }
-
-    /// The selection is now `seen`: one row and how many rows there are, or
-    /// `None` for several or none. From one row to another no more than
-    /// `reach` rows away, with no rows come or gone, its wash glides there;
-    /// any other way it is there at once. Returns whether a glide began.
-    fn glide(
-        &mut self,
-        seen: Option<(usize, usize)>,
-        reach: usize,
-        now: Instant,
-        animations: bool,
-    ) -> bool {
-        let before = std::mem::replace(&mut self.glided, seen);
-        let Some((row, rows)) = seen else {
-            return false;
-        };
-        let near = matches!(before, Some((was, n)) if n == rows && was != row && was.abs_diff(row) <= reach);
-        let glides = near && animations;
-        let y = row as f32 * ROW_HEIGHT;
-        if glides {
-            self.selection_y.set(y, anim::GLIDE_MS, now, true);
-        } else {
-            self.selection_y = Tween::new(y, now);
-        }
-        glides
-    }
-
-    /// Where the one selected row's wash is drawn at `now`.
-    fn selection_at(&self, now: Instant) -> f32 {
-        self.selection_y.value(now)
-    }
-
-    /// Ease button `b` toward being `hover`ed and `press`ed, over
-    /// `anim::PRESS_MS`. A button not yet kept is added only when it is
-    /// hovered or pressed. Returns whether either began to move.
-    fn ease_button(
-        &mut self,
-        b: FocusButton,
-        hover: bool,
-        press: bool,
-        now: Instant,
-        animations: bool,
-    ) -> bool {
-        let h = ease_toward(&mut self.button_hover, b, hover, now, animations);
-        let p = ease_toward(&mut self.button_press, b, press, now, animations);
-        h || p
-    }
-
-    /// Ease the inspector's controls: the one under the pointer, `hover`,
-    /// and the one `press`ed, toward lit, and every other back.
-    fn ease_inspector(
-        &mut self,
-        hover: Option<InspectorControl>,
-        press: Option<InspectorControl>,
-        now: Instant,
-        animations: bool,
-    ) -> bool {
-        let mut began = false;
-        for (map, on) in [
-            (&mut self.button_hover, hover),
-            (&mut self.button_press, press),
-        ] {
-            for (b, t) in map.iter_mut() {
-                if let FocusButton::Inspector(c) = b {
-                    began |= ease_one(t, on == Some(*c), now, animations);
-                }
-            }
-            if let Some(c) = on {
-                began |= ease_toward(map, FocusButton::Inspector(c), true, now, animations);
-            }
-        }
-        began
-    }
-
-    /// Button `b`'s hover and press at `now`, each 0 to 1.
-    fn button(&self, b: FocusButton, now: Instant) -> (f32, f32) {
-        let at = |map: &HashMap<FocusButton, Tween>| {
-            map.get(&b).map_or(0.0, |t| t.value(now).clamp(0.0, 1.0))
-        };
-        (at(&self.button_hover), at(&self.button_press))
-    }
-
-    /// Animation effects went off: every eased value is at its end now.
-    fn settle(&mut self, now: Instant) {
-        let rest = |t: &mut Tween| *t = Tween::new(t.target(), now);
-        rest(&mut self.selection_y);
-        rest(&mut self.inspector_shown);
-        self.button_hover.values_mut().for_each(rest);
-        self.button_press.values_mut().for_each(rest);
-        self.inspector_since = None;
-        self.preview_shown = None;
-    }
-
-    /// Row `i`'s motion at `now`, with `e` its entry, for drawing.
-    fn row_anim(
-        &self,
-        i: usize,
-        e: Option<&model::Entry>,
-        now: Instant,
-        animations: bool,
-    ) -> RowAnim {
-        let facts = e
-            .and_then(|e| e.facts_at)
-            .map_or(1.0, |t| anim::eased(t, FACTS_MS, now, animations));
-        let Some(r) = self.rows.get(i) else {
-            return RowAnim::at_rest(facts);
-        };
-        let (appear, rise) = anim::pour(since_ms(r.added, now), r.order, animations);
-        // A failed row's sentence turns to the error colour as it cracks; a
-        // finished row's result cools into place.
-        let settle = match (r.cracked, r.settled) {
-            (Some(t), _) => anim::eased(t, anim::CRACK_MS, now, animations),
-            (None, Some(t)) => anim::eased(t, anim::COOL_MS, now, animations),
-            (None, None) => 1.0,
-        };
-        let done = e.is_some_and(|e| matches!(e.job, JobState::Done { .. }));
-        let cool = r
-            .settled
-            .filter(|_| done)
-            .map_or(0.0, |t| anim::cool(since_ms(t, now), animations));
-        let shake = r
-            .cracked
-            .map_or(0.0, |t| anim::crack(since_ms(t, now), animations));
-        RowAnim {
-            appear,
-            rise,
-            settle,
-            cool,
-            shake,
-            facts,
-        }
-    }
-}
-
-/// Ease `t` toward 1 when `on`, else toward 0. Returns whether it began
-/// to move.
-fn ease_one(t: &mut Tween, on: bool, now: Instant, animations: bool) -> bool {
-    let to = if on { 1.0 } else { 0.0 };
-    if t.target() == to {
-        return false;
-    }
-    t.set(to, anim::PRESS_MS, now, animations);
-    animations
-}
-
-/// Ease `map`'s value for `b` toward `on`, adding it, at rest at 0, only
-/// when it isn't kept yet and is turning on.
-fn ease_toward(
-    map: &mut HashMap<FocusButton, Tween>,
-    b: FocusButton,
-    on: bool,
-    now: Instant,
-    animations: bool,
-) -> bool {
-    match map.get_mut(&b) {
-        Some(t) => ease_one(t, on, now, animations),
-        None if on => {
-            let mut t = Tween::new(0.0, now);
-            let began = ease_one(&mut t, true, now, animations);
-            map.insert(b, t);
-            began
-        }
-        None => false,
-    }
-}
-
-/// Whether the inspector changing from `before` to `now` is new content,
-/// which cross-fades: anything that changed, except a converting file's
-/// figures ticking over.
-fn new_content(before: &insp::Inspector, now: &insp::Inspector) -> bool {
-    use insp::Inspector as I;
-    match (before, now) {
-        (I::Converting { row: a, .. }, I::Converting { row: b, .. }) => a != b,
-        _ => before != now,
-    }
-}
-
 struct JobInfo {
     paths: Vec<PathBuf>,
     action: Action,
@@ -977,9 +624,21 @@ struct Panel {
     controls: Vec<(InspectorControl, layout::Rect)>,
     /// Each format's glaze, or each kind's, as its rows show them.
     glazes: Vec<theme::Glaze>,
+    /// What it shows, by the files themselves: whether new content is
+    /// another page (`new_content`), and whether its rows still hold them.
+    shows: Shows,
 }
 
 impl Panel {
+    /// Whether the rows it draws by their place in the list still hold the
+    /// files it shows in `entries`. Once rows came or went above them, it
+    /// would show other files.
+    fn still_listed(&self, entries: &[model::Entry]) -> bool {
+        self.shows.still_at(self.pictured(), |i| {
+            entries.get(i).map(|e| e.path.as_path())
+        })
+    }
+
     /// The rows it pictures at its own size: the one file, or the first
     /// three of several.
     fn pictured(&self) -> &[usize] {
@@ -1071,6 +730,11 @@ struct App {
     files: FileList,
     /// What moves in the window, and each row's times: see `Motion`.
     motion: Motion,
+    /// How much of the inspector shows for the message being handled, or
+    /// the frame being drawn: the fold read once (`hold_fold`), so that
+    /// everything one message or frame works out (the layout, the pointer,
+    /// the drawing) sees the inspector at the same place.
+    fold: f32,
     scroll: f32,
     hover_row: Option<usize>,
     hover_cancel: bool,
@@ -1210,7 +874,8 @@ struct App {
     panel: Option<Panel>,
     /// What the inspector showed before its content last changed, and how
     /// far it had faded in then. It fades out over half the cross-fade as
-    /// the new content rises in (`Motion::inspector_since`), then goes.
+    /// the new content rises in (`Motion::inspector_fading`), then goes;
+    /// at once if rows come or go under it (`Panel::still_listed`).
     inspector_prev: Option<(Panel, f32)>,
     /// Whether `CLOCK_TIMER` is running: while the inspector shows a file
     /// converting.
@@ -1323,9 +988,9 @@ impl App {
     /// Read the contrast theme and Animation effects again; repaint in
     /// whatever changed.
     fn display_settings_changed(&mut self) {
-        motion::set_animations(system::animations_on());
+        theme::motion::set_animations(system::animations_on());
         // Animation effects off: whatever was easing is where it was going.
-        if !motion::animations() {
+        if !theme::motion::animations() {
             self.motion.settle(Instant::now());
             self.inspector_prev = None;
         }
@@ -1351,19 +1016,25 @@ impl App {
     }
 
     /// The window as it is drawn now, with as much of the inspector as the
-    /// fold shows (`Motion::shown`). Drawing and the pointer go by it.
+    /// fold shows for this message or frame (`fold`). Drawing and the
+    /// pointer go by it; it reads no clock.
     fn layout(&self) -> layout::Layout {
         let (w, h) = self.renderer.size_dips();
-        let shown = self.motion.shown(Instant::now());
-        layout::layout_with(w, h, self.files.len(), shown)
+        layout::layout_with(w, h, self.files.len(), self.fold)
+    }
+
+    /// Read the fold for the message or frame about to be handled: how
+    /// much of the inspector shows now. Returns what it was before, for a
+    /// message sent from inside another's handling to give back.
+    fn hold_fold(&mut self) -> f32 {
+        std::mem::replace(&mut self.fold, self.motion.shown(Instant::now()))
     }
 
     /// The window as it is once the fold has got where it is going: what
     /// UI Automation is told, so its tree doesn't move with each frame.
     fn settled_layout(&self) -> layout::Layout {
         let (w, h) = self.renderer.size_dips();
-        let shown = self.motion.inspector_shown.target();
-        layout::layout_with(w, h, self.files.len(), shown)
+        layout::layout_with(w, h, self.files.len(), self.motion.fold_target())
     }
 
     /// The footer's Export all button, while results are held that no
@@ -1467,7 +1138,7 @@ impl App {
     /// Whether a frame timer is needed: something moves, or a running
     /// line breathes (not with Animation effects off).
     fn animating(&self) -> bool {
-        anim::frame_ms(self.moving(), self.burning(), motion::animations()).is_some()
+        anim::frame_ms(self.moving(), self.burning(), theme::motion::animations()).is_some()
     }
 
     /// Whether any job is running, so its progress line glows.
@@ -1482,7 +1153,7 @@ impl App {
     /// window's own motion (`Motion::moving_at`), a row's facts crossing
     /// over, the wheel, a sheet, Settings, help or a drag.
     fn moving(&self) -> bool {
-        let (now, animations) = (Instant::now(), motion::animations());
+        let (now, animations) = (Instant::now(), theme::motion::animations());
         let facts = self.files.entries().iter().any(|e| {
             e.facts_at
                 .is_some_and(|t| anim::within(t, FACTS_MS, now, animations))
@@ -1503,7 +1174,7 @@ impl App {
         let settings = self.settings_ui.as_ref().is_some_and(|ui| {
             rising(ui.opened)
                 || ui.tab_marker.running(now)
-                || anim::within(ui.switched, motion::QUICK_MS, now, animations)
+                || anim::within(ui.switched, theme::motion::QUICK_MS, now, animations)
         });
         let help = self.help.as_ref().is_some_and(|ui| rising(ui.opened));
         self.motion.moving_at(now, animations)
@@ -1585,44 +1256,47 @@ impl App {
     }
 
     /// Where the inspector is drawn at `now`, and how far its content is
-    /// moved from where it was laid out: across by the fold's slide, and
-    /// down by new content's rise. `None` while none of it shows. The
-    /// pointer goes by it, so it hits what is drawn.
+    /// moved from where it was laid out: across by the fold's slide (as
+    /// far as `fold` has it), and down by new content's rise. `None` while
+    /// none of it shows. The pointer goes by it, so it hits what is drawn.
     fn inspector_shift(&self, now: Instant) -> Option<(layout::Rect, f32, f32)> {
         let p = self.panel.as_ref()?;
         if self.files.is_empty() {
             return None;
         }
         let (w, h) = self.renderer.size_dips();
-        let drawn = layout::layout_with(w, h, 1, self.motion.shown(now)).inspector?;
+        let drawn = layout::layout_with(w, h, 1, self.fold).inspector?;
         let (_, rise) = self.inspector_rise(now);
         Some((drawn, drawn.x - p.rect.x, rise))
     }
 
-    /// The inspector's content's way in at `now`, since it last changed:
-    /// how far it has faded in, and how far it still has to rise.
+    /// The inspector's content's way in at `now`: see
+    /// `Motion::inspector_rise`.
     fn inspector_rise(&self, now: Instant) -> (f32, f32) {
-        self.motion.inspector_since.map_or((1.0, 0.0), |t| {
-            anim::rise(
-                since_ms(t, now),
-                anim::CROSSFADE_MS,
-                anim::CROSSFADE_RISE,
-                motion::animations(),
-            )
-        })
+        self.motion.inspector_rise(now, theme::motion::animations())
     }
 
-    /// How far what the inspector showed before still shows at `now`: it
-    /// fades out over the first half of the cross-fade, from as far as it
-    /// had come in. `None` once it has gone.
+    /// How far what the inspector showed before still shows at `now`: see
+    /// `Motion::inspector_fading`. `None` once it has gone, or with
+    /// nothing fading.
     fn inspector_fading(&self, now: Instant) -> Option<f32> {
         let (_, from) = self.inspector_prev.as_ref()?;
-        let t = self
-            .motion
-            .inspector_since
-            .map_or(1.0, |t| since_ms(t, now) / anim::CROSSFADE_MS as f32);
-        let a = from * (1.0 - 2.0 * t);
-        (a > 0.0).then_some(a)
+        self.motion.inspector_fading(*from, now)
+    }
+
+    /// A page fading out draws its rows by their place in the list: once
+    /// rows came or went above them, it would show other files, so it goes
+    /// at once (`Panel::still_listed`).
+    fn drop_moved_page(&mut self) {
+        let entries = self.files.entries();
+        if self
+            .inspector_prev
+            .as_ref()
+            .is_some_and(|(p, _)| !p.still_listed(entries))
+        {
+            self.inspector_prev = None;
+            self.invalidate();
+        }
     }
 
     /// Whether `(x, y)` is on the inspector as it is drawn, live or
@@ -1656,6 +1330,7 @@ impl App {
         if self.destroyed {
             return;
         }
+        self.drop_moved_page();
         if !self.inspector_live() {
             self.panel_folded();
             return;
@@ -1707,10 +1382,16 @@ impl App {
         let il = layout::inspector_layout(&rect, &shape);
         let controls = a11y::inspector_controls(&model, &il);
         let glazes = self.offer_glazes(&model);
+        let entries = self.files.entries();
+        let selected = self.files.selected_rows().iter();
+        let shows = Shows::of(
+            &model,
+            selected.filter_map(|&i| entries.get(i).map(|e| e.path.as_path())),
+        );
         let fresh = self
             .panel
             .as_ref()
-            .is_none_or(|p| new_content(&p.model, &model) || p.nothing != nothing);
+            .is_none_or(|p| new_content(&p.shows, &shows));
         let old = self.panel.replace(Panel {
             rect,
             model,
@@ -1718,27 +1399,45 @@ impl App {
             layout: il,
             controls,
             glazes,
+            shows,
         });
         self.panel_lost();
         // New content rises in as what was there fades out, from as far as
-        // it had come in itself. A new size, or a converting file's figures
-        // ticking over, is laid out again in place.
-        if fresh {
-            let now = Instant::now();
-            let animations = motion::animations();
-            let (was, _) = self.inspector_rise(now);
-            self.inspector_prev = old.filter(|_| animations).map(|p| (p, was));
-            self.motion.inspector_since = animations.then_some(now);
-            self.animate();
-        } else {
+        // it had come in itself. The same files' content changing (their
+        // facts, a converting file's figures, a result saved), a row moving
+        // in the list, or a new size, is laid out again in place.
+        if !fresh {
             self.invalidate();
+            return;
         }
+        let now = Instant::now();
+        let fading = self.inspector_fading(now);
+        match self
+            .motion
+            .content_changed(fading, now, theme::motion::animations())
+        {
+            // What was fading out still shows more than what was rising in:
+            // it carries on fading from where it is, and the other goes.
+            Some((Fading::Before, from)) => {
+                if let Some((_, a)) = &mut self.inspector_prev {
+                    *a = from;
+                }
+            }
+            // What was there fades out, unless its rows moved under it.
+            Some((Fading::Now, from)) => {
+                let entries = self.files.entries();
+                self.inspector_prev = old.filter(|p| p.still_listed(entries)).map(|p| (p, from));
+            }
+            None => self.inspector_prev = None,
+        }
+        self.animate();
     }
 
     /// The inspector isn't carrying the actions (`inspector_live`): no
     /// control of it keeps the keyboard, the pointer or a press, and
     /// nothing is built for it. What it showed slides out with the fold
-    /// and goes once it is out of sight, or at once with no files listed.
+    /// and goes once it is out of sight; at once with no files listed, or
+    /// once rows came or went under it (`Panel::still_listed`).
     fn panel_folded(&mut self) {
         self.panel_built = None;
         self.keep_clock(false);
@@ -1747,7 +1446,12 @@ impl App {
         }
         self.panel_hover = None;
         self.panel_pressed = None;
-        let out = self.files.is_empty() || !self.motion.inspector_shown.running(Instant::now());
+        let entries = self.files.entries();
+        let moved = self
+            .panel
+            .as_ref()
+            .is_some_and(|p| !p.still_listed(entries));
+        let out = self.files.is_empty() || moved || !self.motion.folding(Instant::now());
         if out && (self.panel.is_some() || self.inspector_prev.is_some()) {
             self.panel = None;
             self.inspector_prev = None;
@@ -1780,7 +1484,7 @@ impl App {
         if self.destroyed {
             return;
         }
-        let (now, animations) = (Instant::now(), motion::animations());
+        let (now, animations) = (Instant::now(), theme::motion::animations());
         let (w, _) = self.renderer.size_dips();
         let listed = !self.files.is_empty();
         let mut began = self.motion.fold_to(w, listed, now, animations);
@@ -1806,8 +1510,9 @@ impl App {
         self.motion.glide(seen, reach, now, animations)
     }
 
-    /// Each header, footer and inspector button eases toward what the
-    /// pointer is doing to it.
+    /// Each button eases toward what the pointer is doing to it: the
+    /// header's and footer's, the inspector's, and those on a sheet or
+    /// dialog over the window.
     fn follow_buttons(&mut self, now: Instant, animations: bool) -> bool {
         let buttons = [
             (
@@ -1825,14 +1530,63 @@ impl App {
             (FocusButton::Help, self.help_hover, false),
             (FocusButton::Settings, self.settings_hover, false),
         ];
-        // Nothing over the list: a wheel or panel takes the pointer.
-        let hover = self.panel_hover.filter(|_| self.over().list_live());
-        let press = self.panel_pressed;
+        let inspector = |c: InspectorControl| ButtonId::Window(FocusButton::Inspector(c));
+        // A sheet or dialog takes the pointer; with none, the inspector's
+        // controls have it while nothing is over the list.
+        let (hover, press) = match self.overlay_buttons() {
+            Some(over) => over,
+            None => (
+                self.panel_hover
+                    .filter(|_| self.over().list_live())
+                    .map(inspector),
+                self.panel_pressed.map(inspector),
+            ),
+        };
         let mut began = false;
         for (b, hover, press) in buttons {
+            let b = ButtonId::Window(b);
             began |= self.motion.ease_button(b, hover, press, now, animations);
         }
-        began | self.motion.ease_inspector(hover, press, now, animations)
+        began | self.motion.ease_pointed(hover, press, now, animations)
+    }
+
+    /// While a sheet or dialog is open over the window: the button on it
+    /// the pointer is on, and the one it pressed. Help is drawn over the
+    /// rest, then the options sheet, Settings and the details dialog. The
+    /// sheet's and Settings' layouts are worked out only while the pointer
+    /// is on one of their controls.
+    fn overlay_buttons(&self) -> Option<(Option<ButtonId>, Option<ButtonId>)> {
+        if let Some(h) = &self.help {
+            let close = |on: bool| on.then_some(ButtonId::Help);
+            return Some((close(h.hover), close(h.pressed)));
+        }
+        if let Some(s) = &self.sheet {
+            if s.hover.is_none() && s.pressed.is_none() {
+                return Some((None, None));
+            }
+            let l = self.sheet_layout()?;
+            let at = |k: Option<usize>| {
+                let (c, _) = l.controls.get(k?)?;
+                ButtonId::sheet(*c)
+            };
+            return Some((at(s.hover), at(s.pressed)));
+        }
+        if let Some(ui) = &self.settings_ui {
+            if ui.hover.is_none() && self.settings_pressed.is_none() {
+                return Some((None, None));
+            }
+            let l = self.settings_layout();
+            let at = |k: Option<usize>| {
+                let (c, _) = l.controls.get(k?)?;
+                ButtonId::settings(*c)
+            };
+            return Some((at(ui.hover), at(self.settings_pressed)));
+        }
+        let d = self.details.as_ref()?;
+        Some((
+            d.hover.map(ButtonId::Details),
+            d.pressed.map(ButtonId::Details),
+        ))
     }
 
     /// Something the inspector is built from changed outside the list:
@@ -2225,7 +1979,8 @@ impl App {
         self.inspect(paths);
         self.say(model::restored_line(back.len()));
         self.scroll_to_selection();
-        self.invalidate();
+        // The rows pour back in: frames run until they have.
+        self.animate();
     }
 
     /// Take `path`'s row out of the list, stopping its job. The caller
@@ -3722,7 +3477,7 @@ impl App {
                 // The keyboard can start on More with its ring still shut,
                 // so pour it here rather than through `point`.
                 w.more
-                    .set(1.0, OPEN_MS, Instant::now(), motion::animations());
+                    .set(1.0, OPEN_MS, Instant::now(), theme::motion::animations());
                 let first = w
                     .marks()
                     .into_iter()
@@ -3810,13 +3565,13 @@ impl App {
     /// Advance the animations: start a pulsed job, drop a faded wheel or
     /// sheet, and what the inspector showed once it has faded out.
     fn tick(&mut self) {
-        let (now, animations) = (Instant::now(), motion::animations());
+        let (now, animations) = (Instant::now(), theme::motion::animations());
         if self.inspector_prev.is_some() && self.inspector_fading(now).is_none() {
             self.inspector_prev = None;
         }
         if self.sheet.as_ref().is_some_and(|s| {
             s.closing
-                .is_some_and(|t| !anim::within(t, motion::QUICK_MS, now, animations))
+                .is_some_and(|t| !anim::within(t, theme::motion::QUICK_MS, now, animations))
         }) {
             self.sheet = None;
         }
@@ -3837,27 +3592,27 @@ impl App {
             }
         }
         if w.closing
-            .is_some_and(|t| !anim::within(t, motion::QUICK_MS, now, animations))
+            .is_some_and(|t| !anim::within(t, theme::motion::QUICK_MS, now, animations))
         {
             self.wheel = None;
         }
     }
 
     fn wheel_view<'a>(w: Option<&'a WheelUi>, keys: &settings::KeyMap) -> Option<WheelView<'a>> {
-        let (now, animations) = (Instant::now(), motion::animations());
+        let (now, animations) = (Instant::now(), theme::motion::animations());
         let w = w?;
         Some(WheelView {
             wheel: &w.wheel,
             title: ways_in::wheel_title(w.wheel.kind, keys),
             hover: w.hover,
             more: w.more.value(now).clamp(0.0, 1.0),
-            open_ms: since_ms(w.opened, now),
+            open_ms: anim::elapsed_ms(w.opened, now),
             animations,
             fade: w.closing.map_or(1.0, |t| {
-                1.0 - anim::eased(t, motion::QUICK_MS, now, animations)
+                1.0 - anim::eased(t, theme::motion::QUICK_MS, now, animations)
             }),
             pulse: w.pulse.map(|(s, t)| {
-                let ms = motion::ms(PULSE_MS);
+                let ms = theme::motion::ms(PULSE_MS);
                 let done = if ms == 0 {
                     1.0
                 } else {
@@ -4453,7 +4208,7 @@ impl App {
             return;
         }
         if let Some((title, text)) = model::finish_notice(ok, failed, cancelled, first.as_deref()) {
-            if motion::animations() {
+            if theme::motion::animations() {
                 system::flash_until_front(self.hwnd);
             }
             system::notify(self.hwnd, WM_KILN_NOTIFY, &title, &text);
@@ -4855,7 +4610,7 @@ impl App {
                             t.index() as f32,
                             OPEN_MS,
                             Instant::now(),
-                            motion::animations(),
+                            theme::motion::animations(),
                         );
                         ui.switched = Instant::now();
                         ui.hover = None;
@@ -5855,8 +5610,12 @@ impl App {
     }
 
     fn dropped(&mut self, ev: &DragEvent) {
-        self.drag
-            .set(0.0, motion::QUICK_MS, Instant::now(), motion::animations());
+        self.drag.set(
+            0.0,
+            theme::motion::QUICK_MS,
+            Instant::now(),
+            theme::motion::animations(),
+        );
         // A drop acts on the list, so the focus goes back to it.
         self.button_focus = None;
         if self.adds_wait() {
@@ -6352,7 +6111,7 @@ impl App {
         // is done, such as the first after files arrive at start.
         self.follow();
         self.refresh_panel();
-        let (now, animations) = (Instant::now(), motion::animations());
+        let (now, animations) = (Instant::now(), theme::motion::animations());
         let settings_layout = self.settings_layout();
         let empty = ways_in::empty_lines(&self.settings);
         let update_note = self.update.note();
@@ -6378,7 +6137,7 @@ impl App {
         let glaze = |i: usize| theme::glaze_of(kind(i));
         let moves = &self.motion;
         let anim = |i: usize| moves.row_anim(i, entries.get(i), now, animations);
-        let button = |b: FocusButton| moves.button(b, now);
+        let button = |b: ButtonId| moves.button(b, now);
         // The inspector's content rising in, over what it said before
         // fading out.
         let (alpha, rise) = self.inspector_rise(now);
@@ -6403,7 +6162,7 @@ impl App {
             button_ring: self
                 .focused_button()
                 .and_then(|b| self.focus_button_rect(b)),
-            shown: self.motion.shown(now),
+            shown: self.fold,
             // One selected row's wash glides; several draw their own.
             selection_y: (selected.len() == 1).then(|| self.motion.selection_at(now)),
             button: &button,
@@ -6445,16 +6204,14 @@ impl App {
                 scroll: d.scroll,
                 copy_label: model::copy_label(d.last_copy.map(|(ok, t)| (ok, t.elapsed()))),
                 focus: d.focus,
-                hover: d.hover,
-                pressed: d.pressed,
+                button: &button,
             }),
             help: self.help.as_ref().map(|ui| {
                 let (open, rise) = sheet_rise(ui.opened, now, animations);
                 HelpView {
                     sections: &ui.sections,
                     scroll: ui.scroll,
-                    close_hover: ui.hover,
-                    close_pressed: ui.pressed,
+                    button: &button,
                     open,
                     rise,
                 }
@@ -6474,10 +6231,11 @@ impl App {
                         hover: s.hover,
                         pressed: s.pressed,
                         focus: s.focus,
+                        button: &button,
                         open,
                         rise,
                         fade: s.closing.map_or(1.0, |t| {
-                            1.0 - anim::eased(t, motion::QUICK_MS, now, animations)
+                            1.0 - anim::eased(t, theme::motion::QUICK_MS, now, animations)
                         }),
                     })
                 }
@@ -6490,7 +6248,7 @@ impl App {
                     rise,
                     layout: &settings_layout,
                     tab_marker: ui.tab_marker.value(now),
-                    page: anim::eased(ui.switched, motion::QUICK_MS, now, animations),
+                    page: anim::eased(ui.switched, theme::motion::QUICK_MS, now, animations),
                     quality: &self.settings.quality,
                     output: (ui.output_line.0.as_str(), ui.output_line.1),
                     theme: self.settings.theme,
@@ -6501,6 +6259,7 @@ impl App {
                     engines: ui.engine_lines.each_ref().map(|(s, m)| (s.as_str(), *m)),
                     hover: ui.hover,
                     pressed: self.settings_pressed,
+                    button: &button,
                     update: ui
                         .note
                         .as_deref()
@@ -6668,8 +6427,12 @@ impl App {
             };
             if let Some((Preview::Ready(px), arrived)) = self.previews.get(&key, now) {
                 // It fades in from when it arrived.
-                let (fade, _) =
-                    anim::rise(since_ms(arrived, now), anim::PREVIEW_MS, 0.0, animations);
+                let (fade, _) = anim::rise(
+                    anim::elapsed_ms(arrived, now),
+                    anim::PREVIEW_MS,
+                    0.0,
+                    animations,
+                );
                 if fade < 1.0 {
                     fading = fading.max(Some(arrived));
                 }
@@ -6941,7 +6704,7 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
     // dark frame first.
     let system_light = system::system_light();
     let contrast = system::high_contrast();
-    motion::set_animations(system::animations_on());
+    theme::motion::set_animations(system::animations_on());
     let mut settings_store = settings::Store::new(settings::default_path());
     let (settings, settings_error) = settings_store.load();
     let palette = palette_for(contrast, settings.theme.is_light(system_light));
@@ -6954,7 +6717,8 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         hInstance: instance,
         hIcon: icon,
         hCursor: unsafe { LoadCursorW(None, IDC_ARROW)? },
-        // Soot, so the first frame never flashes white.
+        // The theme's ground, so the first frame is already the window's
+        // own colour, light or dark.
         hbrBackground: unsafe { CreateSolidBrush(COLORREF(palette.ground.colorref())) },
         lpszClassName: class,
         ..Default::default()
@@ -7036,6 +6800,7 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         renderer: Renderer::new(hwnd, layout::px_per_unit(dpi, zoom) * 96.0)?,
         files: FileList::default(),
         motion: Motion::new(Instant::now(), 1.0),
+        fold: 1.0,
         scroll: 0.0,
         hover_row: None,
         hover_cancel: false,
@@ -7310,10 +7075,16 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     }
     let (answer, events, take_focus) = {
         let app = unsafe { &mut *ptr };
+        // The fold is read once for the whole message, so everything it
+        // works out sees the inspector at one place. A message sent from
+        // inside another's handling gives the outer one its own back.
+        let outer = app.hold_fold();
         let answer = handle(app, msg, wparam, lparam);
         after(app, msg, wparam);
         let events = std::mem::take(&mut app.a11y_events);
-        (answer, events, std::mem::take(&mut app.take_focus))
+        let take_focus = std::mem::take(&mut app.take_focus);
+        app.fold = outer;
+        (answer, events, take_focus)
     };
     // With `App` no longer borrowed: these send messages straight back to
     // this window, and a client told something may call straight back in.
@@ -7514,7 +7285,7 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
         }
         WM_TIMER if wparam.0 == ANIM_TIMER => {
             app.tick();
-            match anim::frame_ms(app.moving(), app.burning(), motion::animations()) {
+            match anim::frame_ms(app.moving(), app.burning(), theme::motion::animations()) {
                 None => unsafe {
                     let _ = KillTimer(Some(hwnd), ANIM_TIMER);
                 },
@@ -7752,15 +7523,23 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             match wparam.0 {
                 DRAG_ENTER => {
                     app.drag_paths = ev.paths.clone();
-                    app.drag
-                        .set(1.0, motion::QUICK_MS, Instant::now(), motion::animations());
+                    app.drag.set(
+                        1.0,
+                        theme::motion::QUICK_MS,
+                        Instant::now(),
+                        theme::motion::animations(),
+                    );
                     app.animate();
                     app.drag_over(ev);
                 }
                 DRAG_OVER => app.drag_over(ev),
                 DRAG_LEAVE => {
-                    app.drag
-                        .set(0.0, motion::QUICK_MS, Instant::now(), motion::animations());
+                    app.drag.set(
+                        0.0,
+                        theme::motion::QUICK_MS,
+                        Instant::now(),
+                        theme::motion::animations(),
+                    );
                     app.drag_paths.clear();
                     app.close_wheel();
                     app.animate();
@@ -7995,166 +7774,6 @@ mod tests {
         );
         assert_eq!(habit_picks(&Action::Tool(Tool::Merge), &paths), []);
         assert_eq!(habit_picks(&Action::File(FileAction::ALL[0]), &paths), []);
-    }
-
-    fn ms(t: Instant, ms: u32) -> Instant {
-        t + Duration::from_millis(ms as u64)
-    }
-
-    #[test]
-    fn moving_stops_when_every_motion_has_ended() {
-        let t = Instant::now();
-        let mut m = Motion::new(t, 1.0);
-        // Thirty rows added at once: the last of them waits out the
-        // stagger's cap before it pours.
-        m.rows_added(0, 30, t);
-        assert!(m.moving_at(ms(t, 100), true));
-        let end = anim::POUR_STAGGER_CAP_MS + anim::POUR_MS;
-        assert!(m.moving_at(ms(t, end - 1), true));
-        assert!(!m.moving_at(ms(t, end), true));
-        // With Animation effects off nothing moves, not even at once.
-        assert!(!m.moving_at(t, false));
-    }
-
-    #[test]
-    fn the_fold_follows_the_width() {
-        let t = Instant::now();
-        let mut m = Motion::new(t, 1.0);
-        assert!(m.fold_to(700.0, true, t, true));
-        assert_eq!(m.inspector_shown.target(), 0.0);
-        let mid = m.shown(ms(t, 100));
-        assert!(mid > 0.0 && mid < 1.0, "{mid}");
-        assert_eq!(m.shown(ms(t, anim::FOLD_MS)), 0.0);
-        assert!(m.moving_at(ms(t, anim::FOLD_MS - 1), true));
-        assert!(!m.moving_at(ms(t, anim::FOLD_MS), true));
-        // Wide again, it slides back in; the same width again is no change.
-        let t2 = ms(t, 1000);
-        assert!(m.fold_to(1000.0, true, t2, true));
-        assert!(!m.fold_to(1000.0, true, t2, true));
-        assert_eq!(m.shown(ms(t2, anim::FOLD_MS)), 1.0);
-        // With no files there is no inspector to watch, and with Animation
-        // effects off nothing slides: either way it is there at once.
-        assert!(!m.fold_to(700.0, false, t2, true));
-        assert_eq!(m.shown(t2), 0.0);
-        assert!(!m.fold_to(1000.0, true, t2, false));
-        assert_eq!(m.shown(t2), 1.0);
-    }
-
-    #[test]
-    fn a_finished_row_cools_and_a_failed_one_cracks() {
-        let t = Instant::now();
-        let mut m = Motion::new(t, 1.0);
-        m.rows_added(0, 2, t.checked_sub(Duration::from_secs(5)).unwrap_or(t));
-        assert!(!m.moving_at(t, true));
-        m.row_failed(1, t);
-        assert!(m.moving_at(ms(t, anim::CRACK_MS - 1), true));
-        assert!(!m.moving_at(ms(t, anim::CRACK_MS), true));
-        m.row_finished(0, t);
-        assert!(m.moving_at(ms(t, anim::COOL_MS - 1), true));
-        assert!(!m.moving_at(ms(t, anim::COOL_MS), true));
-        assert!(!m.moving_at(t, false));
-        // A row that starts again has nothing left to cool or crack.
-        m.row_started(0);
-        m.row_started(1);
-        assert!(!m.moving_at(t, true));
-    }
-
-    #[test]
-    fn the_selection_glides_only_from_one_row_to_one_nearby() {
-        let t = Instant::now();
-        let y = |row: usize| row as f32 * ROW_HEIGHT;
-        let mut m = Motion::new(t, 1.0);
-        // The first selection is drawn where it is.
-        assert!(!m.glide(Some((2, 40)), 8, t, true));
-        assert_eq!(m.selection_y.value(t), y(2));
-        // One row to another within the list in view glides.
-        assert!(m.glide(Some((6, 40)), 8, t, true));
-        assert_eq!(m.selection_y.value(t), y(2));
-        assert_eq!(m.selection_y.value(ms(t, anim::GLIDE_MS)), y(6));
-        assert!(m.moving_at(ms(t, anim::GLIDE_MS - 1), true));
-        // Farther than the list shows, it is there at once.
-        let t2 = ms(t, 1000);
-        assert!(!m.glide(Some((30, 40)), 8, t2, true));
-        assert_eq!(m.selection_y.value(t2), y(30));
-        // From several rows, or once rows came or went, at once too.
-        assert!(!m.glide(None, 8, t2, true));
-        assert!(!m.glide(Some((31, 40)), 8, t2, true));
-        assert_eq!(m.selection_y.value(t2), y(31));
-        assert!(!m.glide(Some((32, 41)), 8, t2, true));
-        assert_eq!(m.selection_y.value(t2), y(32));
-        // And with Animation effects off.
-        assert!(!m.glide(Some((33, 41)), 8, t2, false));
-        assert_eq!(m.selection_y.value(t2), y(33));
-    }
-
-    #[test]
-    fn a_button_eases_its_hover_and_press_both_ways() {
-        let t = Instant::now();
-        let mut m = Motion::new(t, 1.0);
-        // Nothing hovered: nothing kept, nothing moving.
-        assert!(!m.ease_button(FocusButton::Clear, false, false, t, true));
-        assert_eq!(m.button(FocusButton::Clear, t), (0.0, 0.0));
-        assert!(m.ease_button(FocusButton::Clear, true, false, t, true));
-        assert!(m.moving_at(ms(t, anim::PRESS_MS - 1), true));
-        assert_eq!(
-            m.button(FocusButton::Clear, ms(t, anim::PRESS_MS)),
-            (1.0, 0.0)
-        );
-        // The same again changes nothing.
-        let t2 = ms(t, 500);
-        assert!(!m.ease_button(FocusButton::Clear, true, false, t2, true));
-        assert!(m.ease_button(FocusButton::Clear, true, true, t2, true));
-        assert_eq!(
-            m.button(FocusButton::Clear, ms(t2, anim::PRESS_MS)),
-            (1.0, 1.0)
-        );
-        // Let go, both ease back.
-        let t3 = ms(t, 1000);
-        assert!(m.ease_button(FocusButton::Clear, false, false, t3, true));
-        assert_eq!(
-            m.button(FocusButton::Clear, ms(t3, anim::PRESS_MS)),
-            (0.0, 0.0)
-        );
-        // The inspector's controls: the one under the pointer lights, the
-        // rest let go.
-        let a = InspectorControl::Target(0);
-        let b = InspectorControl::Target(1);
-        assert!(m.ease_inspector(Some(a), None, t3, true));
-        assert!(m.ease_inspector(Some(b), None, t3, true));
-        let at = ms(t3, anim::PRESS_MS);
-        assert_eq!(m.button(FocusButton::Inspector(a), at).0, 0.0);
-        assert_eq!(m.button(FocusButton::Inspector(b), at).0, 1.0);
-        // Animation effects off: there at once, and nothing to wait for.
-        let t4 = ms(t, 2000);
-        assert!(!m.ease_button(FocusButton::Convert, true, false, t4, false));
-        assert_eq!(m.button(FocusButton::Convert, t4), (1.0, 0.0));
-        assert!(!m.moving_at(t4, true));
-    }
-
-    #[test]
-    fn only_new_content_cross_fades_the_inspector() {
-        use insp::Inspector as I;
-        let converting = |row, percent: Option<u32>, time: &str| I::Converting {
-            row,
-            percent,
-            time: time.to_owned(),
-        };
-        // A converting file's figures ticking over is the same content.
-        assert!(!new_content(
-            &converting(2, Some(10), "about 2 min"),
-            &converting(2, Some(11), "about 1 min")
-        ));
-        assert!(!new_content(
-            &converting(2, None, "Converting to WEBP"),
-            &converting(2, Some(1), "Converting to WEBP")
-        ));
-        // Another file, another state, or anything else that changed is.
-        assert!(new_content(
-            &converting(2, Some(10), "x"),
-            &converting(3, Some(10), "x")
-        ));
-        assert!(new_content(&I::Nothing, &converting(2, None, "x")));
-        assert!(!new_content(&I::Nothing, &I::Nothing));
     }
 
     #[test]

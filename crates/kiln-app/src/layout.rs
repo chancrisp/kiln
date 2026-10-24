@@ -744,7 +744,7 @@ pub fn help(w: f32, h: f32) -> HelpPanel {
 }
 
 /// A button of the details dialog.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DialogButton {
     Copy,
     Close,
@@ -816,7 +816,7 @@ pub fn scroll_text(by: TextScroll, scroll: f32, content_h: f32, view_h: f32) -> 
 }
 
 /// The pages of the settings panel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum SettingsTab {
     #[default]
     General,
@@ -845,7 +845,7 @@ impl SettingsTab {
 }
 
 /// Something the settings panel lets you press.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Control {
     Tab(SettingsTab),
     OutputChoose,
@@ -1229,7 +1229,7 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
 }
 
 /// Something the options sheet lets you press.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SheetControl {
     /// One segment of the preset control in a row.
     Preset(usize, Preset),

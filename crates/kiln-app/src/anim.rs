@@ -68,8 +68,9 @@ pub const FRAME_MS: u32 = 16;
 /// cheap, fast enough to look smooth.
 pub const HEAT_FRAME_MS: u32 = 50;
 
-/// Milliseconds from `start` to `now`; never negative.
-fn elapsed_ms(start: Instant, now: Instant) -> f32 {
+/// Milliseconds from `start` to `now`; never negative. The window works
+/// out every motion's progress from it.
+pub(crate) fn elapsed_ms(start: Instant, now: Instant) -> f32 {
     now.saturating_duration_since(start).as_secs_f32() * 1000.0
 }
 
