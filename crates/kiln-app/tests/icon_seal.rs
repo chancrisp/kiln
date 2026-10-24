@@ -35,10 +35,21 @@ fn markers_come_in_pairs() {
 fn the_small_variant_keeps_the_relief_and_loses_the_grain() {
     let small = without_blocks(&without_blocks(MASTER, "detail"), "rough");
     parse(&small);
-    for kept in ["url(#deboss)", "url(#edge)", "url(#glaze)", "url(#pool)", "url(#gloss)"] {
+    for kept in [
+        "url(#deboss)",
+        "url(#edge)",
+        "url(#glaze)",
+        "url(#pool)",
+        "url(#gloss)",
+    ] {
         assert!(small.contains(kept), "{kept} stays at 48 px");
     }
-    for cut in ["url(#grain)", "url(#mottle)", "url(#speckle)", "url(#roughK)"] {
+    for cut in [
+        "url(#grain)",
+        "url(#mottle)",
+        "url(#speckle)",
+        "url(#roughK)",
+    ] {
         assert!(!small.contains(cut), "{cut} goes at 48 px");
     }
     // The rough block removes only the group's open and close tags, so

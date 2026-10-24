@@ -523,7 +523,10 @@ mod tests {
     #[test]
     fn without_blocks_cuts_every_marked_span_and_nothing_else() {
         let svg = "<a/>\n<!-- detail -->\n<b/>\n<!-- /detail -->\n<c>\n<!-- detail --><d/><!-- /detail -->\n</c>\n<!-- rough -->\n<e>\n<!-- /rough -->\n";
-        assert_eq!(without_blocks(svg, "detail"), "<a/>\n\n<c>\n\n</c>\n<!-- rough -->\n<e>\n<!-- /rough -->\n");
+        assert_eq!(
+            without_blocks(svg, "detail"),
+            "<a/>\n\n<c>\n\n</c>\n<!-- rough -->\n<e>\n<!-- /rough -->\n"
+        );
         assert_eq!(without_blocks(svg, "rough"), "<a/>\n<!-- detail -->\n<b/>\n<!-- /detail -->\n<c>\n<!-- detail --><d/><!-- /detail -->\n</c>\n\n");
         assert_eq!(without_blocks("<a/>", "detail"), "<a/>");
     }
@@ -546,7 +549,10 @@ mod tests {
         // the vessel used: 17.5 units tall, centred on (12, 12). A stray
         // edit to the numbers moves one of them.
         let pts = points(MARK_PATH);
-        let on = |x: f32, y: f32| pts.iter().any(|(px, py)| (px - x).abs() < 1e-3 && (py - y).abs() < 1e-3);
+        let on = |x: f32, y: f32| {
+            pts.iter()
+                .any(|(px, py)| (px - x).abs() < 1e-3 && (py - y).abs() < 1e-3)
+        };
         assert!(on(4.71, 20.75), "stem foot");
         assert!(on(4.71, 7.62), "stem top");
         assert!(on(16.79, 20.75), "leg foot");
