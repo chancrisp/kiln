@@ -301,11 +301,7 @@ pub struct EmptyLines {
     pub button: &'static str,
     /// Which keys to hold while dropping, as they are set now.
     pub keys: String,
-    pub privacy: &'static str,
 }
-
-/// What Kiln does, in one line: the last thing Help says.
-pub const TAGLINE: &str = "Fire raw files into finished ones.";
 
 pub fn empty_lines(settings: &Settings) -> EmptyLines {
     EmptyLines {
@@ -313,7 +309,6 @@ pub fn empty_lines(settings: &Settings) -> EmptyLines {
         instruction: "Or add them with the button below, or Ctrl+O.",
         button: ADD_FILES,
         keys: settings.keys.hint(),
-        privacy: "Everything converts on this PC. Nothing is uploaded.",
     }
 }
 

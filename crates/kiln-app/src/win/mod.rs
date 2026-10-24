@@ -616,8 +616,8 @@ struct Panel {
     /// What it says.
     model: insp::Inspector,
     /// What Nothing says under its title as it was built with: the key
-    /// hint, then the privacy line.
-    nothing: (String, &'static str),
+    /// hint.
+    nothing: String,
     layout: layout::InspectorLayout,
     /// Its controls that are placed, in reading order, with where each is.
     /// The pointer, Tab, the drawing and the tree all go by these.
@@ -675,7 +675,7 @@ fn page(p: &Panel, alpha: f32, rise: f32, live: bool) -> InspectorPage<'_> {
         layout: &p.layout,
         controls: &p.controls,
         glazes: &p.glazes,
-        nothing: [&p.nothing.0, p.nothing.1],
+        nothing: &p.nothing,
         alpha,
         rise,
         live,
@@ -1358,8 +1358,7 @@ impl App {
         // While a file converts, its time left is worked out again each
         // second, as the row's own line is.
         self.keep_clock(matches!(model, insp::Inspector::Converting { .. }));
-        let lines = ways_in::empty_lines(&self.settings);
-        let nothing = (lines.keys, lines.privacy);
+        let nothing = ways_in::empty_lines(&self.settings).keys;
         let entries = self.files.entries();
         let selected = self.files.selected_rows().iter();
         let shows = Shows::of(
@@ -1378,8 +1377,7 @@ impl App {
         let measure = |s: &str, how: layout::Wrapped| {
             renderer.inspector_text_height(s, how, layout::INSPECTOR_TEXT_WIDTH)
         };
-        let said = [nothing.0.as_str(), nothing.1];
-        let shape = layout::inspector_shape(&model, said, renderer.more_width(), &measure);
+        let shape = layout::inspector_shape(&model, &nothing, renderer.more_width(), &measure);
         let il = layout::inspector_layout(&rect, &shape);
         let controls = a11y::inspector_controls(&model, &il);
         let glazes = self.offer_glazes(&model);

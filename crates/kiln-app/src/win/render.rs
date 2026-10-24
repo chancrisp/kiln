@@ -157,9 +157,8 @@ pub struct InspectorPage<'a> {
     /// Each format's glaze, or each kind's, in the order its rows show
     /// them.
     pub glazes: &'a [Glaze],
-    /// What Nothing says under its title: the key hint, then the privacy
-    /// line.
-    pub nothing: [&'a str; 2],
+    /// What Nothing says under its title: the key hint.
+    pub nothing: &'a str,
     /// How far it has faded in, and how far it still has to rise, in DIPs.
     pub alpha: f32,
     pub rise: f32,
@@ -1494,8 +1493,8 @@ impl Draw<'_> {
         self.highlight(&panel, shape::RADIUS_PANEL, shape::BORDER, p);
 
         // The centred group: the mark, the headline, how else to add
-        // files, the button, what the status says, the keys to hold, the
-        // privacy note and, where there's room, the four glazes.
+        // files, the button, what the status says, the keys to hold and,
+        // where there's room, the four glazes.
         let e = layout::empty_state(&panel);
         let lines = v.empty;
         // Celadon line work, filling its 72 DIPs. A contrast theme draws
@@ -1530,9 +1529,13 @@ impl Draw<'_> {
             p.text_muted,
             1.0,
         );
-        for (text, r) in [(lines.keys.as_str(), &e.keys), (lines.privacy, &e.privacy)] {
-            self.label(text, &self.text.caption_center, r, p.text_muted, 1.0);
-        }
+        self.label(
+            &lines.keys,
+            &self.text.caption_center,
+            &e.keys,
+            p.text_muted,
+            1.0,
+        );
         // The kinds Kiln reads, each a tile of its glaze and its icon, with
         // its name under it in the glaze's ink.
         for (tile, (g, kind, word)) in e.glazes.iter().flatten().zip(GLAZE_TILES) {
@@ -2108,9 +2111,7 @@ impl Draw<'_> {
                 }
                 let title = &self.text.inspector_title_block;
                 self.label(insp::NOTHING_TITLE, title, &l.title, p.text, 1.0);
-                let [hint, privacy] = iv.nothing;
-                say(0, hint, &self.text.caption_block_center, muted);
-                say(1, privacy, &self.text.caption_block_center, muted);
+                say(0, iv.nothing, &self.text.caption_block_center, muted);
             }
             Inspector::Waiting {
                 row,

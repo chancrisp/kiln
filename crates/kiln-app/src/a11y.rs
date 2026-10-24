@@ -850,7 +850,6 @@ fn main(input: &Input) -> Vec<Node> {
             ),
             text(Id::DropLine(1), input.empty_status, e.status),
             text(Id::DropLine(2), &lines.keys, e.keys),
-            text(Id::DropLine(3), lines.privacy, e.privacy),
         ];
         out.push(
             Node::new(Id::DropPanel, Role::Group, lines.headline, l.panel)
@@ -967,7 +966,6 @@ fn inspector(input: &Input, ins: &InspectorIn) -> Node {
         Inspector::Nothing => {
             lines.push((NOTHING_TITLE.to_owned(), l.title));
             lines.push((input.empty.keys.clone(), line(0)));
-            lines.push((input.empty.privacy.to_owned(), line(1)));
         }
         Inspector::Waiting {
             what,
@@ -2825,27 +2823,22 @@ mod tests {
                 .map(|c| c.name.clone())
                 .collect()
         };
-        // Nothing selected: the title, the key hint and the privacy line.
-        // The mark is no picture of anything.
+        // Nothing selected: the title and the key hint. The mark is no
+        // picture of anything.
         let nothing_shape = InspectorShape::Nothing {
             title_h: 40.0,
             hint_h: 50.0,
-            privacy_h: 20.0,
         };
         let nothing = read(&Inspector::Nothing, nothing_shape, "");
         assert_eq!(
             texts(&nothing),
-            [
-                crate::inspector::NOTHING_TITLE,
-                lines.keys.as_str(),
-                lines.privacy
-            ]
+            [crate::inspector::NOTHING_TITLE, lines.keys.as_str()]
         );
-        // The key hint and the privacy line each where it is drawn.
+        // The key hint where it is drawn.
         let (_, il) = inspector_at(size, es.len(), nothing_shape);
         let rect_of = |pane: &Node, name: &str| named(pane, Role::Text, name).rect;
         assert_eq!(rect_of(&nothing, &lines.keys), il.line(0).unwrap());
-        assert_eq!(rect_of(&nothing, lines.privacy), il.line(1).unwrap());
+        assert!(il.line(1).is_none());
         assert!(nothing
             .children
             .iter()
@@ -3015,18 +3008,15 @@ mod tests {
         };
         let (said, _) = read(&done, finished, 92.0);
         assert_eq!(said, ["harbour.png", "harbour.webp"]);
-        // Nothing selected, with room for the key hint but not the
-        // privacy line under it.
+        // Nothing selected, with room for the title but not the key hint
+        // under it, and then with room for both.
         let nothing = InspectorShape::Nothing {
             title_h: 40.0,
             hint_h: 50.0,
-            privacy_h: 20.0,
         };
-        let (said, _) = read(
-            &Inspector::Nothing,
-            nothing,
-            32.0 + 40.0 + 8.0 + 50.0 + 10.0,
-        );
+        let (said, _) = read(&Inspector::Nothing, nothing, 32.0 + 40.0 + 8.0 + 40.0);
+        assert_eq!(said, [crate::inspector::NOTHING_TITLE]);
+        let (said, _) = read(&Inspector::Nothing, nothing, 32.0 + 40.0 + 8.0 + 50.0);
         assert_eq!(said, [crate::inspector::NOTHING_TITLE, lines.keys.as_str()]);
     }
 

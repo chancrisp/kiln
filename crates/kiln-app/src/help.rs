@@ -180,13 +180,6 @@ pub fn help_content(keys: &KeyMap, results: Results) -> Vec<HelpSection> {
                 line("Escape", "Close the panel."),
             ],
         },
-        HelpSection {
-            title: "About Kiln",
-            lines: vec![
-                line("", crate::ways_in::TAGLINE),
-                line("", "Everything converts on this PC. Nothing is uploaded."),
-            ],
-        },
     ]
 }
 
@@ -310,8 +303,7 @@ mod tests {
                 "Results",
                 "Keyboard shortcuts",
                 "In a wheel",
-                "In panels",
-                "About Kiln"
+                "In panels"
             ]
         );
         assert_eq!(

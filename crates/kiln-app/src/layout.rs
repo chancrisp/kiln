@@ -574,9 +574,8 @@ pub struct EmptyState {
     /// the group doesn't move when a line appears.
     pub status: Rect,
     pub keys: Rect,
-    pub privacy: Rect,
-    /// A tile for each of the four kinds, in a row under the privacy
-    /// line, with a word line [`GLAZE_WORD`] tall [`GLAZE_WORD_GAP`]
+    /// A tile for each of the four kinds, in a row under the key hint,
+    /// with a word line [`GLAZE_WORD`] tall [`GLAZE_WORD_GAP`]
     /// below each. `None` when the panel is too short to hold them whole:
     /// the rest of the group then stands as it would without them.
     pub glazes: Option<[Rect; 4]>,
@@ -597,21 +596,20 @@ pub const GLAZE_WORD_GAP: f32 = 4.0;
 /// The empty window's group, centred in the drop panel.
 pub fn empty_state(panel: &Rect) -> EmptyState {
     // Each part's height and the gap after it.
-    const PARTS: [(f32, f32); 8] = [
+    const PARTS: [(f32, f32); 7] = [
         (72.0, 16.0),                                    // mark
         (24.0, 4.0),                                     // headline
         (20.0, 12.0),                                    // instruction
         (BUTTON_HEIGHT, 8.0),                            // button
         (16.0, 8.0),                                     // status
-        (16.0, 4.0),                                     // keys
-        (16.0, 20.0),                                    // privacy, and the gap to the tiles
+        (16.0, 20.0),                                    // keys, and the gap to the tiles
         (GLAZE_TILE + GLAZE_WORD_GAP + GLAZE_WORD, 0.0), // tiles and words
     ];
     // The tiles' part; the parts before it are the text.
-    const TILES: usize = 7;
+    const TILES: usize = 6;
     let sum = |parts: &[(f32, f32)]| parts.iter().map(|(h, gap)| h + gap).sum::<f32>();
     // The tiles show only when the whole group, with them, fits. Without
-    // them the privacy line is the last part and has no gap after it.
+    // them the key hint is the last part and has no gap after it.
     let tiles = panel.h >= sum(&PARTS);
     let total = if tiles {
         sum(&PARTS)
@@ -637,7 +635,6 @@ pub fn empty_state(panel: &Rect) -> EmptyState {
     );
     let status = line(next(4), 16.0);
     let keys = line(next(5), 16.0);
-    let privacy = line(next(6), 16.0);
     // Four tiles with a gap between, centred on the panel. A whole DIP
     // keeps their edges crisp; the span is odd in grid units, so the row
     // can't be both centred and on the 4 DIP grid.
@@ -657,7 +654,6 @@ pub fn empty_state(panel: &Rect) -> EmptyState {
         button,
         status,
         keys,
-        privacy,
         glazes,
     }
 }
@@ -1367,13 +1363,8 @@ fn snap(v: f32) -> f32 {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InspectorShape {
     /// Nothing selected: the mark in the hero's place, then a title
-    /// `title_h` tall, the key hint `hint_h` tall and the privacy line
-    /// `privacy_h` tall, each wrapped.
-    Nothing {
-        title_h: f32,
-        hint_h: f32,
-        privacy_h: f32,
-    },
+    /// `title_h` tall and the key hint `hint_h` tall, each wrapped.
+    Nothing { title_h: f32, hint_h: f32 },
     /// One file nothing has been done to. `what_h` is the height of what
     /// the format is, or why it has nothing to offer, wrapped (0 for
     /// none); `facts` the labelled facts;
@@ -1429,7 +1420,7 @@ pub struct InspectorLayout {
     pub title: Rect,
     /// The texts under the title, one rect each, in the order the shape
     /// has them whether or not there is one to show:
-    /// - Nothing: the key hint, then the privacy line;
+    /// - Nothing: the key hint;
     /// - Waiting: what the format is, or why it has nothing to offer;
     /// - Converting: the 40 DIP percentage (0 tall without one), then the
     ///   20 DIP time line;
@@ -1489,20 +1480,19 @@ pub const TITLE_LINES: usize = 2;
 /// What the format is, a failure's sentence and why several files share no
 /// format take at most four lines.
 pub const BODY_LINES: usize = 4;
-/// Nothing's key hint takes at most four lines, and its privacy line two.
+/// Nothing's key hint takes at most four lines.
 pub const HINT_LINES: usize = 4;
-pub const PRIVACY_LINES: usize = 2;
 /// The hint that a result can be dragged out takes at most two.
 pub const DRAG_LINES: usize = 2;
 
 /// The shape of what `model` shows. Each text that wraps is measured with
 /// `measure`: its height in DIPs at [`INSPECTOR_TEXT_WIDTH`], as it wraps
 /// (`Wrapped`). `nothing` is what Nothing says under its title: the key
-/// hint, then the privacy line. `more_w` is how wide More's words are. The
-/// buttons are the controls that aren't a format, a kind or More.
+/// hint. `more_w` is how wide More's words are. The buttons are the
+/// controls that aren't a format, a kind or More.
 pub fn inspector_shape(
     model: &Inspector,
-    nothing: [&str; 2],
+    nothing: &str,
     more_w: f32,
     measure: &dyn Fn(&str, Wrapped) -> f32,
 ) -> InspectorShape {
@@ -1520,8 +1510,7 @@ pub fn inspector_shape(
     match model {
         Inspector::Nothing => InspectorShape::Nothing {
             title_h: measure(NOTHING_TITLE, Wrapped::Title(TITLE_LINES)),
-            hint_h: measure(nothing[0], Wrapped::Body(HINT_LINES)),
-            privacy_h: measure(nothing[1], Wrapped::Body(PRIVACY_LINES)),
+            hint_h: measure(nothing, Wrapped::Body(HINT_LINES)),
         },
         Inspector::Waiting {
             what,
@@ -1655,11 +1644,7 @@ fn inspector_stack(
     // The title's height, each text's under it (see `lines`), the facts,
     // the targets, how wide More is when it follows them, and the buttons.
     let (title_h, heights, fact_count, targets, more, buttons) = match *shape {
-        InspectorShape::Nothing {
-            title_h,
-            hint_h,
-            privacy_h,
-        } => (title_h, vec![hint_h, privacy_h], 0, 0, None, 0),
+        InspectorShape::Nothing { title_h, hint_h } => (title_h, vec![hint_h], 0, 0, None, 0),
         InspectorShape::Waiting {
             what_h,
             facts,
@@ -2054,7 +2039,6 @@ mod tests {
             ("button".into(), e.button),
             ("status".into(), e.status),
             ("keys".into(), e.keys),
-            ("privacy".into(), e.privacy),
         ];
         // The glaze tiles, each with the word line under it.
         for (i, tile) in e.glazes.iter().flatten().enumerate() {
@@ -2711,21 +2695,20 @@ mod tests {
                 e.button,
                 e.status,
                 e.keys,
-                e.privacy,
             ];
             // The tiles show where the group with them fits, in a row of
-            // four under the privacy line, and each has room for its word.
+            // four under the key hint, and each has room for its word.
             // Where they don't fit, the rest of the group is still whole.
-            // The group with them is 352 DIPs tall: the text's 248, a gap
+            // The group with them is 332 DIPs tall: the text's 228, a gap
             // of 20, and the tiles' 64 + 4 + 16.
-            assert_eq!(e.glazes.is_some(), panel.h >= 352.0, "{w}x{h}");
-            let mut last = e.privacy.bottom();
+            assert_eq!(e.glazes.is_some(), panel.h >= 332.0, "{w}x{h}");
+            let mut last = e.keys.bottom();
             if let Some(tiles) = e.glazes {
                 for t in &tiles {
                     assert_eq!((t.w, t.h), (GLAZE_TILE, GLAZE_TILE));
                     assert_eq!(t.y, tiles[0].y);
                     assert!(on_grid(t.y), "tiles' top {}", t.y);
-                    assert!(t.y >= e.privacy.bottom());
+                    assert_eq!(t.y, e.keys.bottom() + 20.0);
                     assert!(t.x >= panel.x && t.right() <= panel.right());
                 }
                 for pair in tiles.windows(2) {
@@ -3043,7 +3026,6 @@ mod tests {
             InspectorShape::Nothing {
                 title_h: 40.0,
                 hint_h: 68.0,
-                privacy_h: 36.0,
             },
             InspectorShape::Waiting {
                 what_h: 40.0,
@@ -3368,18 +3350,17 @@ mod tests {
             &InspectorShape::Nothing {
                 title_h: 40.0,
                 hint_h: 50.0,
-                privacy_h: 20.0,
             },
         );
         assert_eq!((nothing.hero.w, nothing.hero.h), HERO);
         assert!(nothing.hero.w >= 48.0 && nothing.hero.h >= 48.0);
-        assert_eq!((nothing.title.h, nothing.body.h), (40.0, 70.0));
+        assert_eq!((nothing.title.h, nothing.body.h), (40.0, 50.0));
         assert_eq!(nothing.title.y, nothing.hero.bottom() + 12.0);
         assert_eq!(nothing.body.y, nothing.title.bottom() + 8.0);
-        // The key hint and the privacy line each have their own place.
-        let (hint, privacy) = (nothing.line(0).unwrap(), nothing.line(1).unwrap());
+        // The key hint is the whole body, and the only text under the title.
+        let hint = nothing.line(0).unwrap();
         assert_eq!((hint.y, hint.h), (nothing.body.y, 50.0));
-        assert_eq!((privacy.y, privacy.h), (hint.bottom(), 20.0));
+        assert_eq!(nothing.lines.len(), 1);
         assert!(nothing.facts.is_empty() && nothing.label.is_none());
         assert!(nothing.targets.is_empty() && nothing.more.is_none());
         assert!(nothing.buttons.is_empty());
@@ -3440,21 +3421,20 @@ mod tests {
     #[test]
     fn nothing_selected_wraps_its_words_without_overlap_in_a_short_inspector() {
         // The window of 800 x 480 gives the inspector 300 x 348. Its title
-        // at two lines and its body at six still leave room for the mark,
-        // and no part touches another or leaves the padding.
+        // at two lines and its key hint at four still leave room for the
+        // mark, and no part touches another or leaves the padding.
         let r = layout(800.0, 480.0, 3).inspector.unwrap();
         let shape = InspectorShape::Nothing {
             title_h: 40.0,
             hint_h: 68.0,
-            privacy_h: 36.0,
         };
         let l = inspector_layout(&r, &shape);
         assert_eq!(l.hero.h, HERO.1);
-        assert_eq!((l.title.h, l.body.h), (40.0, 104.0));
+        assert_eq!((l.title.h, l.body.h), (40.0, 68.0));
         let inner = r.inset(16.0);
         let parts = every_rect(&l);
-        // The mark, the title, the key hint and the privacy line.
-        assert_eq!(parts.len(), 4, "{parts:?}");
+        // The mark, the title and the key hint.
+        assert_eq!(parts.len(), 3, "{parts:?}");
         for (i, (name, p)) in parts.iter().enumerate() {
             assert!(p.y >= inner.y && p.bottom() <= inner.bottom(), "{name}");
             assert!(p.x >= inner.x && p.right() <= inner.right(), "{name}");
@@ -3473,13 +3453,12 @@ mod tests {
             Wrapped::Title(n) => 10_000.0 + s.len() as f32 + 1000.0 * n as f32,
             Wrapped::Body(n) => s.len() as f32 + 1000.0 * n as f32,
         };
-        let shape = |m: &Inspector| inspector_shape(m, ["keys", "privacy"], MORE_W, &measure);
+        let shape = |m: &Inspector| inspector_shape(m, "keys", MORE_W, &measure);
         assert_eq!(
             shape(&Inspector::Nothing),
             InspectorShape::Nothing {
                 title_h: 12_000.0 + NOTHING_TITLE.len() as f32,
                 hint_h: 4004.0,
-                privacy_h: 2007.0,
             }
         );
         let target = |ext: &str| Target {
@@ -3833,13 +3812,13 @@ mod tests {
         let small = empty_state(&layout(480.0, 360.0, 0).panel);
         assert!(small.glazes.is_none());
         assert_eq!(small.mark.w, 72.0);
-        assert!(small.privacy.bottom() <= layout(480.0, 360.0, 0).panel.bottom());
+        assert!(small.keys.bottom() <= layout(480.0, 360.0, 0).panel.bottom());
         let default = empty_state(&layout(720.0, 480.0, 0).panel);
         assert!(default.glazes.is_some());
         // Just short of the group's height, and just enough for it.
         let panel = |h| Rect::new(16.0, 72.0, 688.0, h);
-        assert!(empty_state(&panel(351.0)).glazes.is_none());
-        assert!(empty_state(&panel(352.0)).glazes.is_some());
+        assert!(empty_state(&panel(331.0)).glazes.is_none());
+        assert!(empty_state(&panel(332.0)).glazes.is_some());
     }
 
     #[test]
