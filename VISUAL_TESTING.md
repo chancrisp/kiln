@@ -15,7 +15,7 @@ window between them as well.
 - [ ] Title bar is dark (Windows 10 20H1+). On Windows 11 the caption is soot with bone text.
 - [ ] The background shows a faint, still grain. It never shimmers or moves.
 - [ ] No pure black or pure white anywhere. No orange anywhere.
-- [ ] The header shows the celadon vessel and "Kiln" in the bundled serif, not Georgia.
+- [ ] The header shows the celadon mark, the flame K, and "Kiln" in the bundled serif, not Georgia.
 - [ ] Panels have 12 px corners, controls 6 px. Borders are a single 1 px line, never doubled.
 - [ ] Text is sharp at every scale, with no blurry bitmap stretching.
 - [ ] Resizing never goes below 480 x 360 DIPs, and nothing overlaps at the minimum size.
@@ -96,7 +96,7 @@ window between them as well.
 - [ ] **Glaze chips in both themes.** Chips follow the file's kind: celadon for images, blue for video, yellow for audio, lavender for documents (spreadsheets, slides and subtitles too), stone for anything else. Each is an opaque tint with a fine outline of its glaze and its code in the glaze's ink, readable on the panel, a hovered row and a selected row. A row's suggestion ("as WEBP about 410 KB") is in the same ink, after the muted facts. Under a contrast theme chips are outlined in the theme's colours, with no tint.
 - [ ] **The converting wash.** A converting row has a faint wash of its glaze at the left, gone by 60% of the way across, and its heat line along the bottom is in the glaze, its leading edge breathing brighter. Under a contrast theme the line is the highlight colour, with no wash and no glow.
 - [ ] **Depth on the panel.** The list panel (and the empty window's panel) casts one soft shadow, darker below than at the sides, and has a 1 px light along its top edge. Settings, Help, the details dialog, the options sheet, the wheel and the footer's celadon Convert button do the same. The ground has a faint celadon glow at the top centre under the grain. A contrast theme has no shadow, light or glow.
-- [ ] **The empty window's tiles.** The empty window shows the vessel in celadon line work (72 px, 2 px line) and, under the privacy line, four tiles: Images, Video, Audio and Documents, each its glaze with its icon and its name under it in the glaze's ink. In a window too short for them (480 x 360) the tiles are left out and nothing overlaps.
+- [ ] **The empty window's tiles.** The empty window shows the mark in celadon line work (72 px, 2 px line) and, under the privacy line, four tiles: Images, Video, Audio and Documents, each its glaze with its icon and its name under it in the glaze's ink. In a window too short for them (480 x 360) the tiles are left out and nothing overlaps.
 - [ ] **Links and the inspector.** In a window 760 px wide or more (with files listed), rows show no action link in any state: no Convert, Export, Show details or Show in folder, no Cancel on a converting row, and an exported row's "Saved to" line isn't underlined or clickable. Narrator finds none of them either, and Retry, where a row has it, sits at the row's right edge, where Narrator places it too. Space on a selected row follows no link then, but still cancels a converting one (the footer's Cancel). Narrower, rows show their links as before. The scroll thumb stays at the list's right edge.
 - [ ] **Convert's key.** While the footer's button reads Convert it shows the word and, after it, "Enter" in a fine keycap, the two centred together. It reads plain "Cancel" while a selected file converts, and plain muted "Convert" while disabled. In the smallest window (480 x 360) the keycap is left out so the short idle hint still fits beside the buttons. Narrator reads the button as "Convert".
 - [ ] **One text column.** The file names and second lines of PNG, MP4, DOCX and XLSX rows all start at the same x; only a longer code (five letters or more) pushes its own row's text right.
@@ -104,7 +104,7 @@ window between them as well.
 
 ## App icon
 
-- [ ] Explorer, the taskbar and Alt+Tab show the celadon vessel on a soot tile at 16, 32, 48 and 256 px.
+- [ ] Explorer, the taskbar and Alt+Tab show the flame K seal on dark stoneware at 256 and 48 px and the flat K on an ash tile at 32 and 16 px.
 
 ## File actions
 

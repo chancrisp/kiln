@@ -12,7 +12,9 @@ them changes, so a palette change is always a deliberate one.
 
 1. **One metaphor, used consistently.** The menu is a glaze wheel and
    progress is a temperature line. A finished file cools into place, and an
-   error is a crack. Don't add other metaphors: no rockets, sparkles or mascots.
+   error is a crack. The mark is a maker's seal pressed into clay: a K whose
+   arm is one lick of fire. Don't add other metaphors: no rockets, sparkles
+   or mascots.
 2. **Restraint.** The UI uses two neutrals, one accent, and a glaze per kind
    of file. The accent marks only the active selection, keyboard focus, the
    primary action, progress and the suggestion dot. A glaze says only which
@@ -152,8 +154,10 @@ test enforces this.
 - Icons sit on a 24 × 24 grid and use a 1.5 px stroke with round caps and joins.
 - They are built from simple geometric shapes and drawn as vector paths in [`icons.rs`](crates/kiln-app/src/icons.rs). There is no icon font.
 - Keep curves generous. A Bézier smaller than about 2 units strokes poorly in some Direct2D implementations, so draw tiny circles as short polygons.
-- Current set: vessel, vessel-solid, flame, cube, cross, image, audio, video, subtitle, document, sheet, slides, compress, crop, trim, split, merge, copy, move, terminal, dial, help, more.
-- The app icon is the solid vessel in celadon on a soot tile with rounded corners, at 16, 32, 48 and 256 px. Regenerate it with `cargo run -p kiln-app --example gen_icon`.
+- Current set: mark, mark-solid, flame, cube, cross, image, audio, video, subtitle, document, sheet, slides, compress, crop, trim, split, merge, copy, move, terminal, dial, help, more.
+- The mark is the flame K, `MARK_PATH`: the header draws it solid in celadon, the empty window as line work. Inside the window it is flat, like every other icon.
+- The app icon is the same K pressed into a slab of dark stoneware with celadon glaze pooled in the impression, rendered from [`assets/kiln-seal.svg`](crates/kiln-app/assets/kiln-seal.svg) at 256 and 48 px (48 drops the grain and keeps the relief) and as a flat fill of `MARK_PATH` on an ash tile at 32 and 16 px. Regenerate it with `cargo run -p kiln-app --example gen_icon`.
+- The brand seal, [`docs/readme/kiln-seal.svg`](docs/readme/kiln-seal.svg), is the same mark tilted two degrees with an incised frame line, like a stamped chop. It is for the README and marketing, never the icon.
 
 ## The glaze wheel
 
