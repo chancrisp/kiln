@@ -562,8 +562,8 @@ pub fn wheel_centre(radius: f32) -> WheelCentre {
 /// The empty window's centred group, top to bottom.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EmptyState {
-    /// The vessel icon, drawn at three times its size.
-    pub vessel: Rect,
+    /// The mark icon, drawn at three times its size.
+    pub mark: Rect,
     pub headline: Rect,
     pub instruction: Rect,
     pub button: Rect,
@@ -596,7 +596,7 @@ pub const GLAZE_WORD_GAP: f32 = 4.0;
 pub fn empty_state(panel: &Rect) -> EmptyState {
     // Each part's height and the gap after it.
     const PARTS: [(f32, f32); 8] = [
-        (72.0, 16.0),                                    // vessel
+        (72.0, 16.0),                                    // mark
         (24.0, 4.0),                                     // headline
         (20.0, 12.0),                                    // instruction
         (BUTTON_HEIGHT, 8.0),                            // button
@@ -624,7 +624,7 @@ pub fn empty_state(panel: &Rect) -> EmptyState {
         y += PARTS[k].0 + PARTS[k].1;
         top
     };
-    let vessel = Rect::new(snap(cx - 36.0), next(0), 72.0, 72.0);
+    let mark = Rect::new(snap(cx - 36.0), next(0), 72.0, 72.0);
     let headline = line(next(1), 24.0);
     let instruction = line(next(2), 20.0);
     let button = Rect::new(
@@ -649,7 +649,7 @@ pub fn empty_state(panel: &Rect) -> EmptyState {
         })
     });
     EmptyState {
-        vessel,
+        mark,
         headline,
         instruction,
         button,
@@ -1348,7 +1348,7 @@ fn snap(v: f32) -> f32 {
 /// it has (the count of its controls that are buttons).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InspectorShape {
-    /// Nothing selected: the vessel in the hero's place, a title, and
+    /// Nothing selected: the mark in the hero's place, a title, and
     /// two lines of body.
     Nothing,
     /// One file nothing has been done to. `what_h` is the height of what
@@ -1387,7 +1387,7 @@ pub enum InspectorShape {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct InspectorLayout {
     /// The preview, [`HERO`] tall and as wide as the padding leaves. In
-    /// `Nothing` it holds the 48 DIP vessel, centred. It is the first
+    /// `Nothing` it holds the 48 DIP mark, centred. It is the first
     /// thing to go when the inspector is short.
     pub hero: Rect,
     pub title: Rect,
@@ -1840,7 +1840,7 @@ mod tests {
             ("wordmark".into(), l.wordmark),
             ("help".into(), l.help_button),
             ("settings".into(), l.settings_button),
-            ("vessel".into(), e.vessel),
+            ("mark".into(), e.mark),
             ("headline".into(), e.headline),
             ("instruction".into(), e.instruction),
             ("button".into(), e.button),
@@ -2497,7 +2497,7 @@ mod tests {
             let panel = layout(w, h, 0).panel;
             let e = empty_state(&panel);
             let order = [
-                e.vessel,
+                e.mark,
                 e.headline,
                 e.instruction,
                 e.button,
@@ -3029,7 +3029,7 @@ mod tests {
         );
         assert!(no_list.label.is_none() && no_list.targets.is_empty());
 
-        // Nothing selected: the vessel's hero, a title and two lines of
+        // Nothing selected: the mark's hero, a title and two lines of
         // body, and no facts, targets or buttons.
         let nothing = inspector_layout(&r, &InspectorShape::Nothing);
         assert_eq!((nothing.hero.w, nothing.hero.h), HERO);
@@ -3221,7 +3221,7 @@ mod tests {
         let glazes = e.glazes.unwrap();
         let span = glazes[3].right() - glazes[0].x;
         assert!((glazes[0].x - 16.0 - (688.0 - span) / 2.0).abs() < 1.0);
-        assert_eq!(e.vessel.w, 72.0);
+        assert_eq!(e.mark.w, 72.0);
     }
 
     #[test]
@@ -3230,7 +3230,7 @@ mod tests {
         // whole without them; the default window has.
         let small = empty_state(&layout(480.0, 360.0, 0).panel);
         assert!(small.glazes.is_none());
-        assert_eq!(small.vessel.w, 72.0);
+        assert_eq!(small.mark.w, 72.0);
         assert!(small.privacy.bottom() <= layout(480.0, 360.0, 0).panel.bottom());
         let default = empty_state(&layout(720.0, 480.0, 0).panel);
         assert!(default.glazes.is_some());

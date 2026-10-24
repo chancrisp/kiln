@@ -17,7 +17,7 @@ use Cmd::*;
 pub enum Style {
     /// Outline icons for the UI.
     Stroke,
-    /// Solid shapes, such as the app icon's vessel.
+    /// Solid shapes: the mark in the header and the app icon.
     Fill,
 }
 
@@ -27,22 +27,6 @@ pub struct Icon {
     pub style: Style,
     pub path: &'static [Cmd],
 }
-
-/// A rounded vessel: lip, narrow neck, full belly, flat foot.
-pub const VESSEL_PATH: &[Cmd] = &[
-    Move(9.0, 3.25),
-    Line(15.0, 3.25),
-    Cubic(15.4, 3.25, 15.6, 3.9, 15.25, 4.25),
-    Line(14.25, 5.25),
-    Cubic(14.25, 7.5, 20.0, 9.0, 20.0, 13.75),
-    Cubic(20.0, 17.75, 17.5, 20.75, 15.0, 20.75),
-    Line(9.0, 20.75),
-    Cubic(6.5, 20.75, 4.0, 17.75, 4.0, 13.75),
-    Cubic(4.0, 9.0, 9.75, 7.5, 9.75, 5.25),
-    Line(8.75, 4.25),
-    Cubic(8.4, 3.9, 8.6, 3.25, 9.0, 3.25),
-    Close,
-];
 
 /// A single flame line: a teardrop with a notch where the flame splits.
 /// Kiln's mark: a K whose upper arm rises into one lick of fire. The
@@ -343,16 +327,6 @@ pub const MERGE_PATH: &[Cmd] = &[
     Line(12.0, 13.5),
 ];
 
-pub const VESSEL: Icon = Icon {
-    name: "vessel",
-    style: Style::Stroke,
-    path: VESSEL_PATH,
-};
-pub const VESSEL_SOLID: Icon = Icon {
-    name: "vessel-solid",
-    style: Style::Fill,
-    path: VESSEL_PATH,
-};
 pub const MARK: Icon = Icon {
     name: "mark",
     style: Style::Stroke,
@@ -434,9 +408,7 @@ const fn stroke(name: &'static str, path: &'static [Cmd]) -> Icon {
     }
 }
 
-pub const ALL: [Icon; 25] = [
-    VESSEL,
-    VESSEL_SOLID,
+pub const ALL: [Icon; 23] = [
     MARK,
     MARK_SOLID,
     FLAME,
@@ -484,7 +456,7 @@ pub fn without_blocks(svg: &str, name: &str) -> String {
 }
 
 /// The app icon's geometry at a given pixel size: the tile's corner radius
-/// and the scale and offset that centre the vessel on it.
+/// and the scale and offset that centre the mark on it.
 pub struct AppIconLayout {
     pub tile_radius: f32,
     pub scale: f32,
@@ -553,6 +525,18 @@ mod tests {
         assert_eq!(without_blocks(svg, "detail"), "<a/>\n\n<c>\n\n</c>\n<!-- rough -->\n<e>\n<!-- /rough -->\n");
         assert_eq!(without_blocks(svg, "rough"), "<a/>\n<!-- detail -->\n<b/>\n<!-- /detail -->\n<c>\n<!-- detail --><d/><!-- /detail -->\n</c>\n\n");
         assert_eq!(without_blocks("<a/>", "detail"), "<a/>");
+    }
+
+    #[test]
+    fn the_vessel_is_gone_and_the_mark_is_the_only_solid_shape() {
+        // One mark everywhere: the window and the icon draw the same K.
+        assert!(ALL.iter().all(|i| !i.name.starts_with("vessel")));
+        let solids: Vec<&str> = ALL
+            .iter()
+            .filter(|i| i.style == Style::Fill)
+            .map(|i| i.name)
+            .collect();
+        assert_eq!(solids, ["mark-solid"]);
     }
 
     #[test]

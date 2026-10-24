@@ -78,11 +78,11 @@ const KEYCAP_OUTLINE: f32 = 0.45;
 /// A row's glaze tile draws its kind's icon at this scale.
 const ROW_ICON_SCALE: f32 = 0.75;
 
-/// The empty window's vessel is drawn with a line this many DIPs wide.
-const VESSEL_LINE: f32 = 2.0;
+/// The empty window's mark is drawn with a line this many DIPs wide.
+const MARK_LINE: f32 = 2.0;
 
 /// The empty window's glaze tiles: each tile's corners, and the scale of
-/// its icon, drawn with the vessel's line.
+/// its icon, drawn with the mark's line.
 const TILE_RADIUS: f32 = shape::RADIUS_PANEL;
 const TILE_ICON_SCALE: f32 = 1.5;
 
@@ -1207,8 +1207,8 @@ impl Draw<'_> {
 
     fn header(&self, l: &Layout, v: &View) -> Result<()> {
         let p = v.palette;
-        // The app icon: a celadon vessel on the soot ground.
-        self.icon("vessel-solid", l.icon.x, l.icon.y, 1.0, p.accent, 1.0);
+        // The app icon: a celadon mark on the soot ground.
+        self.icon("mark-solid", l.icon.x, l.icon.y, 1.0, p.accent, 1.0);
         self.label("Kiln", &self.text.display, &l.wordmark, p.text, 1.0);
         // Help's question mark, then Settings' dial, at the right.
         for (b, icon, hover) in [
@@ -1248,26 +1248,26 @@ impl Draw<'_> {
         );
         self.highlight(&panel, shape::RADIUS_PANEL, shape::BORDER, p);
 
-        // The centred group: the vessel, the headline, how else to add
+        // The centred group: the mark, the headline, how else to add
         // files, the button, what the status says, the keys to hold, the
         // privacy note and, where there's room, the four glazes.
         let e = layout::empty_state(&panel);
         let lines = v.empty;
         // Celadon line work, filling its 72 DIPs. A contrast theme draws
         // it in text, lit by a drag like the panel's edge.
-        let vessel = if p.high_contrast {
+        let mark = if p.high_contrast {
             blend(p, p.text_muted, p.accent, v.drag)
         } else {
             p.accent_strong
         };
-        let k = e.vessel.w / shape::ICON_GRID;
+        let k = e.mark.w / shape::ICON_GRID;
         self.icon_lined(
-            "vessel",
-            e.vessel.x,
-            e.vessel.y,
+            "mark",
+            e.mark.x,
+            e.mark.y,
             k,
-            VESSEL_LINE,
-            vessel,
+            MARK_LINE,
+            mark,
             1.0,
         );
         self.label(
@@ -1298,7 +1298,7 @@ impl Draw<'_> {
         // The kinds Kiln reads, each a tile of its glaze and its icon, with
         // its name under it in the glaze's ink.
         for (tile, (g, kind, word)) in e.glazes.iter().flatten().zip(GLAZE_TILES) {
-            let icon = (TILE_ICON_SCALE, VESSEL_LINE);
+            let icon = (TILE_ICON_SCALE, MARK_LINE);
             self.glaze_tile(tile, TILE_RADIUS, g, Some(kind), icon, 1.0, 1.0, p);
             let under = Rect::new(
                 tile.x,
