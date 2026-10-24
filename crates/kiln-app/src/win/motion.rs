@@ -172,6 +172,18 @@ pub(super) fn new_content(before: &Shows, now: &Shows) -> bool {
     before != now
 }
 
+/// Whether the inspector as `built` (what it said, for the files it
+/// showed) is already the page for `now`, so there is nothing to build:
+/// the same words for the same files. The same words for other files,
+/// such as the next file taking a removed one's row and saying just what
+/// it said, is another page.
+pub(super) fn same_page(
+    built: (&insp::Inspector, &Shows),
+    now: (&insp::Inspector, &Shows),
+) -> bool {
+    built == now
+}
+
 /// Which page fades out as new content rises in.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) enum Fading {
@@ -202,6 +214,12 @@ pub(super) struct Motion {
     /// How much of the inspector is shown, from 0 folded away to 1. It
     /// follows the window's width (`layout::inspector_fits`).
     inspector_shown: Tween,
+    /// The fold as read for the message being handled, once for all of
+    /// it, or as the last message left it (`hold_fold`).
+    held: f32,
+    /// How many messages are being handled, one inside another: a message
+    /// sent from inside another's handling is handled within it.
+    depth: u32,
     /// When the newest picture in view arrived, so frames run while it
     /// fades in.
     pub(super) preview_shown: Option<Instant>,
@@ -221,6 +239,8 @@ impl Motion {
             glided: None,
             inspector_since: None,
             inspector_shown: Tween::new(shown, now),
+            held: shown,
+            depth: 0,
             preview_shown: None,
             button_hover: HashMap::new(),
             button_press: HashMap::new(),
@@ -279,8 +299,13 @@ impl Motion {
     /// Fold the inspector away, or bring it back, for a window `w` zoomed
     /// DIPs wide. It slides over `anim::FOLD_MS` while files are `listed`;
     /// with none there is no inspector to watch, and it is simply there.
-    /// Returns whether a slide began.
+    /// A window with no width, minimised, has nothing to follow: the fold
+    /// stays as it is, so the window comes back as it went. Returns
+    /// whether a slide began.
     pub(super) fn fold_to(&mut self, w: f32, listed: bool, now: Instant, animations: bool) -> bool {
+        if w <= 0.0 {
+            return false;
+        }
         let to = if layout::inspector_fits(w) { 1.0 } else { 0.0 };
         if self.inspector_shown.target() == to {
             return false;
@@ -293,6 +318,36 @@ impl Motion {
     /// How much of the inspector shows at `now`, 0 to 1.
     pub(super) fn shown(&self, now: Instant) -> f32 {
         self.inspector_shown.value(now).clamp(0.0, 1.0)
+    }
+
+    /// A message begins at `now`: the fold is read once for all of it
+    /// (`held_fold`), so everything the message works out sees the
+    /// inspector at one place. Returns the fold the message found, which
+    /// it gives to `release_fold` when it ends.
+    pub(super) fn hold_fold(&mut self, now: Instant) -> f32 {
+        self.depth += 1;
+        let shown = self.shown(now);
+        std::mem::replace(&mut self.held, shown)
+    }
+
+    /// The message that found `outer` ends at `now`. One handled inside
+    /// another gives the outer message its own fold back. The outermost
+    /// leaves the fold as it is now, for what runs outside any message:
+    /// the window's start, and code resuming after a modal loop entered
+    /// from there.
+    pub(super) fn release_fold(&mut self, outer: f32, now: Instant) {
+        self.depth = self.depth.saturating_sub(1);
+        self.held = if self.depth > 0 {
+            outer
+        } else {
+            self.shown(now)
+        };
+    }
+
+    /// How much of the inspector shows for the message being handled, or
+    /// as the last message left it: see `hold_fold`.
+    pub(super) fn held_fold(&self) -> f32 {
+        self.held
     }
 
     /// How much of the inspector shows once the fold has got where it is
@@ -575,6 +630,46 @@ mod tests {
     }
 
     #[test]
+    fn minimising_leaves_the_fold_as_it_was() {
+        let t = Instant::now();
+        let mut m = Motion::new(t, 1.0);
+        // Minimised, the window has no width: nothing folds, so coming
+        // back shows the inspector as it was, with nothing sliding in.
+        assert!(!m.fold_to(0.0, true, t, true));
+        assert_eq!(m.fold_target(), 1.0);
+        assert_eq!(m.shown(ms(t, anim::FOLD_MS)), 1.0);
+        assert!(!m.moving_at(t, true));
+        assert!(!m.fold_to(1300.0, true, t, true));
+        // Folded away, the same: it stays folded.
+        assert!(!m.fold_to(700.0, true, t, false));
+        assert_eq!(m.fold_target(), 0.0);
+        assert!(!m.fold_to(0.0, true, t, true));
+        assert_eq!(m.fold_target(), 0.0);
+    }
+
+    #[test]
+    fn the_fold_is_read_once_a_message_and_kept_between_them() {
+        let t = Instant::now();
+        let mut m = Motion::new(t, 1.0);
+        assert_eq!(m.held_fold(), 1.0);
+        assert!(m.fold_to(700.0, true, t, true));
+        // A message partway through the slide reads the fold once...
+        let outer = m.hold_fold(ms(t, 60));
+        let held = m.held_fold();
+        assert!(held > 0.0 && held < 1.0, "{held}");
+        // ...and one sent from inside it reads its own, then gives the
+        // outer message its own back.
+        let inner = m.hold_fold(ms(t, 120));
+        assert!(m.held_fold() < held);
+        m.release_fold(inner, ms(t, 120));
+        assert_eq!(m.held_fold(), held);
+        // Once the outermost ends, the fold is as it is then, for what runs
+        // outside any message: not as it was before that message.
+        m.release_fold(outer, ms(t, anim::FOLD_MS));
+        assert_eq!(m.held_fold(), 0.0);
+    }
+
+    #[test]
     fn a_finished_row_cools_and_a_failed_one_cracks() {
         let t = Instant::now();
         let mut m = Motion::new(t, 1.0);
@@ -797,6 +892,20 @@ mod tests {
             &shows(&several("2 images"), ["a.png", "b.png"]),
             &shows(&several("3 images"), ["a.png", "b.png", "c.png"])
         ));
+    }
+
+    #[test]
+    fn the_same_words_for_another_file_are_another_page() {
+        // The next file takes a removed one's row and says just what it
+        // said: the page must still be built for it, or it would keep the
+        // removed file's paths.
+        let model = waiting(2, vec![]);
+        let was = shows(&model, ["b.png"]);
+        let next = shows(&model, ["c.png"]);
+        assert!(!same_page((&model, &was), (&model, &next)));
+        assert!(same_page((&model, &was), (&model, &was.clone())));
+        let facts = waiting(2, vec![("Pixels", "640 × 480".to_owned())]);
+        assert!(!same_page((&model, &was), (&facts, &was)));
     }
 
     #[test]

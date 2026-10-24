@@ -66,7 +66,7 @@ use crate::ways_in::{self, MenuItem, RowState};
 use crate::wheel::{self, Action, Spot, Wheel, WheelKind};
 use drop::{DragEvent, DropTarget, DRAG_ENTER, DRAG_LEAVE, DRAG_OVER, WM_KILN_DRAG, WM_KILN_DROP};
 use inspect::Inspector;
-use motion::{new_content, sheet_rise, ButtonId, Fading, Motion, Shows};
+use motion::{new_content, same_page, sheet_rise, ButtonId, Fading, Motion, Shows};
 use render::{
     DetailsView, HelpView, InspectorPage, InspectorView, Renderer, SettingsView, SheetView, View,
     WheelView,
@@ -730,11 +730,6 @@ struct App {
     files: FileList,
     /// What moves in the window, and each row's times: see `Motion`.
     motion: Motion,
-    /// How much of the inspector shows for the message being handled, or
-    /// the frame being drawn: the fold read once (`hold_fold`), so that
-    /// everything one message or frame works out (the layout, the pointer,
-    /// the drawing) sees the inspector at the same place.
-    fold: f32,
     scroll: f32,
     hover_row: Option<usize>,
     hover_cancel: bool,
@@ -1016,18 +1011,12 @@ impl App {
     }
 
     /// The window as it is drawn now, with as much of the inspector as the
-    /// fold shows for this message or frame (`fold`). Drawing and the
-    /// pointer go by it; it reads no clock.
+    /// fold shows for this message or frame, read once for all of it
+    /// (`Motion::held_fold`). Drawing and the pointer go by it; it reads
+    /// no clock.
     fn layout(&self) -> layout::Layout {
         let (w, h) = self.renderer.size_dips();
-        layout::layout_with(w, h, self.files.len(), self.fold)
-    }
-
-    /// Read the fold for the message or frame about to be handled: how
-    /// much of the inspector shows now. Returns what it was before, for a
-    /// message sent from inside another's handling to give back.
-    fn hold_fold(&mut self) -> f32 {
-        std::mem::replace(&mut self.fold, self.motion.shown(Instant::now()))
+        layout::layout_with(w, h, self.files.len(), self.motion.held_fold())
     }
 
     /// The window as it is once the fold has got where it is going: what
@@ -1265,7 +1254,7 @@ impl App {
             return None;
         }
         let (w, h) = self.renderer.size_dips();
-        let drawn = layout::layout_with(w, h, 1, self.fold).inspector?;
+        let drawn = layout::layout_with(w, h, 1, self.motion.held_fold()).inspector?;
         let (_, rise) = self.inspector_rise(now);
         Some((drawn, drawn.x - p.rect.x, rise))
     }
@@ -1331,6 +1320,12 @@ impl App {
             return;
         }
         self.drop_moved_page();
+        // Minimised, the window has no client area: the inspector stays as
+        // it was built, so it comes back as it went.
+        let (w, h) = self.renderer.size_dips();
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
         if !self.inspector_live() {
             self.panel_folded();
             return;
@@ -1366,11 +1361,18 @@ impl App {
         self.keep_clock(matches!(model, insp::Inspector::Converting { .. }));
         let lines = ways_in::empty_lines(&self.settings);
         let nothing = (lines.keys, lines.privacy);
-        if self
-            .panel
-            .as_ref()
-            .is_some_and(|p| p.rect == rect && p.model == model && p.nothing == nothing)
-        {
+        let entries = self.files.entries();
+        let selected = self.files.selected_rows().iter();
+        let shows = Shows::of(
+            &model,
+            selected.filter_map(|&i| entries.get(i).map(|e| e.path.as_path())),
+        );
+        // The same words for the same files, the same size: nothing to do.
+        if self.panel.as_ref().is_some_and(|p| {
+            p.rect == rect
+                && p.nothing == nothing
+                && same_page((&p.model, &p.shows), (&model, &shows))
+        }) {
             return;
         }
         let renderer = &self.renderer;
@@ -1382,12 +1384,6 @@ impl App {
         let il = layout::inspector_layout(&rect, &shape);
         let controls = a11y::inspector_controls(&model, &il);
         let glazes = self.offer_glazes(&model);
-        let entries = self.files.entries();
-        let selected = self.files.selected_rows().iter();
-        let shows = Shows::of(
-            &model,
-            selected.filter_map(|&i| entries.get(i).map(|e| e.path.as_path())),
-        );
         let fresh = self
             .panel
             .as_ref()
@@ -6162,7 +6158,7 @@ impl App {
             button_ring: self
                 .focused_button()
                 .and_then(|b| self.focus_button_rect(b)),
-            shown: self.fold,
+            shown: self.motion.held_fold(),
             // One selected row's wash glides; several draw their own.
             selection_y: (selected.len() == 1).then(|| self.motion.selection_at(now)),
             button: &button,
@@ -6800,7 +6796,6 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         renderer: Renderer::new(hwnd, layout::px_per_unit(dpi, zoom) * 96.0)?,
         files: FileList::default(),
         motion: Motion::new(Instant::now(), 1.0),
-        fold: 1.0,
         scroll: 0.0,
         hover_row: None,
         hover_cancel: false,
@@ -7076,15 +7071,13 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     let (answer, events, take_focus) = {
         let app = unsafe { &mut *ptr };
         // The fold is read once for the whole message, so everything it
-        // works out sees the inspector at one place. A message sent from
-        // inside another's handling gives the outer one its own back.
-        let outer = app.hold_fold();
+        // works out sees the inspector at one place (`Motion::hold_fold`).
+        let outer = app.motion.hold_fold(Instant::now());
         let answer = handle(app, msg, wparam, lparam);
         after(app, msg, wparam);
+        app.motion.release_fold(outer, Instant::now());
         let events = std::mem::take(&mut app.a11y_events);
-        let take_focus = std::mem::take(&mut app.take_focus);
-        app.fold = outer;
-        (answer, events, take_focus)
+        (answer, events, std::mem::take(&mut app.take_focus))
     };
     // With `App` no longer borrowed: these send messages straight back to
     // this window, and a client told something may call straight back in.
