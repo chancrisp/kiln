@@ -45,6 +45,28 @@ pub const VESSEL_PATH: &[Cmd] = &[
 ];
 
 /// A single flame line: a teardrop with a notch where the flame splits.
+/// Kiln's mark: a K whose upper arm rises into one lick of fire. The
+/// stem, then the arm that sweeps up and leans back over the stem, then
+/// the straight leg. It spans 4.71..19.29 by 3.25..20.75, the vessel's
+/// height, centred on (12, 12). The app icon presses this same shape into
+/// a stoneware slab (assets/kiln-seal.svg); in the window it is flat.
+pub const MARK_PATH: &[Cmd] = &[
+    Move(4.71, 20.75),
+    Line(4.71, 7.62),
+    Cubic(4.71, 6.38, 5.33, 5.75, 6.58, 5.75),
+    Cubic(7.83, 5.75, 8.46, 6.38, 8.46, 7.62),
+    Line(8.46, 11.58),
+    Cubic(9.71, 11.58, 10.96, 10.75, 11.79, 9.5),
+    Cubic(13.04, 7.83, 13.46, 5.33, 14.29, 3.25),
+    Cubic(19.29, 7.0, 16.38, 12.0, 11.38, 14.08),
+    Line(16.79, 20.75),
+    Line(13.04, 20.75),
+    Line(9.71, 16.58),
+    Line(8.46, 17.83),
+    Line(8.46, 20.75),
+    Close,
+];
+
 pub const FLAME_PATH: &[Cmd] = &[
     Move(12.0, 21.0),
     Cubic(8.5, 21.0, 6.0, 18.5, 6.0, 15.25),
@@ -331,6 +353,16 @@ pub const VESSEL_SOLID: Icon = Icon {
     style: Style::Fill,
     path: VESSEL_PATH,
 };
+pub const MARK: Icon = Icon {
+    name: "mark",
+    style: Style::Stroke,
+    path: MARK_PATH,
+};
+pub const MARK_SOLID: Icon = Icon {
+    name: "mark-solid",
+    style: Style::Fill,
+    path: MARK_PATH,
+};
 pub const FLAME: Icon = Icon {
     name: "flame",
     style: Style::Stroke,
@@ -402,9 +434,11 @@ const fn stroke(name: &'static str, path: &'static [Cmd]) -> Icon {
     }
 }
 
-pub const ALL: [Icon; 23] = [
+pub const ALL: [Icon; 25] = [
     VESSEL,
     VESSEL_SOLID,
+    MARK,
+    MARK_SOLID,
     FLAME,
     CUBE,
     CROSS,
@@ -437,8 +471,9 @@ pub struct AppIconLayout {
 }
 
 pub fn app_icon_layout(px: f32) -> AppIconLayout {
-    // The vessel spans 4..20 by 3.25..20.75 on the grid. It fills about
-    // 70 percent of the tile, so it reads at 16 px and doesn't crowd 256.
+    // The mark spans 4.71..19.29 by 3.25..20.75 on the grid, 17.5 units
+    // tall like the vessel before it. It fills about 70 percent of the
+    // tile, so it reads at 16 px and doesn't crowd 48.
     let scale = px * 0.70 / 17.5;
     let cx = 12.0 * scale;
     let cy = 12.0 * scale;
@@ -492,23 +527,27 @@ mod tests {
     }
 
     #[test]
-    fn the_vessel_is_symmetric() {
-        let pts = points(VESSEL_PATH);
-        for (x, y) in &pts {
-            let mirror = 24.0 - x;
-            assert!(
-                pts.iter()
-                    .any(|(mx, my)| (mx - mirror).abs() < 1e-3 && (my - y).abs() < 1e-3),
-                "no mirror for ({x}, {y})"
-            );
-        }
+    fn the_mark_stands_on_the_baseline() {
+        // The stem's outer edge and the leg's foot pin the K to the grid
+        // the vessel used: 17.5 units tall, centred on (12, 12). A stray
+        // edit to the numbers moves one of them.
+        let pts = points(MARK_PATH);
+        let on = |x: f32, y: f32| pts.iter().any(|(px, py)| (px - x).abs() < 1e-3 && (py - y).abs() < 1e-3);
+        assert!(on(4.71, 20.75), "stem foot");
+        assert!(on(4.71, 7.62), "stem top");
+        assert!(on(16.79, 20.75), "leg foot");
+        assert!(on(14.29, 3.25), "flame tip");
+        assert_eq!(MARK.path, MARK_PATH);
+        assert_eq!(MARK_SOLID.path, MARK_PATH);
+        assert_eq!(MARK.style, Style::Stroke);
+        assert_eq!(MARK_SOLID.style, Style::Fill);
     }
 
     #[test]
-    fn app_icon_vessel_fits_the_tile() {
+    fn app_icon_mark_fits_the_tile() {
         for px in [16.0, 32.0, 48.0, 256.0] {
             let l = app_icon_layout(px);
-            for (x, y) in points(VESSEL_PATH) {
+            for (x, y) in points(MARK_PATH) {
                 let (sx, sy) = (x * l.scale + l.offset.0, y * l.scale + l.offset.1);
                 assert!(
                     sx > 0.0 && sx < px && sy > 0.0 && sy < px,
