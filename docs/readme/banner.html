@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Kiln banner</title>
+<!--
+  The README banner's source. Render it to banner.png at 1640 x 620 with
+  headless Edge (or Chrome) from the repo root:
+
+    & "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --headless=new --screenshot="$PWD\docs\readme\banner.png" --window-size=1640,620 --force-device-scale-factor=1 --hide-scrollbars --virtual-time-budget=4000 "file:///$($PWD -replace '\\','/')/docs/readme/banner.html"
+
+  The seal is docs/readme/kiln-seal.svg; the wordmark is the bundled
+  Fraunces subset; the window on the right is a mock drawn here, not a
+  screenshot, so it shows the current mark. Colours are DESIGN.md's tokens.
+-->
+<style>
+@font-face { font-family: "Fraunces Kiln"; src: url("../../crates/kiln-app/assets/fonts/fraunces-kiln.ttf"); font-weight: 600; }
+:root {
+  --soot: #1C1B19; --clay: #2A2825; --ash: #3B3834; --flint: #7C756B;
+  --bone: #EDE6DA; --stone: #A89E8F; --stone-light: #C4BCB0; --celadon: #7FB5A0; --celadon-deep: #467966; --brick: #D99D93;
+  --serif: "Fraunces Kiln", Georgia, serif;
+  --sans: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --mono: "Cascadia Mono", Consolas, monospace;
+}
+html, body { margin: 0; }
+body {
+  width: 1640px; height: 620px; overflow: hidden; position: relative;
+  background: var(--soot); color: var(--bone); font-family: var(--sans);
+}
+.glow {
+  position: absolute; inset: 0;
+  background: radial-gradient(ellipse 900px 520px at 18% 10%, rgba(127,181,160,0.10), transparent 70%);
+}
+.grain { position: absolute; inset: 0; opacity: 0.045; mix-blend-mode: screen; }
+
+.left { position: absolute; left: 110px; top: 118px; width: 740px; }
+.lockup { display: flex; align-items: center; gap: 28px; height: 150px; }
+.lockup img { width: 150px; height: 150px; display: block; }
+.wordmark { font-family: var(--serif); font-weight: 600; font-size: 128px; line-height: 1; letter-spacing: -0.01em; color: var(--bone); }
+.tagline { margin-top: 56px; font-family: var(--serif); font-weight: 600; font-size: 44px; line-height: 1.15; color: var(--bone); }
+.sub { margin-top: 22px; font-size: 24px; line-height: 1.3; color: var(--stone); }
+.chips { margin-top: 30px; display: flex; gap: 14px; }
+.chip {
+  font-family: var(--mono); font-size: 20px; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 10px 18px; border-radius: 6px; background: var(--clay); color: var(--stone-light);
+  border: 1px solid var(--flint);
+}
+.chip.lit { background: var(--celadon); border-color: var(--celadon); color: var(--soot); }
+
+.win {
+  position: absolute; left: 896px; top: 90px; width: 664px; height: 442px; box-sizing: border-box;
+  border: 1px solid var(--flint); border-radius: 12px; background: var(--soot); overflow: hidden;
+  box-shadow: 0 10px 30px -18px rgba(14,13,12,0.45);
+}
+.win .top { height: 1px; background: rgba(237,230,218,0.05); }
+.win header { height: 56px; display: flex; align-items: center; gap: 10px; padding: 0 20px; border-bottom: 1px solid var(--flint); }
+.win header svg { width: 22px; height: 22px; }
+.win header .name { font-family: var(--serif); font-weight: 600; font-size: 22px; color: var(--bone); }
+.panel { position: absolute; left: 16px; right: 16px; top: 68px; bottom: 54px; background: var(--clay); border: 1px solid var(--flint); border-radius: 12px; overflow: hidden; }
+.row { height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 16px; border-bottom: 1px solid rgba(124,117,107,0.5); position: relative; }
+.row:last-child { border-bottom: 0; }
+.row.sel { background: rgba(127,181,160,0.10); }
+.row.sel::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 1px; background: var(--celadon); }
+.code { font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em; padding: 5px 9px; border-radius: 6px; background: var(--ash); color: var(--stone-light); border: 1px solid rgba(124,117,107,0.6); width: 34px; text-align: center; }
+.row .t { font-size: 14px; color: var(--bone); line-height: 1.25; }
+.row .s { font-size: 12px; color: var(--stone); }
+.row .s.err { color: var(--brick); }
+.row .link { margin-left: auto; font-size: 12px; color: var(--stone); text-decoration: underline; }
+.status { position: absolute; left: 16px; right: 16px; bottom: 0; height: 54px; display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--stone); }
+.btn { padding: 7px 14px; border-radius: 6px; border: 1px solid var(--flint); background: var(--clay); color: var(--bone); font-size: 13px; }
+.wheel { position: absolute; left: 190px; top: 90px; width: 300px; height: 300px; }
+.wheel text { font-family: var(--sans); }
+.wheel .code { font-family: var(--mono); }
+</style>
+</head>
+<body>
+<div class="glow"></div>
+<svg class="grain" width="1640" height="620" aria-hidden="true"><filter id="g"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="4"/><feColorMatrix type="saturate" values="0"/></filter><rect width="100%" height="100%" filter="url(#g)"/></svg>
+
+<div class="left">
+  <div class="lockup">
+    <img src="kiln-seal.svg" alt="Kiln's mark, a K whose arm is a lick of fire, pressed into stoneware">
+    <div class="wordmark">Kiln</div>
+  </div>
+  <div class="tagline">Fire raw files into finished ones.</div>
+  <div class="sub">A native Windows file converter. Offline, and about 7.5 MB.</div>
+  <div class="chips">
+    <span class="chip">PNG</span><span class="chip">MP4</span><span class="chip">FLAC</span><span class="chip">DOCX</span><span class="chip">XLSX</span><span class="chip lit">WEBM</span>
+  </div>
+</div>
+
+<div class="win">
+  <div class="top"></div>
+  <header>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#7FB5A0" d="M4.71 20.75 L4.71 7.62 C4.71 6.38 5.33 5.75 6.58 5.75 C7.83 5.75 8.46 6.38 8.46 7.62 L8.46 11.58 C9.71 11.58 10.96 10.75 11.79 9.5 C13.04 7.83 13.46 5.33 14.29 3.25 C19.29 7 16.38 12 11.38 14.08 L16.79 20.75 L13.04 20.75 L9.71 16.58 L8.46 17.83 L8.46 20.75 Z"/></svg>
+    <span class="name">Kiln</span>
+  </header>
+  <div class="panel">
+    <div class="row"><span class="code">PNG</span><div><div class="t">Glaze test.png</div><div class="s">Glaze test.jpg</div></div></div>
+    <div class="row"><span class="code">MP3</span><div><div class="t">Firing log.mp3</div><div class="s">D:\Studio\Recordings · 4.5 MB</div></div></div>
+    <div class="row"><span class="code">WAV</span><div><div class="t">Kiln notes.wav</div><div class="s err">FFmpeg couldn't convert the file to FLAC. It stopped when processing the stream.</div></div><span class="link">Show details</span></div>
+    <div class="row sel"><span class="code">MP4</span><div><div class="t">Studio tour.mp4</div><div class="s">D:\Studio\Clips · 128 MB</div></div></div>
+  </div>
+  <div class="status"><span>Couldn't convert the file to FLAC.</span><span class="btn">Clear</span></div>
+  <svg class="wheel" viewBox="0 0 300 300" id="wheel" aria-label="The convert wheel"></svg>
+</div>
+
+<script>
+// The convert wheel: nine segments clockwise from the top, WEBM lit.
+(function () {
+  const svg = document.getElementById('wheel');
+  const ns = 'http://www.w3.org/2000/svg';
+  const cx = 150, cy = 150, R = 136, r = 56, n = 9;
+  const items = ['FLAC','M4A','MKV','MOV','MP3','OGG','OPUS','WAV','WEBM'];
+  const video = new Set(['MKV','MOV','WEBM']);
+  const el = (t, a, parent) => { const e = document.createElementNS(ns, t); for (const k in a) e.setAttribute(k, a[k]); (parent || svg).appendChild(e); return e; };
+  const pol = (rad, ang) => [cx + rad * Math.sin(ang), cy - rad * Math.cos(ang)];
+  el('circle', { cx, cy, r: R + 8, fill: 'rgba(28,27,25,0.92)' });
+  el('circle', { cx, cy, r: R + 8, fill: 'none', stroke: '#7C756B', 'stroke-width': 1 });
+  for (let i = 0; i < n; i++) {
+    const a0 = (i - 0.5) * 2 * Math.PI / n, a1 = (i + 0.5) * 2 * Math.PI / n;
+    const [x0, y0] = pol(R, a0), [x1, y1] = pol(R, a1), [x2, y2] = pol(r, a1), [x3, y3] = pol(r, a0);
+    const lit = items[i] === 'WEBM';
+    el('path', { d: `M${x0} ${y0} A${R} ${R} 0 0 1 ${x1} ${y1} L${x2} ${y2} A${r} ${r} 0 0 0 ${x3} ${y3} Z`,
+      fill: lit ? 'rgba(127,181,160,0.18)' : '#2A2825', stroke: '#7C756B', 'stroke-width': 1 });
+    if (lit) el('path', { d: `M${x0} ${y0} A${R} ${R} 0 0 1 ${x1} ${y1}`, fill: 'none', stroke: '#7FB5A0', 'stroke-width': 1.5 });
+    // The icon sits over its label, both centred on the segment's middle.
+    const am = (a0 + a1) / 2, [mx, my] = pol((R + r) / 2 + 2, am), ix = mx, iy = my - 10;
+    const c = lit ? '#EDE6DA' : '#C4BCB0';
+    const t = el('text', { x: mx, y: my + 18, 'text-anchor': 'middle', fill: c, 'font-size': 12, 'letter-spacing': '0.06em', class: 'code' }); t.textContent = items[i];
+    if (video.has(items[i])) {
+      el('rect', { x: ix - 8, y: iy - 5, width: 11, height: 10, rx: 1.5, fill: 'none', stroke: c, 'stroke-width': 1.5 });
+      el('path', { d: `M${ix + 3} ${iy - 1} L${ix + 8} ${iy - 4} L${ix + 8} ${iy + 4} L${ix + 3} ${iy + 1} Z`, fill: 'none', stroke: c, 'stroke-width': 1.5, 'stroke-linejoin': 'round' });
+    } else {
+      [[-6, 4], [-2, 8], [2, 6], [6, 3]].forEach(([dx, h]) => el('line', { x1: ix + dx, y1: iy - h, x2: ix + dx, y2: iy + h, stroke: c, 'stroke-width': 1.5, 'stroke-linecap': 'round' }));
+    }
+  }
+  el('circle', { cx, cy, r: r - 1, fill: '#1C1B19', stroke: '#7C756B', 'stroke-width': 1 });
+  const t1 = el('text', { x: cx, y: cy + 2, 'text-anchor': 'middle', fill: '#EDE6DA', 'font-size': 22, 'font-weight': 600, style: 'font-family: var(--serif)' }); t1.textContent = 'Convert';
+  const t2 = el('text', { x: cx, y: cy + 20, 'text-anchor': 'middle', fill: '#A89E8F', 'font-size': 12, 'letter-spacing': '0.06em', class: 'code' }); t2.textContent = 'MP4';
+})();
+</script>
+</body>
+</html>
