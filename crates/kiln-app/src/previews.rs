@@ -42,7 +42,8 @@ pub struct PreviewKey {
     pub path: PathBuf,
     pub modified: Option<SystemTime>,
     pub size: PreviewSize,
-    /// The size asked of Windows, in device pixels: see [`pixel_size`].
+    /// The box it is drawn in, in device pixels: see [`pixel_size`]. What
+    /// is asked of Windows follows from it and `size` ([`ask`]).
     pub pixels: (u32, u32),
 }
 
@@ -204,9 +205,62 @@ impl PreviewCache {
     }
 }
 
-/// The size to ask Windows for, in device pixels: a row's square or the
+/// The shapes of picture the inspector's ask is sized for: wide video, a
+/// landscape photo, a portrait photo and an upright phone video.
+pub const SHAPES: [(u32, u32); 4] = [(16, 9), (4, 3), (3, 4), (9, 16)];
+
+/// How to ask Windows for a picture: the side of the square it is made
+/// for, and whether Windows crops it to that square
+/// (`SIIGBF_CROPTOSQUARE`) rather than fitting the whole of it inside.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ask {
+    pub side: u32,
+    pub square: bool,
+}
+
+/// How to ask Windows for a picture of `size` drawn in a box of `pixels`
+/// device pixels ([`pixel_size`]), so that once it is cropped to fill the
+/// box it is never drawn larger than it was made.
+///
+/// Windows fits a thumbnail inside the square it is asked for, so a wide
+/// picture asked for at a row's size would come back a strip, and filling
+/// the row's square would stretch it. A row's picture is cropped to the
+/// square by Windows instead. The inspector's wide box is asked for as a
+/// square big enough that each of [`SHAPES`], fitted inside it, still
+/// covers the box: an upright phone video fitted inside it is as wide as
+/// the box.
+pub fn ask(size: PreviewSize, pixels: (u32, u32)) -> Ask {
+    let (w, h) = (pixels.0.max(1), pixels.1.max(1));
+    match size {
+        PreviewSize::Row => Ask {
+            side: w.max(h),
+            square: true,
+        },
+        PreviewSize::Hero => {
+            // Fitted inside a square of `side`, a picture `sw` by `sh` is
+            // side * sw / long wide and side * sh / long tall, and both
+            // must reach the box.
+            let side = SHAPES
+                .iter()
+                .map(|&(sw, sh)| {
+                    let long = sw.max(sh);
+                    let wide = w.saturating_mul(long).div_ceil(sw);
+                    let tall = h.saturating_mul(long).div_ceil(sh);
+                    wide.max(tall)
+                })
+                .fold(w.max(h), u32::max);
+            Ask {
+                side,
+                square: false,
+            }
+        }
+    }
+}
+
+/// The box a picture is drawn in, in device pixels: a row's square or the
 /// inspector's picture, in DIPs, times the screen's scale, rounded up so
-/// the picture is never drawn larger than it was made.
+/// it is never smaller than the box drawn. What is asked of Windows
+/// follows from it: see [`ask`].
 pub fn pixel_size(size: PreviewSize, px_per_dip: f32) -> (u32, u32) {
     let (w, h) = match size {
         PreviewSize::Row => (PREVIEW_ROW, PREVIEW_ROW),
@@ -437,6 +491,78 @@ mod tests {
         assert_ne!(row.id(), row2.id());
         // And equal keys share one id.
         assert_eq!(row.id(), row.clone().id());
+    }
+
+    /// What Windows makes of a picture of `shape`, bigger than asked, for
+    /// `ask`: cropped to the square, or fitted inside it with its short
+    /// side rounded down.
+    fn made(shape: (u32, u32), ask: Ask) -> (u32, u32) {
+        if ask.square {
+            return (ask.side, ask.side);
+        }
+        let long = shape.0.max(shape.1);
+        (ask.side * shape.0 / long, ask.side * shape.1 / long)
+    }
+
+    /// How many device pixels one pixel of a picture `img` covers once it
+    /// is cropped to fill a box of `bx` device pixels, as the window draws
+    /// it: past 1, it is stretched.
+    fn drawn_scale(img: (u32, u32), bx: (f32, f32)) -> f32 {
+        let (_, _, w, h) = cover_source(img, bx);
+        (bx.0 / w).max(bx.1 / h)
+    }
+
+    #[test]
+    fn no_picture_is_drawn_larger_than_windows_made_it() {
+        // Several's cards, drawn from the inspector's picture in a box a
+        // little smaller than its own.
+        const CARD: (f32, f32) = (244.0, 104.0);
+        for scale in [1.0, 1.15, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0] {
+            for size in [PreviewSize::Row, PreviewSize::Hero] {
+                let bx = pixel_size(size, scale);
+                let a = ask(size, bx);
+                for shape in SHAPES {
+                    let img = made(shape, a);
+                    let s = drawn_scale(img, (bx.0 as f32, bx.1 as f32));
+                    assert!(
+                        s <= 1.0,
+                        "{size:?} at {scale}: {shape:?} made {img:?} for {bx:?}, drawn at {s}"
+                    );
+                }
+            }
+            let hero = ask(PreviewSize::Hero, pixel_size(PreviewSize::Hero, scale));
+            let card = (CARD.0 * scale, CARD.1 * scale);
+            for shape in SHAPES {
+                let s = drawn_scale(made(shape, hero), card);
+                assert!(s <= 1.0, "a card at {scale}: {shape:?} drawn at {s}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_row_is_asked_as_a_square_and_the_hero_big_enough_for_an_upright_video() {
+        assert_eq!(
+            ask(PreviewSize::Row, (43, 43)),
+            Ask {
+                side: 43,
+                square: true
+            }
+        );
+        // 268 x 120 at 125% is 335 x 150. An upright phone video fitted
+        // in a square of 596 is 335 wide, just as wide as the box.
+        assert_eq!(
+            ask(PreviewSize::Hero, (335, 150)),
+            Ask {
+                side: 596,
+                square: false
+            }
+        );
+        assert_eq!(ask(PreviewSize::Hero, (268, 120)).side, 477);
+        // Its biggest picture, a square photo at 200%, for each of
+        // Several's three cards, is still a small share of the cap.
+        let side = ask(PreviewSize::Hero, pixel_size(PreviewSize::Hero, 2.0)).side as usize;
+        assert_eq!(side, 953);
+        assert!(3 * side * side * 4 < CACHE_CAP / 4);
     }
 
     #[test]

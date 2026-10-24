@@ -3,6 +3,7 @@
 //! waits on the Shell or the disk.
 
 use std::collections::VecDeque;
+use std::os::windows::fs::MetadataExt;
 use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
@@ -14,26 +15,36 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 use windows::Win32::UI::Shell::{
-    IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_THUMBNAILONLY,
+    IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_CROPTOSQUARE, SIIGBF_INCACHEONLY,
+    SIIGBF_THUMBNAILONLY,
 };
 
 use super::{PostTarget, WM_KILN_PREVIEW};
-use crate::previews::{fix_alpha, premultiply, Pixels, Preview, PreviewKey};
+use crate::previews::{self, fix_alpha, premultiply, Ask, Pixels, Preview, PreviewKey};
 
-/// Windows' thumbnail of `path`, made to fit a square as wide as the
-/// larger side of `pixels`, as premultiplied BGRA, top row first. `None`
-/// when the file has no thumbnail of its own (only an icon), can't be
-/// read, or anything else goes wrong.
+/// Windows' thumbnail of `path`, asked for as `ask` says, as
+/// premultiplied BGRA, top row first. With `cached_only` it is only one
+/// Windows already has, so the file itself is never read. `None` when the
+/// file has no thumbnail of its own (only an icon), can't be read, or
+/// anything else goes wrong.
 ///
 /// It calls the Shell, which can be slow, so never on the UI thread; the
 /// thread must have COM initialised apartment-threaded.
-pub fn fetch(path: &Path, pixels: (u32, u32)) -> Option<Pixels> {
-    let side = pixels.0.max(pixels.1).clamp(1, i32::MAX as u32) as i32;
+pub fn fetch(path: &Path, ask: Ask, cached_only: bool) -> Option<Pixels> {
+    let side = ask.side.clamp(1, i32::MAX as u32) as i32;
+    // A thumbnail, never an icon; cropped to the square when asked; and
+    // only from Windows' cache when the file mustn't be read.
+    let mut flags = SIIGBF_THUMBNAILONLY;
+    if ask.square {
+        flags |= SIIGBF_CROPTOSQUARE;
+    }
+    if cached_only {
+        flags |= SIIGBF_INCACHEONLY;
+    }
     let name = HSTRING::from(path.as_os_str());
     let factory: IShellItemImageFactory =
         unsafe { SHCreateItemFromParsingName(&name, None) }.ok()?;
-    let bitmap =
-        unsafe { factory.GetImage(SIZE { cx: side, cy: side }, SIIGBF_THUMBNAILONLY) }.ok()?;
+    let bitmap = unsafe { factory.GetImage(SIZE { cx: side, cy: side }, flags) }.ok()?;
     let read = read_bitmap(bitmap);
     // The bitmap is ours to delete, whether or not it could be read.
     unsafe {
@@ -146,7 +157,7 @@ impl Thumbs {
     /// The worker, fetching with `fetch` and handing each answer to
     /// `done`.
     fn spawn(
-        fetch: impl Fn(&Path, (u32, u32)) -> Option<Pixels> + Send + 'static,
+        fetch: impl Fn(&Path, Ask, bool) -> Option<Pixels> + Send + 'static,
         done: impl Fn(PreviewKey, Preview) + Send + 'static,
     ) -> Thumbs {
         let shared = Arc::new(Shared::default());
@@ -210,7 +221,7 @@ impl Drop for Thumbs {
 
 fn work(
     shared: &Shared,
-    fetch: impl Fn(&Path, (u32, u32)) -> Option<Pixels>,
+    fetch: impl Fn(&Path, Ask, bool) -> Option<Pixels>,
     done: impl Fn(PreviewKey, Preview),
 ) {
     loop {
@@ -231,17 +242,24 @@ fn work(
         };
         // The file's time now, read before it is fetched: the answer is
         // about the file as it is, which may have changed since it was
-        // listed. The window sorts out which is newer. When the time can't
-        // be read (the file is gone, or its share is offline), the answer
-        // keeps the time it was asked with, so the window caches it under
-        // the key it asked for and doesn't ask again.
-        let modified = std::fs::metadata(&key.path)
-            .and_then(|m| m.modified())
-            .ok()
-            .or(key.modified);
-        let preview = match fetch(&key.path, key.pixels) {
-            Some(px) => Preview::Ready(Arc::new(px)),
-            None => Preview::None,
+        // listed. The window sorts out which is newer.
+        let read = std::fs::metadata(&key.path)
+            .and_then(|m| Ok((m.modified()?, m.file_attributes())))
+            .ok();
+        let (modified, preview) = match read {
+            // The file is gone, or its share is offline: asking the Shell
+            // would only wait on it again. There is no picture, and the
+            // answer keeps the time it was asked with, so the window
+            // caches it under the key it asked for and doesn't ask again.
+            None => (key.modified, Preview::None),
+            Some((modified, attributes)) => {
+                let ask = previews::ask(key.size, key.pixels);
+                let preview = match fetch(&key.path, ask, cloud_only(attributes)) {
+                    Some(px) => Preview::Ready(Arc::new(px)),
+                    None => Preview::None,
+                };
+                (Some(modified), preview)
+            }
         };
         let answer = PreviewKey { modified, ..key };
         // Posted under the lock, so nothing is posted once `shutdown`
@@ -255,6 +273,27 @@ fn work(
     }
 }
 
+/// The data is kept somewhere else, as by hierarchical storage.
+const FILE_ATTRIBUTE_OFFLINE: u32 = 0x1000;
+/// The file has no data here: opening it fetches it, as a cloud-only file
+/// may.
+const FILE_ATTRIBUTE_RECALL_ON_OPEN: u32 = 0x4_0000;
+/// The file's data isn't all here: reading it fetches it from its remote
+/// store, as reading a OneDrive placeholder does.
+const FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS: u32 = 0x40_0000;
+
+/// Whether a file's attributes say its data is somewhere else, so that
+/// making a thumbnail would read it from the network or the cloud. Such a
+/// file is shown only from Windows' cache of thumbnails, so a preview
+/// never brings a cloud-only file down.
+fn cloud_only(attributes: u32) -> bool {
+    attributes
+        & (FILE_ATTRIBUTE_OFFLINE
+            | FILE_ATTRIBUTE_RECALL_ON_OPEN
+            | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS)
+        != 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,16 +303,16 @@ mod tests {
 
     use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 
-    use crate::previews::{PreviewKey, PreviewSize};
+    use crate::previews::{cover_source, pixel_size, PreviewKey, PreviewSize};
 
     const WAIT: Duration = Duration::from_secs(10);
 
     /// `fetch` on a thread of its own with COM apartment-threaded, as the
     /// worker runs it.
-    fn fetch_on_sta(path: PathBuf, pixels: (u32, u32)) -> Option<Pixels> {
+    fn fetch_on_sta(path: PathBuf, ask: Ask, cached_only: bool) -> Option<Pixels> {
         std::thread::spawn(move || {
             let com = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_ok();
-            let px = fetch(&path, pixels);
+            let px = fetch(&path, ask, cached_only);
             if com {
                 unsafe { CoUninitialize() };
             }
@@ -283,32 +322,63 @@ mod tests {
         .expect("the fetch thread panicked")
     }
 
+    /// A row's square at 100%, as the worker asks for it.
+    fn row_ask() -> Ask {
+        previews::ask(PreviewSize::Row, pixel_size(PreviewSize::Row, 1.0))
+    }
+
+    /// A PNG of one opaque colour, `w` x `h`, at `path`.
+    fn png(path: &Path, w: u32, h: u32) {
+        let mut pixmap = resvg::tiny_skia::Pixmap::new(w, h).unwrap();
+        pixmap.fill(resvg::tiny_skia::Color::from_rgba8(0x7F, 0xB5, 0xA0, 0xFF));
+        pixmap.save_png(path).unwrap();
+    }
+
     #[test]
-    fn a_png_gives_a_thumbnail_the_right_size() {
+    fn a_png_gives_a_row_square_the_right_size() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("celadon.png");
-        let mut pixmap = resvg::tiny_skia::Pixmap::new(64, 48).unwrap();
-        pixmap.fill(resvg::tiny_skia::Color::from_rgba8(0x7F, 0xB5, 0xA0, 0xFF));
-        pixmap.save_png(&path).unwrap();
+        png(&path, 64, 48);
 
-        let px = fetch_on_sta(path, (34, 34)).expect("Windows makes a thumbnail of a PNG");
+        let px = fetch_on_sta(path, row_ask(), false).expect("Windows makes a thumbnail of a PNG");
 
-        assert!(
-            px.width <= 34 && px.height <= 34,
-            "{} x {}",
-            px.width,
-            px.height
-        );
-        assert!(px.width > 0 && px.height > 0);
+        // Cropped to the square by Windows, so the row draws it as made.
+        assert_eq!((px.width, px.height), (34, 34));
         assert_eq!(px.bgra.len(), (px.width * px.height * 4) as usize);
         assert!(px.bgra.chunks_exact(4).any(|p| p[3] != 0), "all clear");
     }
 
     #[test]
+    fn wide_and_upright_pictures_are_made_big_enough_to_fill_their_box() {
+        // A 16:9 frame and an upright phone video's, bigger than any box,
+        // at a row's size and the inspector's, at 125%.
+        let dir = tempfile::tempdir().unwrap();
+        for (w, h) in [(1600, 900), (900, 1600)] {
+            let path = dir.path().join(format!("frame {w}x{h}.png"));
+            png(&path, w, h);
+            for size in [PreviewSize::Row, PreviewSize::Hero] {
+                let bx = pixel_size(size, 1.25);
+                let ask = previews::ask(size, bx);
+                let px = fetch_on_sta(path.clone(), ask, false).expect("a thumbnail");
+                let (_, _, cw, ch) =
+                    cover_source((px.width, px.height), (bx.0 as f32, bx.1 as f32));
+                let scale = (bx.0 as f32 / cw).max(bx.1 as f32 / ch);
+                assert!(
+                    scale <= 1.0,
+                    "{w}x{h} as {size:?}: made {} x {} for {bx:?}, drawn at {scale}",
+                    px.width,
+                    px.height
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_translucent_png_arrives_premultiplied() {
         // Windows gives straight alpha; Direct2D draws premultiplied. A
-        // translucent bone half and a clear half: no colour may be brighter
-        // than its alpha, or the edge glows on the dark theme.
+        // translucent bone half and a clear half: each colour is scaled by
+        // its alpha once, or the edge glows on the dark theme, and only
+        // once, or the picture goes dark.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("glaze.png");
         let mut pixmap = resvg::tiny_skia::Pixmap::new(64, 64).unwrap();
@@ -320,10 +390,18 @@ mod tests {
         }
         pixmap.save_png(&path).unwrap();
 
-        let px = fetch_on_sta(path, (34, 34)).expect("Windows makes a thumbnail of a PNG");
+        let px = fetch_on_sta(path, row_ask(), false).expect("Windows makes a thumbnail of a PNG");
 
-        assert!(px.bgra.chunks_exact(4).any(|p| p[3] == 64), "translucent");
         assert!(px.bgra.chunks_exact(4).any(|p| p[3] == 0), "clear");
+        let translucent: Vec<&[u8]> = px.bgra.chunks_exact(4).filter(|p| p[3] == 64).collect();
+        assert!(!translucent.is_empty(), "translucent");
+        // Bone at a quarter: 0xDA, 0xE6, 0xED times 64/255 is about 55, 58
+        // and 59. Twice over it would be about 14.
+        for p in translucent {
+            for (got, want) in p[..3].iter().zip([55u8, 58, 59]) {
+                assert!(got.abs_diff(want) <= 3, "{p:?}");
+            }
+        }
         assert!(
             px.bgra
                 .chunks_exact(4)
@@ -335,7 +413,48 @@ mod tests {
     #[test]
     fn a_missing_file_gives_none() {
         let path = PathBuf::from("C:\\no\\such\\file.png");
-        assert!(fetch_on_sta(path, (34, 34)).is_none());
+        assert!(fetch_on_sta(path, row_ask(), false).is_none());
+    }
+
+    #[test]
+    fn a_file_windows_has_no_thumbnail_of_yet_gives_none_from_the_cache() {
+        // A picture made just now has never been shown: asked for only
+        // what Windows already has, there is nothing.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("never shown.png");
+        png(&path, 64, 48);
+        assert!(fetch_on_sta(path.clone(), row_ask(), true).is_none());
+        // Asked for in full, it has one.
+        assert!(fetch_on_sta(path, row_ask(), false).is_some());
+    }
+
+    #[test]
+    fn a_file_whose_data_is_elsewhere_is_one_to_take_from_the_cache_only() {
+        const OFFLINE: u32 = 0x1000;
+        const RECALL_ON_OPEN: u32 = 0x4_0000;
+        const RECALL_ON_DATA_ACCESS: u32 = 0x40_0000;
+        const READONLY: u32 = 0x1;
+        const ARCHIVE: u32 = 0x20;
+        for cloud in [OFFLINE, RECALL_ON_OPEN, RECALL_ON_DATA_ACCESS] {
+            assert!(cloud_only(cloud), "{cloud:#x}");
+            assert!(cloud_only(cloud | ARCHIVE), "{cloud:#x}");
+        }
+        assert!(!cloud_only(0));
+        assert!(!cloud_only(READONLY | ARCHIVE));
+    }
+
+    /// Files named `names` in a new folder, each a few bytes.
+    fn files(names: &[&str]) -> (tempfile::TempDir, Vec<PathBuf>) {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = names
+            .iter()
+            .map(|n| {
+                let p = dir.path().join(n);
+                std::fs::write(&p, b"x").unwrap();
+                p
+            })
+            .collect();
+        (dir, paths)
     }
 
     fn key(path: &Path) -> PreviewKey {
@@ -350,17 +469,21 @@ mod tests {
     /// What a test worker posted.
     type Posted = mpsc::Receiver<(PreviewKey, Preview)>;
 
+    /// What a test worker's fetch was asked: the file, how, and whether
+    /// from the cache only.
+    type Started = mpsc::Receiver<(PathBuf, Ask, bool)>;
+
     /// A worker whose fetch waits for a go on the returned sender (one per
     /// file, in order) and says which file it started on; what it posts
     /// comes out of the last receiver.
-    fn gated() -> (Thumbs, mpsc::Sender<()>, mpsc::Receiver<PathBuf>, Posted) {
+    fn gated() -> (Thumbs, mpsc::Sender<()>, Started, Posted) {
         let (release, gate) = mpsc::channel::<()>();
         let (started_tx, started) = mpsc::channel();
         let (done_tx, posted) = mpsc::channel();
         let gate = Mutex::new(gate);
         let thumbs = Thumbs::spawn(
-            move |path, _| {
-                let _ = started_tx.send(path.to_path_buf());
+            move |path, ask, cached_only| {
+                let _ = started_tx.send((path.to_path_buf(), ask, cached_only));
                 let _ = gate.lock().unwrap().recv();
                 None
             },
@@ -373,10 +496,11 @@ mod tests {
 
     #[test]
     fn a_new_ask_replaces_the_queue_at_once() {
+        let (_dir, paths) = files(&["a", "b", "c", "d"]);
+        let [a, b, c, d] = [0, 1, 2, 3].map(|i| paths[i].clone());
         let (thumbs, release, started, posted) = gated();
-        let [a, b, c, d] = ["a", "b", "c", "d"].map(PathBuf::from);
         thumbs.ask(vec![key(&a), key(&b), key(&c)]);
-        assert_eq!(started.recv_timeout(WAIT).unwrap(), a);
+        assert_eq!(started.recv_timeout(WAIT).unwrap().0, a);
 
         // Scrolled on while a is under way: b and c are no longer wanted,
         // and a, asked again, is not fetched twice.
@@ -388,12 +512,61 @@ mod tests {
         let (first, preview) = posted.recv_timeout(WAIT).unwrap();
         assert_eq!(first.path, a);
         assert_eq!(preview, Preview::None, "no picture: nothing to show");
-        assert_eq!(started.recv_timeout(WAIT).unwrap(), d);
+        assert_eq!(started.recv_timeout(WAIT).unwrap().0, d);
         assert_eq!(posted.recv_timeout(WAIT).unwrap().0.path, d);
         drop(thumbs);
         drop(release);
         assert!(started.try_recv().is_err(), "b and c were never fetched");
         assert!(posted.recv_timeout(Duration::from_millis(200)).is_err());
+    }
+
+    #[test]
+    fn each_size_is_asked_for_as_it_is_drawn() {
+        let (_dir, paths) = files(&["a.png"]);
+        let (thumbs, release, started, _posted) = gated();
+        let hero = PreviewKey {
+            size: PreviewSize::Hero,
+            pixels: (335, 150),
+            ..key(&paths[0])
+        };
+        thumbs.ask(vec![key(&paths[0]), hero]);
+        let _ = release.send(());
+        let _ = release.send(());
+        let (_, row, cached) = started.recv_timeout(WAIT).unwrap();
+        assert_eq!(row, previews::ask(PreviewSize::Row, (34, 34)));
+        assert!(row.square && !cached);
+        let (_, hero, _) = started.recv_timeout(WAIT).unwrap();
+        assert_eq!(hero, previews::ask(PreviewSize::Hero, (335, 150)));
+        assert!(!hero.square);
+    }
+
+    #[test]
+    fn a_file_kept_offline_is_asked_for_from_the_cache_only() {
+        use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+        // Its data is somewhere else, as a cloud-only file's is: making a
+        // preview must never bring it down.
+        const OFFLINE: u32 = 0x1000;
+        let (dir, paths) = files(&["here.png"]);
+        let away = dir.path().join("away.png");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .attributes(OFFLINE)
+            .open(&away)
+            .unwrap();
+        assert_ne!(
+            std::fs::metadata(&away).unwrap().file_attributes() & OFFLINE,
+            0,
+            "the test file is marked offline"
+        );
+        let (thumbs, release, started, _posted) = gated();
+        thumbs.ask(vec![key(&away), key(&paths[0])]);
+        let _ = release.send(());
+        let _ = release.send(());
+        let (path, _, cached) = started.recv_timeout(WAIT).unwrap();
+        assert_eq!((path, cached), (away, true));
+        let (path, _, cached) = started.recv_timeout(WAIT).unwrap();
+        assert_eq!((path, cached), (paths[0].clone(), false));
     }
 
     #[test]
@@ -420,14 +593,15 @@ mod tests {
     }
 
     #[test]
-    fn a_file_whose_time_cant_be_read_keeps_the_time_it_was_asked_with() {
-        // Gone since it was listed, or on a share that went offline: its
-        // "no picture" answer is kept under the key the window asked for,
-        // so it is cached once instead of asked for again and again.
+    fn a_file_whose_time_cant_be_read_isnt_fetched_and_keeps_the_time_it_was_asked_with() {
+        // Gone since it was listed, or on a share that went offline: it
+        // costs no fetch, which would only wait on the share again, and
+        // its "no picture" answer is kept under the key the window asked
+        // for, so it is cached once instead of asked for again and again.
         let dir = tempfile::tempdir().unwrap();
         let gone = dir.path().join("gone.png");
         let listed = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
-        let (thumbs, release, _started, posted) = gated();
+        let (thumbs, release, started, posted) = gated();
         let asked = PreviewKey {
             modified: Some(listed),
             ..key(&gone)
@@ -438,13 +612,15 @@ mod tests {
         let (answer, preview) = posted.recv_timeout(WAIT).unwrap();
         assert_eq!(answer, asked);
         assert_eq!(preview, Preview::None);
+        assert!(started.try_recv().is_err(), "it was fetched");
     }
 
     #[test]
     fn nothing_is_posted_once_the_worker_is_dropped() {
+        let (_dir, paths) = files(&["a", "b"]);
         let (thumbs, release, started, posted) = gated();
-        thumbs.ask(vec![key(Path::new("a")), key(Path::new("b"))]);
-        assert_eq!(started.recv_timeout(WAIT).unwrap(), PathBuf::from("a"));
+        thumbs.ask(vec![key(&paths[0]), key(&paths[1])]);
+        assert_eq!(started.recv_timeout(WAIT).unwrap().0, paths[0]);
         let t = std::time::Instant::now();
         drop(thumbs);
         assert!(
