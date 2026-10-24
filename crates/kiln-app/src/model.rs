@@ -374,6 +374,10 @@ pub fn export_summary(saved: usize, total: usize) -> String {
 /// A row's line while its results are being exported.
 pub const SAVING: &str = "Saving…";
 
+/// How a held result can be saved without a dialog: the held row's
+/// tooltip, and a finished file's line in the inspector.
+pub const DRAG_HINT: &str = "Drag this row to a folder to save the result there.";
+
 /// The footer, for as long as it has nothing more pressing to say, when
 /// this run has no holding folder.
 pub const NO_HOLDING: &str =
@@ -1046,7 +1050,7 @@ impl Entry {
                 ..
             } => Some(format!("Saved to {}", folder.display())),
             JobState::Done { saved: None, .. } if self.held().is_some() => {
-                Some("Drag this row to a folder to save the result there.".to_owned())
+                Some(DRAG_HINT.to_owned())
             }
             _ => None,
         };

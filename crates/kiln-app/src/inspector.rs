@@ -116,6 +116,44 @@ pub enum Kept {
 /// The most targets the inspector lists before More.
 pub const MAX_TARGETS: usize = 3;
 
+/// What the inspector says with nothing selected.
+pub const NOTHING_TITLE: &str = "Select a file to see what Kiln can do with it";
+
+/// The heading over the formats the selection can become.
+pub const TURN_INTO: &str = "Turn it into";
+
+/// The heading over the kinds offered when several files share no format.
+pub const ONE_KIND: &str = "Select one kind";
+
+/// The link after the formats, which opens the format choice.
+pub const MORE_FORMATS: &str = "More formats…";
+
+/// How many files a kind on offer holds: "2 files", or "1 file".
+pub fn files_count(n: usize) -> String {
+    if n == 1 {
+        "1 file".to_owned()
+    } else {
+        format!("{n} files")
+    }
+}
+
+impl InspectorControl {
+    /// What a button says on it. A format, a kind and More say what they
+    /// are in their own way, so they have none.
+    pub fn label(self) -> Option<&'static str> {
+        match self {
+            InspectorControl::Cancel => Some("Cancel"),
+            InspectorControl::Save => Some("Save"),
+            InspectorControl::ShowInFolder => Some("Show in folder"),
+            InspectorControl::Retry => Some("Retry"),
+            InspectorControl::ShowDetails => Some("Show details"),
+            InspectorControl::Target(_) | InspectorControl::More | InspectorControl::Kind(_) => {
+                None
+            }
+        }
+    }
+}
+
 /// What the inspector can't tell from the list alone.
 pub struct Lookups<'a> {
     /// What kind of file a row is.
@@ -386,6 +424,14 @@ impl Target {
         }
         name
     }
+
+    /// The estimate as the target's row shows it: "≈ 410 KB", which reads
+    /// as a guess where a bare size would read as exact. `None` without
+    /// one.
+    pub fn estimate_label(&self) -> Option<String> {
+        self.estimate
+            .map(|bytes| format!("\u{2248} {}", about(bytes)))
+    }
 }
 
 /// The kinds of file in a selection, in words, most first and a tie in the
@@ -602,6 +648,12 @@ mod tests {
             suggested: false,
         };
         assert_eq!(target(None, None).name(), "Convert to XYZ");
+        // Drawn, an estimate is marked as one; without, nothing is drawn.
+        assert_eq!(
+            target(None, Some(410_000)).estimate_label().as_deref(),
+            Some("\u{2248} 410 KB")
+        );
+        assert_eq!(target(None, None).estimate_label(), None);
         assert_eq!(
             target(None, Some(380_000)).name(),
             "Convert to XYZ, about 380 KB"
@@ -1191,5 +1243,29 @@ mod tests {
             [C::Kind(0), C::Kind(1)]
         );
         assert_eq!(Inspector::Nothing.controls(), []);
+    }
+
+    #[test]
+    fn buttons_say_what_they_do_and_kinds_count_their_files() {
+        use InspectorControl as C;
+        let labels: Vec<_> = [
+            C::Cancel,
+            C::Save,
+            C::ShowInFolder,
+            C::Retry,
+            C::ShowDetails,
+        ]
+        .map(|c| c.label().unwrap())
+        .to_vec();
+        assert_eq!(
+            labels,
+            ["Cancel", "Save", "Show in folder", "Retry", "Show details"]
+        );
+        // A format, a kind and More say what they are in their own way.
+        assert!([C::Target(0), C::Kind(0), C::More]
+            .iter()
+            .all(|c| c.label().is_none()));
+        assert_eq!(files_count(1), "1 file");
+        assert_eq!(files_count(2), "2 files");
     }
 }

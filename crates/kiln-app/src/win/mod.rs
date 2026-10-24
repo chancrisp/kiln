@@ -12,7 +12,7 @@ mod tips;
 mod uia;
 mod updates;
 
-use std::cell::{Cell, OnceCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -47,6 +47,7 @@ use crate::a11y;
 use crate::actions::{self, FileAction};
 use crate::anim::{self, Tween};
 use crate::help::{self, HelpSection};
+use crate::inspector::{self as insp, InspectorControl};
 use crate::layout::{
     self, Control, DialogButton, SettingsLayout, SettingsShape, SettingsTab, SheetControl,
     SheetLayout, TextScroll, ROW_HEIGHT,
@@ -64,7 +65,10 @@ use crate::ways_in::{self, MenuItem, RowState};
 use crate::wheel::{self, Action, Spot, Wheel, WheelKind};
 use drop::{DragEvent, DropTarget, DRAG_ENTER, DRAG_LEAVE, DRAG_OVER, WM_KILN_DRAG, WM_KILN_DROP};
 use inspect::Inspector;
-use render::{DetailsView, HelpView, Renderer, RowAnim, SettingsView, SheetView, View, WheelView};
+use render::{
+    DetailsView, HelpView, InspectorView, Renderer, RowAnim, SettingsView, SheetView, View,
+    WheelView,
+};
 use thumbs::Thumbs;
 use tips::Tips;
 
@@ -578,11 +582,69 @@ fn kind_of(kiln: &Kiln, e: &model::Entry) -> Option<kiln_core::Kind> {
     kiln.registry().format(&e.code).map(|f| f.kind)
 }
 
+/// The name of the one file the inspector shows, which its buttons are
+/// named with: empty for several files or none.
+fn panel_file<'a>(model: &insp::Inspector, entries: &'a [model::Entry]) -> &'a str {
+    match model {
+        insp::Inspector::Waiting { row, .. }
+        | insp::Inspector::Converting { row, .. }
+        | insp::Inspector::Done { row, .. }
+        | insp::Inspector::Failed { row, .. } => entries.get(*row).map_or("", |e| e.name.as_str()),
+        insp::Inspector::Nothing | insp::Inspector::Several { .. } => "",
+    }
+}
+
+/// The inspector as last built for the selection, while it shows.
+struct Panel {
+    /// Where it is: the right of the list's panel.
+    rect: layout::Rect,
+    /// What it says.
+    model: insp::Inspector,
+    /// Nothing's body as it was built with: the key hint, then the privacy
+    /// line.
+    nothing: String,
+    layout: layout::InspectorLayout,
+    /// Its controls that are placed, in reading order, with where each is.
+    /// The pointer, Tab, the drawing and the tree all go by these.
+    controls: Vec<(InspectorControl, layout::Rect)>,
+    /// Each format's glaze, or each kind's, as its rows show them.
+    glazes: Vec<theme::Glaze>,
+}
+
+impl Panel {
+    /// The rows it pictures at its own size: the one file, or the first
+    /// three of several.
+    fn pictured(&self) -> Vec<usize> {
+        match &self.model {
+            insp::Inspector::Nothing => vec![],
+            insp::Inspector::Waiting { row, .. }
+            | insp::Inspector::Converting { row, .. }
+            | insp::Inspector::Done { row, .. }
+            | insp::Inspector::Failed { row, .. } => vec![*row],
+            insp::Inspector::Several { rows, .. } => rows.iter().copied().take(3).collect(),
+        }
+    }
+
+    /// Where control `c` is, if it is placed.
+    fn rect_of(&self, c: InspectorControl) -> Option<layout::Rect> {
+        self.controls.iter().find(|(k, _)| *k == c).map(|(_, r)| *r)
+    }
+
+    /// The control under a point.
+    fn control_at(&self, x: f32, y: f32) -> Option<InspectorControl> {
+        self.controls
+            .iter()
+            .find(|(_, r)| r.contains(x, y))
+            .map(|(c, _)| *c)
+    }
+}
+
 /// What the previews asked for depend on: see `App::ask_previews`.
 #[derive(Debug, Clone, PartialEq)]
 struct PreviewAsk {
-    /// The row whose picture the inspector shows.
-    selected: Option<usize>,
+    /// The rows whose pictures the inspector shows, at its own size: none
+    /// while it doesn't show.
+    pictured: Vec<usize>,
     /// The rows in view, which scrolling and the window's size move.
     visible: std::ops::Range<usize>,
     /// How many rows there are, which adding files changes.
@@ -762,6 +824,15 @@ struct App {
     /// The pictures painted in the last frame. Kept so each frame refills
     /// it rather than making another.
     painted_previews: Vec<Painted>,
+    /// The inspector beside the list, as last built: see `refresh_panel`.
+    panel: Option<Panel>,
+    /// The inspector control under the pointer, and the one pressed, which
+    /// acts when the pointer is released over it.
+    panel_hover: Option<InspectorControl>,
+    panel_pressed: Option<InspectorControl>,
+    /// Finished results' sizes as first read, for the inspector's before
+    /// and after, so the disk is asked once for each.
+    result_sizes: RefCell<HashMap<PathBuf, Option<u64>>>,
 }
 
 impl App {
@@ -1023,8 +1094,7 @@ impl App {
             FocusButton::Clear => l.clear_button,
             FocusButton::Help => Some(l.help_button),
             FocusButton::Settings => Some(l.settings_button),
-            // The inspector isn't drawn yet, so nothing is there to be on.
-            FocusButton::Inspector(_) => None,
+            FocusButton::Inspector(c) => self.panel.as_ref()?.rect_of(c),
         }
     }
 
@@ -1045,8 +1115,180 @@ impl App {
             FocusButton::Clear => self.clear(),
             FocusButton::Help => self.open_help(),
             FocusButton::Settings => self.open_settings(),
-            FocusButton::Inspector(_) => {}
+            FocusButton::Inspector(c) => self.panel_act(c, true),
         }
+    }
+
+    // The inspector.
+
+    /// Build the inspector again for the selection as it is now, when what
+    /// it says or where it is has changed: the selection, a row's job, its
+    /// facts or its results, the window's size. Its words are measured only
+    /// when they change. A control the keyboard or the pointer was on that
+    /// has gone hands the focus back to the list; one still there keeps it.
+    /// Run after every message and before every frame.
+    fn refresh_panel(&mut self) {
+        if self.destroyed {
+            return;
+        }
+        let Some(rect) = self.layout().inspector else {
+            if self.panel.take().is_some() {
+                self.panel_lost();
+                self.invalidate();
+            }
+            return;
+        };
+        let model = {
+            let kiln = &self.kiln;
+            let sizes = &self.result_sizes;
+            let kind = |e: &model::Entry| kind_of(kiln, e);
+            // A result's size is read once, not on every message.
+            let size = |p: &Path| -> Option<u64> {
+                *sizes
+                    .borrow_mut()
+                    .entry(p.to_path_buf())
+                    .or_insert_with(|| std::fs::metadata(p).ok().map(|m| m.len()))
+            };
+            let look = insp::Lookups {
+                kind_of: &kind,
+                size_of: &size,
+            };
+            insp::inspect(&self.files, &look, &self.settings.habits)
+        };
+        let lines = ways_in::empty_lines(&self.settings);
+        let nothing = format!("{}\n{}", lines.keys, lines.privacy);
+        if self
+            .panel
+            .as_ref()
+            .is_some_and(|p| p.rect == rect && p.model == model && p.nothing == nothing)
+        {
+            return;
+        }
+        let renderer = &self.renderer;
+        let measure = |s: &str, how: layout::Wrapped| {
+            renderer.inspector_text_height(s, how, layout::INSPECTOR_TEXT_WIDTH)
+        };
+        let shape = layout::inspector_shape(&model, &nothing, &measure);
+        let il = layout::inspector_layout(&rect, &shape);
+        let controls = a11y::inspector_controls(&model, &il);
+        let glazes = self.offer_glazes(&model);
+        self.panel = Some(Panel {
+            rect,
+            model,
+            nothing,
+            layout: il,
+            controls,
+            glazes,
+        });
+        self.panel_lost();
+        self.invalidate();
+    }
+
+    /// The inspector changed or went: a control the keyboard, the pointer
+    /// or a press was on that isn't there any more lets go of it, and the
+    /// keyboard goes back to the list.
+    fn panel_lost(&mut self) {
+        let there =
+            |c: InspectorControl| self.panel.as_ref().is_some_and(|p| p.rect_of(c).is_some());
+        if let Some(FocusButton::Inspector(c)) = self.button_focus {
+            if !there(c) {
+                self.button_focus = None;
+            }
+        }
+        self.panel_hover = self.panel_hover.filter(|&c| there(c));
+        self.panel_pressed = self.panel_pressed.filter(|&c| there(c));
+    }
+
+    /// The glaze of each format the inspector offers, or of each kind when
+    /// it offers kinds, as its rows show them.
+    fn offer_glazes(&self, model: &insp::Inspector) -> Vec<theme::Glaze> {
+        let reg = self.kiln.registry();
+        let glaze = |code: &str| theme::glaze_of(reg.format(code).map(|f| f.kind));
+        match model {
+            insp::Inspector::Several {
+                targets, offered, ..
+            } if targets.is_empty() => offered.iter().map(|(code, _)| glaze(code)).collect(),
+            insp::Inspector::Waiting { targets, .. } | insp::Inspector::Several { targets, .. } => {
+                targets.iter().map(|t| glaze(&t.ext)).collect()
+            }
+            _ => vec![],
+        }
+    }
+
+    /// Do what inspector control `c` is for, from a click, a key
+    /// (`keyboard`) or an assistive tool. A format converts the files the
+    /// inspector shows, counted in habits as a pick from the wheel is; More
+    /// opens the format choice; a kind narrows the selection to its files;
+    /// the buttons do what the row's own would.
+    fn panel_act(&mut self, c: InspectorControl, keyboard: bool) {
+        use insp::Inspector as I;
+        use InspectorControl as C;
+        let Some(p) = &self.panel else {
+            return;
+        };
+        let at = p.rect_of(c);
+        let model = p.model.clone();
+        let path = |app: &App, i: usize| app.files.entries().get(i).map(|e| e.path.clone());
+        match (c, &model) {
+            (C::Target(k), I::Waiting { row, targets, .. }) => {
+                if let (Some(t), Some(file)) = (targets.get(k), path(self, *row)) {
+                    self.start(Action::Convert(t.ext.clone()), vec![file], None);
+                }
+            }
+            // Every selected file shares the format, not just those pictured.
+            (C::Target(k), I::Several { targets, .. }) => {
+                if let Some(t) = targets.get(k) {
+                    let paths = self.selected_paths();
+                    self.start(Action::Convert(t.ext.clone()), paths, None);
+                }
+            }
+            (C::More, I::Waiting { row, .. }) => {
+                if let Some(file) = path(self, *row) {
+                    let from = at.map_or_else(
+                        || self.row_centre(*row),
+                        |r| (r.x + r.w / 2.0, r.y + r.h / 2.0),
+                    );
+                    self.open_choice(WheelKind::Convert, vec![file], from, keyboard);
+                }
+            }
+            (C::Kind(k), I::Several { offered, .. }) => {
+                if let Some((code, _)) = offered.get(k) {
+                    self.select_kind(code, keyboard);
+                }
+            }
+            (C::Cancel, I::Converting { row, .. }) => self.cancel_row(*row),
+            (C::Save, I::Done { row, .. }) => self.export_row(*row),
+            (C::ShowInFolder, I::Done { row, .. }) => self.show_row(*row),
+            (C::Retry, I::Failed { row, .. }) => self.retry_row(*row),
+            (C::ShowDetails, I::Failed { row, .. }) => self.show_details(*row),
+            _ => {}
+        }
+        self.invalidate();
+    }
+
+    /// Narrow the selection to its files of type `code`, as the inspector
+    /// offers when several files share no format.
+    fn select_kind(&mut self, code: &str, keyboard: bool) {
+        let entries = self.files.entries();
+        let rows: Vec<usize> = self
+            .files
+            .selection()
+            .into_iter()
+            .filter(|&i| {
+                entries.get(i).is_some_and(|e| {
+                    let own = if e.code.is_empty() { "Other" } else { &e.code };
+                    own == code
+                })
+            })
+            .collect();
+        let Some(&first) = rows.first() else {
+            return;
+        };
+        self.files.select_only(&rows);
+        if keyboard {
+            self.files.keyboard_used();
+        }
+        self.scroll_to_row(first);
     }
 
     /// Add `paths` to the list. `keys` says a key asked for them (Ctrl+O,
@@ -2653,7 +2895,8 @@ impl App {
         let (rows, focus) = match at {
             Some((x, y)) => {
                 let (x, y) = self.screen_dips(x, y);
-                if !self.layout().panel.contains(x, y) {
+                // The list's menu, not the inspector's beside it.
+                if !self.layout().list.contains(x, y) {
                     return;
                 }
                 // Right-clicking a row outside the selection selects only
@@ -3308,6 +3551,13 @@ impl App {
                     return;
                 };
                 let now = Instant::now();
+                // A result written where an older one was is read afresh.
+                if let Ok(outputs) = &result {
+                    let mut sizes = self.result_sizes.borrow_mut();
+                    for p in outputs {
+                        sizes.remove(p);
+                    }
+                }
                 let state = match &result {
                     Ok(outputs) => JobState::Done {
                         action: job.action.clone(),
@@ -4374,6 +4624,11 @@ impl App {
             self.settings_hover = gear;
             self.invalidate();
         }
+        let hot = self.panel.as_ref().and_then(|p| p.control_at(x, y));
+        if hot != self.panel_hover {
+            self.panel_hover = hot;
+            self.invalidate();
+        }
         let ask = l.help_button.contains(x, y);
         if ask != self.help_hover {
             self.help_hover = ask;
@@ -4412,6 +4667,7 @@ impl App {
             .as_mut()
             .is_some_and(|ui| std::mem::take(&mut ui.pressed));
         let press = self.list_press.take();
+        let panel = self.panel_pressed.take();
         unsafe {
             let _ = ReleaseCapture();
         }
@@ -4441,8 +4697,21 @@ impl App {
             self.invalidate();
             return;
         }
-        if !clear && !export && !add && !convert && setting.is_none() && dialog.is_none() {
+        if !clear
+            && !export
+            && !add
+            && !convert
+            && setting.is_none()
+            && dialog.is_none()
+            && panel.is_none()
+        {
             return;
+        }
+        // An inspector control acts if the pointer is still on it.
+        if let Some(c) = panel {
+            if self.panel.as_ref().and_then(|p| p.control_at(x, y)) == Some(c) {
+                self.panel_act(c, false);
+            }
         }
         if convert && self.convert_rect().is_some_and(|b| b.contains(x, y)) {
             self.convert_selection(false);
@@ -4577,6 +4846,13 @@ impl App {
         } else if self.add_button().is_some_and(|b| b.contains(x, y)) {
             self.add_pressed = true;
             unsafe { SetCapture(self.hwnd) };
+        } else if let Some(p) = self.panel.as_ref().filter(|p| p.rect.contains(x, y)) {
+            // A control in the inspector acts on release, as a button does.
+            // The rest of it is no part of the list: the selection stays.
+            if let Some(c) = p.control_at(x, y) {
+                self.panel_pressed = Some(c);
+                unsafe { SetCapture(self.hwnd) };
+            }
         } else {
             // A click in the list hides the focus ring until a key.
             self.files.pointer_used();
@@ -4703,14 +4979,19 @@ impl App {
         // buttons. On a button, Enter or Space presses it, and Escape or an
         // arrow key goes back to the list.
         if key == VK_TAB && !ctrl && !alt {
+            // The inspector's controls that are drawn, in its reading order.
+            let inspector: Vec<InspectorControl> = self
+                .panel
+                .as_ref()
+                .map(|p| p.controls.iter().map(|(c, _)| *c).collect())
+                .unwrap_or_default();
             self.button_focus = model::tab_stop(
                 self.focused_button(),
                 shift,
                 !self.files.is_empty(),
                 self.export_button().is_some(),
                 self.convert_block().is_none() && !self.files.is_empty(),
-                // The inspector's controls arrive when it is drawn.
-                &[],
+                &inspector,
             );
             self.files.keyboard_used();
             self.invalidate();
@@ -5052,6 +5333,12 @@ impl App {
                 }),
                 _ => None,
             },
+            inspector: self.panel.as_ref().map(|p| a11y::InspectorIn {
+                rect: p.rect,
+                model: &p.model,
+                layout: &p.layout,
+                file: panel_file(&p.model, self.files.entries()),
+            }),
         };
         let mut tree = a11y::tree(&input);
         // Settings controls that can't be used now say so.
@@ -5202,6 +5489,7 @@ impl App {
                     self.follow_link(i, true);
                 }
             }
+            (Id::InspectorControl(c), Verb::Invoke) => self.panel_act(*c, true),
             (Id::WheelItem(spot), Verb::Invoke | Verb::Select) => self.choose(*spot),
             (Id::WheelItem(spot), Verb::Focus) => {
                 if let Some(w) = self.wheel.as_mut().filter(|w| w.is_open()) {
@@ -5357,6 +5645,9 @@ impl App {
     }
 
     fn paint(&mut self) {
+        // A frame can come before the message that changed the selection
+        // is done, such as the first after files arrive at start.
+        self.refresh_panel();
         let (now, animations) = (Instant::now(), motion::animations());
         let settings_layout = self.settings_layout();
         let anims: Vec<RowAnim> = (0..self.files.len()).map(|i| self.row_anim(i)).collect();
@@ -5456,6 +5747,17 @@ impl App {
                 close_hover: ui.hover,
                 close_pressed: ui.pressed,
             }),
+            inspector: self.panel.as_ref().map(|p| InspectorView {
+                rect: p.rect,
+                model: &p.model,
+                layout: &p.layout,
+                controls: &p.controls,
+                glazes: &p.glazes,
+                // Nothing over the list: a wheel or panel takes the pointer.
+                hover: self.panel_hover.filter(|_| self.over().list_live()),
+                pressed: self.panel_pressed,
+                nothing: &p.nothing,
+            }),
             sheet: match (&self.sheet, &sheet_layout, &sheet_lines) {
                 (Some(s), Some(l), Some((title, target, context, result))) => Some(SheetView {
                     layout: l,
@@ -5550,7 +5852,9 @@ impl App {
             return;
         }
         let ask = PreviewAsk {
-            selected: self.files.selected(),
+            // Only while the inspector shows: a narrow window never spends
+            // the worker on pictures at its size.
+            pictured: self.pictured(),
             visible: self.visible_rows(),
             total: self.files.len(),
             px_per_dip: self.px_per_dip(),
@@ -5558,13 +5862,22 @@ impl App {
         if self.previews_asked.as_ref() == Some(&ask) {
             return;
         }
+        // The inspector's file first; with several, the rest of its stack
+        // right after the first card.
+        let mut order = previews::request_order(
+            ask.pictured.first().copied(),
+            ask.visible.clone(),
+            ask.total,
+        );
+        for (k, &i) in ask.pictured.iter().enumerate().skip(1) {
+            order.insert(k, (i, PreviewSize::Hero));
+        }
         // Audio keeps its glaze tile, so its files are never asked for.
-        let keys: Vec<PreviewKey> =
-            previews::request_order(ask.selected, ask.visible.clone(), ask.total)
-                .into_iter()
-                .filter(|&(i, _)| previews::wants_preview(self.row_kind(i)))
-                .filter_map(|(i, size)| self.preview_key(i, size))
-                .collect();
+        let keys: Vec<PreviewKey> = order
+            .into_iter()
+            .filter(|&(i, _)| previews::wants_preview(self.row_kind(i)))
+            .filter_map(|(i, size)| self.preview_key(i, size))
+            .collect();
         // The worker's queue is replaced, so what it dropped will never
         // come: what is pending is exactly what is asked now.
         self.previews.clear_pending();
@@ -5606,10 +5919,11 @@ impl App {
         }
         self.previews.put(key, preview, Instant::now());
         // Only a picture that shows needs a frame: a row in view (the rows
-        // `paint_previews` draws), or the selection's in the inspector.
-        // Those asked ahead of the scroll wait in the cache. A picture in
-        // view fades in, so frames run until it has.
-        if self.visible_rows().contains(&i) || self.files.selected() == Some(i) {
+        // `paint_previews` draws), or one the inspector pictures, the
+        // selected file or the cards of several. Those asked ahead of the
+        // scroll wait in the cache. A picture in view fades in, so frames
+        // run until it has.
+        if self.visible_rows().contains(&i) || self.pictured().contains(&i) {
             self.preview_shown = Some(Instant::now());
             if self.animating() {
                 self.animate();
@@ -5619,9 +5933,10 @@ impl App {
         }
     }
 
-    /// The pictures to paint this frame: each row in view that wants a
-    /// picture (`previews::wants_preview`) and whose picture has arrived,
-    /// with its key's id and how far it has faded in. Looking one up
+    /// The pictures to paint this frame: each row in view, and each the
+    /// inspector pictures at its own size, that wants a picture
+    /// (`previews::wants_preview`) and whose picture has arrived, with its
+    /// key's id and how far it has faded in. Looking one up
     /// counts as using it, which keeps it in the cache. A picture still
     /// fading in, such as one asked for ahead of the scroll that has just
     /// come into view, keeps frames coming until it has.
@@ -5629,11 +5944,14 @@ impl App {
         let mut painted = std::mem::take(&mut self.painted_previews);
         painted.clear();
         let mut fading: Option<Instant> = None;
-        for i in self.visible_rows() {
+        // The rows in view at their size, and the inspector's at its own.
+        let rows = self.visible_rows().map(|i| (i, PreviewSize::Row));
+        let pictured = self.pictured().into_iter().map(|i| (i, PreviewSize::Hero));
+        for (i, size) in rows.chain(pictured) {
             if !previews::wants_preview(self.row_kind(i)) {
                 continue;
             }
-            let Some(key) = self.preview_key(i, PreviewSize::Row) else {
+            let Some(key) = self.preview_key(i, size) else {
                 continue;
             };
             if let Some((Preview::Ready(px), arrived)) = self.previews.get(&key, now) {
@@ -5641,7 +5959,7 @@ impl App {
                 if fade < 1.0 {
                     fading = fading.max(Some(arrived));
                 }
-                painted.push((i, PreviewSize::Row, px.clone(), key.id(), fade));
+                painted.push((i, size, px.clone(), key.id(), fade));
             }
         }
         if let Some(arrived) = fading {
@@ -5651,6 +5969,12 @@ impl App {
             }
         }
         painted
+    }
+
+    /// The rows the inspector pictures at its own size: none while it
+    /// doesn't show.
+    fn pictured(&self) -> Vec<usize> {
+        self.panel.as_ref().map(Panel::pictured).unwrap_or_default()
     }
 
     /// Row `i`'s kind of file, from its type.
@@ -6053,6 +6377,10 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         previews_asked: None,
         preview_shown: None,
         painted_previews: Vec::new(),
+        panel: None,
+        panel_hover: None,
+        panel_pressed: None,
+        result_sizes: RefCell::new(HashMap::new()),
     });
     let app = Box::into_raw(app);
     unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, app as isize) };
@@ -6283,8 +6611,9 @@ fn after(app: &mut App, msg: u32, wparam: WPARAM) {
         app.add(paths, false);
     }
     // Whatever the message moved (the scroll, the size, the selection,
-    // the files, the screen), the previews follow it. Nothing is asked
-    // when none of that changed.
+    // the files, the screen), the inspector and the previews follow it.
+    // Nothing is built or asked when none of that changed.
+    app.refresh_panel();
     app.ask_previews();
     let sets: Vec<(String, bool)> = app
         .status_sets
@@ -6514,6 +6843,8 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             app.add_pressed = false;
             app.convert_hover = false;
             app.convert_pressed = false;
+            app.panel_hover = None;
+            app.panel_pressed = None;
             app.invalidate();
             Some(LRESULT(0))
         }
@@ -6537,7 +6868,10 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             // Unmodified, a link acted on the first click; a second would
             // open it twice.
             let modified = keys & (MK_SHIFT_FLAG | MK_CONTROL_FLAG) != 0;
-            if modified || (!app.open_held_at(x, y) && !app.on_link(x, y)) {
+            // An inspector control acted on the first click; a second
+            // could act again on whatever took its place.
+            let inspector = app.panel.as_ref().is_some_and(|p| p.rect.contains(x, y));
+            if !inspector && (modified || (!app.open_held_at(x, y) && !app.on_link(x, y))) {
                 app.mouse_down(x, y, keys);
             }
             Some(LRESULT(0))

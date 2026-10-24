@@ -10,12 +10,12 @@ use std::time::{Duration, Instant};
 use kiln_core::Preset;
 
 use crate::help::HelpSection;
-use crate::inspector::InspectorControl;
+use crate::inspector::{Inspector, InspectorControl, Kept, Target, NOTHING_TITLE};
 use crate::layout::{
-    self, Control, DialogButton, Rect, SettingsLayout, SettingsRow, SettingsTab, SheetControl,
-    SheetLayout,
+    self, Control, DialogButton, InspectorLayout, Rect, SettingsLayout, SettingsRow, SettingsTab,
+    SheetControl, SheetLayout,
 };
-use crate::model::{Entry, FocusButton, JobState};
+use crate::model::{Entry, FocusButton, JobState, DRAG_HINT};
 use crate::quality::{QualityDefaults, Value};
 use crate::settings::{KeyMap, ThemeChoice};
 use crate::ways_in::EmptyLines;
@@ -42,6 +42,8 @@ pub enum Role {
     ProgressBar,
     /// A panel over a scrim that keeps the keys until it closes.
     Dialog,
+    /// A picture: the inspector's preview of the selected file.
+    Image,
 }
 
 /// Which element a node is. It stays the same while the element does, so
@@ -93,9 +95,15 @@ pub enum Id {
     SheetLine(u8),
     SheetRow(usize),
     SheetControl(SheetControl),
-    /// A control in the inspector. Its tree nodes arrive with the inspector's
-    /// drawing; the keyboard can already be on it.
+    /// The inspector beside the list: the selected file and what can be
+    /// done with it.
+    Inspector,
+    /// A control in the inspector.
     InspectorControl(InspectorControl),
+    /// The inspector's picture of the selected file.
+    InspectorPreview,
+    /// The inspector's lines of text, in reading order.
+    InspectorText(usize),
 }
 
 impl Id {
@@ -570,6 +578,21 @@ pub struct Input<'a> {
     /// line is taken to show.
     pub help_places: &'a [HelpPlace],
     pub sheet: Option<SheetIn<'a>>,
+    /// The inspector, while it shows beside the list.
+    pub inspector: Option<InspectorIn<'a>>,
+}
+
+/// The inspector as the tree needs it.
+pub struct InspectorIn<'a> {
+    /// Where it is: the right of the list's panel.
+    pub rect: Rect,
+    /// What it says.
+    pub model: &'a Inspector,
+    /// Where its parts are. A part that isn't placed isn't in the tree.
+    pub layout: &'a InspectorLayout,
+    /// The selected file's name, which its buttons are named with. Empty
+    /// for several files or none.
+    pub file: &'a str,
 }
 
 /// Where one line of help is, in window coordinates, and whether it is
@@ -594,6 +617,62 @@ pub const LIST_NAME: &str = "Files";
 pub const OPTIONS_NAME: &str = "Options…";
 /// The settings tabs' name.
 pub const TABS_NAME: &str = "Settings pages";
+/// The inspector's name.
+pub const INSPECTOR_NAME: &str = "Selected file";
+
+/// What an inspector control is called: a format as its target says it
+/// ("Convert to WEBP, a small image for the web, about 410 KB"), a kind
+/// by what choosing it does, and the rest with the file they act on:
+/// "Cancel harbour.png", or the result for Save and Show in folder,
+/// "Save harbour.webp".
+pub fn inspector_name(c: InspectorControl, model: &Inspector, file: &str) -> String {
+    use InspectorControl as C;
+    let result = match model {
+        Inspector::Done { result, .. } => result.as_str(),
+        _ => file,
+    };
+    match (c, model) {
+        (C::Target(i), Inspector::Waiting { targets, .. } | Inspector::Several { targets, .. }) => {
+            targets.get(i).map_or_else(String::new, Target::name)
+        }
+        (C::Kind(i), Inspector::Several { offered, .. }) => match offered.get(i) {
+            Some((code, 1)) => format!("Select only the {code} file"),
+            Some((code, n)) => format!("Select only the {n} {code} files"),
+            None => String::new(),
+        },
+        (C::Target(_) | C::Kind(_), _) => String::new(),
+        (C::More, _) => format!("More formats for {file}"),
+        (C::Cancel, _) => format!("Cancel {file}"),
+        (C::Save, _) => format!("Save {result}"),
+        (C::ShowInFolder, _) => format!("Show {result} in folder"),
+        (C::Retry, _) => format!("Retry {file}"),
+        (C::ShowDetails, _) => format!("Show details for {file}"),
+    }
+}
+
+/// The inspector's controls that its layout places, in reading order,
+/// each with where it is: a format or a kind in its target row, More in
+/// its line, and the buttons in their slots left to right. A control
+/// that didn't fit isn't drawn, so it is neither a Tab stop nor in the
+/// tree.
+pub fn inspector_controls(model: &Inspector, l: &InspectorLayout) -> Vec<(InspectorControl, Rect)> {
+    use InspectorControl as C;
+    let mut slots = l.buttons.iter();
+    model
+        .controls()
+        .into_iter()
+        .filter_map(|c| {
+            let at = match c {
+                C::Target(i) | C::Kind(i) => l.targets.get(i).copied(),
+                C::More => l.more,
+                C::Cancel | C::Save | C::ShowInFolder | C::Retry | C::ShowDetails => {
+                    slots.next().copied()
+                }
+            };
+            at.map(|r| (c, r))
+        })
+        .collect()
+}
 
 /// A row's name: the file's name, then its second line as labelled parts
 /// ("File size 3.9 MB. Folder files."), each a sentence. A failed row gives
@@ -790,10 +869,16 @@ fn main(input: &Input) -> Vec<Node> {
         })
         .collect();
     out.push(
-        Node::new(Id::List, Role::List, LIST_NAME, panel)
+        // The list's part of the panel: all of it, or what the inspector
+        // leaves.
+        Node::new(Id::List, Role::List, LIST_NAME, l.list)
             .focusable()
             .with(rows),
     );
+    // The inspector follows the list, as it does on the Tab path.
+    if let Some(ins) = &input.inspector {
+        out.push(inspector(input, ins));
+    }
     let (Some(footer), Some(clear)) = (l.footer, l.clear_button) else {
         return out;
     };
@@ -849,6 +934,94 @@ fn main(input: &Input) -> Vec<Node> {
     }
     out.push(Node::new(Id::Clear, Role::Button, "Clear", clear).focusable());
     out
+}
+
+/// The inspector: its picture of the file, its lines of text and its
+/// controls, in reading order. Only what its layout places is there.
+fn inspector(input: &Input, ins: &InspectorIn) -> Node {
+    let l = ins.layout;
+    let mut children = vec![];
+    // A picture of one file. Nothing's mark and Several's stack picture no
+    // file of their own.
+    let pictured = !matches!(ins.model, Inspector::Nothing | Inspector::Several { .. });
+    if pictured && l.hero.h > 0.0 {
+        children.push(Node::new(
+            Id::InspectorPreview,
+            Role::Image,
+            format!("Preview of {}", ins.file),
+            l.hero,
+        ));
+    }
+    // The body's lines: a 20 DIP line from `y` down, or the rest of it.
+    let body = |top: f32, h: Option<f32>| {
+        let y = l.body.y + top;
+        let h = h.unwrap_or(l.body.bottom() - y).max(0.0);
+        Rect::new(l.body.x, y, l.body.w, h)
+    };
+    let mut lines: Vec<(String, Rect)> = vec![];
+    match ins.model {
+        Inspector::Nothing => {
+            lines.push((NOTHING_TITLE.to_owned(), l.title));
+            lines.push((input.empty.keys.clone(), l.body));
+            lines.push((input.empty.privacy.to_owned(), l.body));
+        }
+        Inspector::Waiting { what, facts, .. } => {
+            lines.push((ins.file.to_owned(), l.title));
+            lines.extend(what.map(|w| (w.to_owned(), l.body)));
+            for ((label, value), r) in facts.iter().zip(&l.facts) {
+                lines.push((format!("{label} {value}"), *r));
+            }
+        }
+        Inspector::Converting { row, percent, left } => {
+            lines.push((ins.file.to_owned(), l.title));
+            lines.extend(percent.map(|p| (format!("{p}%"), body(0.0, Some(40.0)))));
+            // How long is left, or until that's known, what it is doing.
+            let doing = input.rows.get(*row).and_then(|r| match &r.entry.job {
+                JobState::Running { action, .. } => Some(crate::model::doing(action)),
+                _ => None,
+            });
+            lines.extend(left.clone().or(doing).map(|t| (t, body(40.0, Some(20.0)))));
+        }
+        Inspector::Done {
+            result,
+            change,
+            kept,
+            ..
+        } => {
+            lines.push((ins.file.to_owned(), l.title));
+            lines.push((result.clone(), body(0.0, Some(20.0))));
+            let mut top = 20.0;
+            if let Some(c) = change {
+                lines.push((c.clone(), body(top, Some(20.0))));
+                top += 20.0;
+            }
+            if *kept == Kept::Held {
+                lines.push((DRAG_HINT.to_owned(), body(top, None)));
+            }
+        }
+        Inspector::Failed { sentence, .. } => {
+            lines.push((ins.file.to_owned(), l.title));
+            lines.push((sentence.clone(), l.body));
+        }
+        Inspector::Several {
+            kinds, none_shared, ..
+        } => {
+            lines.push((kinds.clone(), l.title));
+            lines.extend(none_shared.as_ref().map(|n| (n.clone(), l.body)));
+        }
+    }
+    // A line its part had no room for isn't drawn, so isn't read either.
+    let placed = lines.into_iter().filter(|(_, r)| r.h > 0.0);
+    children.extend(
+        placed
+            .enumerate()
+            .filter_map(|(k, (name, r))| text(Id::InspectorText(k), &name, r)),
+    );
+    for (c, r) in inspector_controls(ins.model, l) {
+        let name = inspector_name(c, ins.model, ins.file);
+        children.push(Node::new(Id::InspectorControl(c), Role::Button, name, r).focusable());
+    }
+    Node::new(Id::Inspector, Role::Group, INSPECTOR_NAME, ins.rect).with(children)
 }
 
 /// One file's row, with its buttons. Without `links`, it has no link,
@@ -1255,7 +1428,8 @@ fn sheet(s: &SheetIn) -> Node {
 mod tests {
     use super::*;
     use crate::help::help_content;
-    use crate::layout::SettingsShape;
+    use crate::inspector::{Inspector, Kept, Target};
+    use crate::layout::{InspectorShape, SettingsShape};
     use crate::model::Saved;
     use crate::settings::Settings;
     use crate::ways_in::empty_lines;
@@ -1318,6 +1492,7 @@ mod tests {
             help: None,
             help_places: &[],
             sheet: None,
+            inspector: None,
         }
     }
 
@@ -2086,6 +2261,375 @@ mod tests {
         named(d, Role::Text, "1080p, about 1.1 MB");
         named(d, Role::Button, "Cancel");
         named(d, Role::Button, "Convert");
+    }
+
+    /// harbour.png, waiting: WEBP suggested at about 410 KB, then AVIF and
+    /// JPG, and More.
+    fn harbour_waiting() -> Inspector {
+        let target = |ext: &str, estimate, suggested| Target {
+            ext: ext.to_owned(),
+            why: kiln_core::describe_format(ext),
+            estimate,
+            suggested,
+        };
+        Inspector::Waiting {
+            row: 0,
+            what: Some("a lossless image with transparency"),
+            facts: vec![
+                ("Size", "2.4 MB".to_owned()),
+                ("Pixels", "1600 × 1200".to_owned()),
+                ("Folder", "photos".to_owned()),
+            ],
+            targets: vec![
+                target("webp", Some(410_000), true),
+                target("avif", Some(380_000), false),
+                target("jpg", None, false),
+            ],
+            more: true,
+        }
+    }
+
+    /// The inspector at the right of a window `size` holding `rows` files,
+    /// laid out for `shape`.
+    fn inspector_at(
+        size: (f32, f32),
+        rows: usize,
+        shape: InspectorShape,
+    ) -> (Rect, layout::InspectorLayout) {
+        let rect = layout::layout(size.0, size.1, rows).inspector.unwrap();
+        (rect, layout::inspector_layout(&rect, &shape))
+    }
+
+    #[test]
+    fn the_inspector_is_a_pane_after_the_list_with_named_controls() {
+        let lines = empty_lines(&Settings::default());
+        let es = [entry("harbour.png", JobState::Idle)];
+        let model = harbour_waiting();
+        let size = (1300.0, 760.0);
+        let shape = InspectorShape::Waiting {
+            what_h: 18.0,
+            facts: 3,
+            targets: 3,
+            more: true,
+        };
+        let (rect, il) = inspector_at(size, es.len(), shape);
+        let mut i = input(&lines, rows(&es));
+        i.size = size;
+        i.row_links = false;
+        i.inspector = Some(InspectorIn {
+            rect,
+            model: &model,
+            layout: &il,
+            file: "harbour.png",
+        });
+        let t = tree(&i);
+        sound(&t);
+        let pane = t.find(&Id::Inspector).unwrap();
+        assert_eq!(pane.name, "Selected file");
+        assert_eq!((pane.role, pane.rect), (Role::Group, rect));
+        let first = t
+            .find(&Id::InspectorControl(InspectorControl::Target(0)))
+            .unwrap();
+        assert_eq!(first.role, Role::Button);
+        assert_eq!(
+            first.name,
+            "Convert to WEBP, a small image for the web, about 410 KB"
+        );
+        assert!(first.states.focusable && first.patterns().invoke);
+        assert_eq!(first.rect, il.targets[0]);
+        let preview = t.find(&Id::InspectorPreview).unwrap();
+        assert_eq!(preview.name, "Preview of harbour.png");
+        assert_eq!((preview.role, preview.rect), (Role::Image, il.hero));
+        let more = t
+            .find(&Id::InspectorControl(InspectorControl::More))
+            .unwrap();
+        assert_eq!(more.name, "More formats for harbour.png");
+        assert_eq!(more.rect, il.more.unwrap());
+        // The texts are text: the file, what its format is and each fact.
+        named(&t, Role::Text, "harbour.png");
+        named(&t, Role::Text, "a lossless image with transparency");
+        assert_eq!(named(&t, Role::Text, "Size 2.4 MB").rect, il.facts[0]);
+        named(&t, Role::Text, "Folder photos");
+        // Its buttons in reading order, which is the Tab order.
+        use InspectorControl as C;
+        let buttons: Vec<Id> = pane
+            .children
+            .iter()
+            .filter(|c| c.role == Role::Button)
+            .map(|c| c.id.clone())
+            .collect();
+        assert_eq!(
+            buttons,
+            [C::Target(0), C::Target(1), C::Target(2), C::More].map(Id::InspectorControl)
+        );
+        // The pane comes after the list among the root's children, before
+        // the footer.
+        let at = |id: &Id| t.children.iter().position(|c| c.id == *id).unwrap();
+        assert_eq!(at(&Id::Inspector), at(&Id::List) + 1);
+        // Side by side: the list holds only its part of the panel.
+        assert!(t.find(&Id::List).unwrap().rect.right() < rect.x);
+        assert_eq!(t.hit(rect.x + 4.0, rect.bottom() - 4.0).id, Id::Inspector);
+        assert!(at(&Id::Inspector) < at(&Id::ConvertButton));
+        // Tab onto a target: it has the focus.
+        i.focus_button = Some(FocusButton::Inspector(C::Target(1)));
+        let t = tree(&i);
+        assert_eq!(t.focused().unwrap().id, Id::InspectorControl(C::Target(1)));
+    }
+
+    #[test]
+    fn inspector_buttons_are_named_with_their_file() {
+        use InspectorControl as C;
+        let converting = Inspector::Converting {
+            row: 0,
+            percent: Some(38),
+            left: None,
+        };
+        let done = |kept| Inspector::Done {
+            row: 0,
+            result: "voice memo.mp3".to_owned(),
+            change: None,
+            kept,
+        };
+        let done_held = done(Kept::Held);
+        assert_eq!(
+            inspector_name(C::Cancel, &converting, "interview.mp4"),
+            "Cancel interview.mp4"
+        );
+        assert_eq!(
+            inspector_name(C::Save, &done_held, "voice memo.m4a"),
+            "Save voice memo.mp3"
+        );
+        assert_eq!(
+            inspector_name(C::ShowInFolder, &done(Kept::InFolder), "voice memo.m4a"),
+            "Show voice memo.mp3 in folder"
+        );
+        let failed = Inspector::Failed {
+            row: 0,
+            sentence: "The conversion stopped before it finished. Try again.".to_owned(),
+            retry: true,
+            details: true,
+        };
+        assert_eq!(
+            inspector_name(C::Retry, &failed, "harbour.png"),
+            "Retry harbour.png"
+        );
+        assert_eq!(
+            inspector_name(C::ShowDetails, &failed, "harbour.png"),
+            "Show details for harbour.png"
+        );
+        let waiting = harbour_waiting();
+        assert_eq!(
+            inspector_name(C::More, &waiting, "harbour.png"),
+            "More formats for harbour.png"
+        );
+        assert_eq!(
+            inspector_name(C::Target(1), &waiting, "harbour.png"),
+            "Convert to AVIF, a very small, modern image, about 380 KB"
+        );
+        // Several files with no format in common offer each kind.
+        let several = Inspector::Several {
+            rows: vec![0, 1, 2],
+            kinds: "2 videos, 1 document".to_owned(),
+            targets: vec![],
+            none_shared: Some("These files have no format in common.".to_owned()),
+            offered: vec![("MP4".to_owned(), 2), ("DOCX".to_owned(), 1)],
+        };
+        assert_eq!(
+            inspector_name(C::Kind(0), &several, ""),
+            "Select only the 2 MP4 files"
+        );
+        assert_eq!(
+            inspector_name(C::Kind(1), &several, ""),
+            "Select only the DOCX file"
+        );
+    }
+
+    #[test]
+    fn a_narrow_window_has_no_inspector_in_the_tree() {
+        let lines = empty_lines(&Settings::default());
+        let es = [entry("harbour.png", JobState::Idle)];
+        let t = tree(&input(&lines, rows(&es)));
+        assert!(t.find(&Id::Inspector).is_none());
+        assert!(t.find(&Id::InspectorPreview).is_none());
+        let mut controls = 0;
+        t.walk(&mut |n| controls += usize::from(matches!(n.id, Id::InspectorControl(_))));
+        assert_eq!(controls, 0);
+    }
+
+    #[test]
+    fn only_the_controls_the_inspector_places_are_there() {
+        use InspectorControl as C;
+        // A short inspector cuts targets from the bottom, and More with
+        // them: what isn't drawn is neither a Tab stop nor a node.
+        let model = harbour_waiting();
+        let rect = Rect::new(900.0, 72.0, 300.0, 220.0);
+        let il = layout::inspector_layout(
+            &rect,
+            &InspectorShape::Waiting {
+                what_h: 40.0,
+                facts: 3,
+                targets: 3,
+                more: true,
+            },
+        );
+        assert!(il.targets.len() < 3 && il.more.is_none());
+        let placed = inspector_controls(&model, &il);
+        assert_eq!(placed.len(), il.targets.len());
+        for (k, (c, r)) in placed.iter().enumerate() {
+            assert_eq!((*c, *r), (C::Target(k), il.targets[k]));
+        }
+        // Buttons take their slots in order.
+        let failed = Inspector::Failed {
+            row: 0,
+            sentence: "x".to_owned(),
+            retry: true,
+            details: true,
+        };
+        let fl = layout::inspector_layout(
+            &Rect::new(0.0, 0.0, 300.0, 600.0),
+            &InspectorShape::Failed {
+                sentence_h: 20.0,
+                buttons: 2,
+            },
+        );
+        assert_eq!(
+            inspector_controls(&failed, &fl),
+            [(C::Retry, fl.buttons[0]), (C::ShowDetails, fl.buttons[1])]
+        );
+        // With no picture shown, the tree has no preview either.
+        let lines = empty_lines(&Settings::default());
+        let es = [entry("harbour.png", JobState::Idle)];
+        let mut i = input(&lines, rows(&es));
+        i.inspector = Some(InspectorIn {
+            rect,
+            model: &model,
+            layout: &il,
+            file: "harbour.png",
+        });
+        let t = tree(&i);
+        sound(&t);
+        assert_eq!(il.hero.h, 0.0);
+        assert!(t.find(&Id::InspectorPreview).is_none());
+        assert!(t.find(&Id::InspectorControl(C::More)).is_none());
+    }
+
+    #[test]
+    fn each_state_of_the_inspector_reads_its_words() {
+        use InspectorControl as C;
+        let lines = empty_lines(&Settings::default());
+        let es = [entry("harbour.png", JobState::Idle)];
+        let size = (1300.0, 760.0);
+        let read = |model: &Inspector, shape: InspectorShape, file: &str| {
+            let (rect, il) = inspector_at(size, es.len(), shape);
+            let mut i = input(&lines, rows(&es));
+            i.size = size;
+            i.inspector = Some(InspectorIn {
+                rect,
+                model,
+                layout: &il,
+                file,
+            });
+            let t = tree(&i);
+            sound(&t);
+            t.find(&Id::Inspector).unwrap().clone()
+        };
+        let texts = |pane: &Node| -> Vec<String> {
+            pane.children
+                .iter()
+                .filter(|c| c.role == Role::Text)
+                .map(|c| c.name.clone())
+                .collect()
+        };
+        // Nothing selected: the title, the key hint and the privacy line.
+        // The mark is no picture of anything.
+        let nothing = read(
+            &Inspector::Nothing,
+            InspectorShape::Nothing {
+                title_h: 40.0,
+                body_h: 70.0,
+            },
+            "",
+        );
+        assert_eq!(
+            texts(&nothing),
+            [
+                crate::inspector::NOTHING_TITLE,
+                lines.keys.as_str(),
+                lines.privacy
+            ]
+        );
+        assert!(nothing
+            .children
+            .iter()
+            .all(|c| c.id != Id::InspectorPreview));
+        // Converting: how far, how long, and Cancel.
+        let converting = Inspector::Converting {
+            row: 0,
+            percent: Some(38),
+            left: Some("about 2 min".to_owned()),
+        };
+        let pane = read(
+            &converting,
+            InspectorShape::Converting { buttons: 1 },
+            "harbour.png",
+        );
+        assert_eq!(texts(&pane), ["harbour.png", "38%", "about 2 min"]);
+        named(&pane, Role::Button, "Cancel harbour.png");
+        // Done: the result, the change, the drag-out hint and Save.
+        let done = Inspector::Done {
+            row: 0,
+            result: "harbour.webp".to_owned(),
+            change: Some("2.4 MB → 410 KB, 83% smaller".to_owned()),
+            kept: Kept::Held,
+        };
+        let pane = read(
+            &done,
+            InspectorShape::Done {
+                change: true,
+                drag_h: 34.0,
+                buttons: 1,
+            },
+            "harbour.png",
+        );
+        assert_eq!(
+            texts(&pane),
+            [
+                "harbour.png",
+                "harbour.webp",
+                "2.4 MB → 410 KB, 83% smaller",
+                crate::model::DRAG_HINT
+            ]
+        );
+        assert_eq!(
+            named(&pane, Role::Button, "Save harbour.webp").id,
+            Id::InspectorControl(C::Save)
+        );
+        // Several sharing nothing: the kinds, why, and each kind to pick.
+        let several = Inspector::Several {
+            rows: vec![0, 1, 2],
+            kinds: "2 videos, 1 document".to_owned(),
+            targets: vec![],
+            none_shared: Some("These files have no format in common.".to_owned()),
+            offered: vec![("MP4".to_owned(), 2), ("DOCX".to_owned(), 1)],
+        };
+        let pane = read(
+            &several,
+            InspectorShape::Several {
+                targets: 2,
+                none_h: 20.0,
+            },
+            "",
+        );
+        assert_eq!(
+            texts(&pane),
+            [
+                "2 videos, 1 document",
+                "These files have no format in common."
+            ]
+        );
+        named(&pane, Role::Button, "Select only the 2 MP4 files");
+        named(&pane, Role::Button, "Select only the DOCX file");
+        assert!(pane.children.iter().all(|c| c.id != Id::InspectorPreview));
     }
 
     #[test]

@@ -380,6 +380,7 @@ fn control_type(role: Role) -> UIA_CONTROLTYPE_ID {
         Role::ProgressBar => UIA_ProgressBarControlTypeId,
         // A pane that says it's a dialog: there's no dialog control type.
         Role::Dialog => UIA_PaneControlTypeId,
+        Role::Image => UIA_ImageControlTypeId,
     }
 }
 

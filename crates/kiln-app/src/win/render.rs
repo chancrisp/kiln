@@ -20,9 +20,10 @@ use kiln_core::{Kind, Preset};
 
 use crate::help::{self, HelpSection, Placed};
 use crate::icons::{self, Cmd, Icon, Style};
+use crate::inspector::{self as insp, Inspector, InspectorControl, Kept};
 use crate::layout::{
-    self, Control, DialogButton, Layout, Rect, SettingsLayout, SettingsTab, SheetControl,
-    SheetLayout, CHIP_HEIGHT, CHIP_MIN_WIDTH, PROGRESS_HEIGHT, ROW_HEIGHT,
+    self, Control, DialogButton, InspectorLayout, Layout, Rect, SettingsLayout, SettingsTab,
+    SheetControl, SheetLayout, Wrapped, CHIP_HEIGHT, CHIP_MIN_WIDTH, PROGRESS_HEIGHT, ROW_HEIGHT,
 };
 use crate::model::{self, Entry, JobState, Tone};
 use crate::previews::{cover_source, Pixels, PreviewSize};
@@ -94,6 +95,65 @@ const GLAZE_TILES: [(Glaze, Kind, &str); 4] = [
     (Glaze::Audio, Kind::Audio, "Audio"),
     (Glaze::Document, Kind::Document, "Documents"),
 ];
+
+/// The inspector's picture, with corners this round.
+const HERO_RADIUS: f32 = 8.0;
+/// The picture's glaze tile draws its kind's icon at this scale: 48 DIPs.
+const HERO_ICON_SCALE: f32 = 2.0;
+/// Nothing's mark, in the picture's place: this many DIPs across.
+const NOTHING_MARK: f32 = 48.0;
+/// The selection's glaze washes the inspector's top at this opacity, and
+/// fades out this far down it.
+const INSPECTOR_WASH: f32 = 0.07;
+const INSPECTOR_WASH_REACH: f32 = 0.4;
+/// The suggested format's celadon edge and wash.
+const SUGGESTED_EDGE: f32 = 0.55;
+const SUGGESTED_WASH: f32 = 0.09;
+/// A format's row: its chip starts this far in, leaving the suggestion's
+/// dot room before it, and its estimate ends this far from its right.
+const TARGET_INSET: f32 = 16.0;
+const TARGET_END: f32 = 10.0;
+/// A fact's value starts past the widest of its labels.
+const FACT_LABEL: f32 = 72.0;
+/// A converting file's heat over its picture, at its strongest, and how
+/// much the breath takes from it: 1 down to 0.65.
+const HERO_HEAT: f32 = 0.5;
+const HEAT_BREATH: f32 = 0.35;
+/// Several files' cards: each this far right and down from the one
+/// behind it.
+const CARD_STEP: (f32, f32) = (12.0, 8.0);
+/// A finished file's check on its picture: the disc's radius and how far
+/// it sits in from the picture's corner.
+const CHECK_R: f32 = 14.0;
+const CHECK_INSET: f32 = 10.0;
+
+/// The inspector this frame.
+pub struct InspectorView<'a> {
+    /// Where it is: the right of the list's panel.
+    pub rect: Rect,
+    pub model: &'a Inspector,
+    pub layout: &'a InspectorLayout,
+    /// Its controls that are placed, in reading order, with where each is.
+    pub controls: &'a [(InspectorControl, Rect)],
+    /// Each format's glaze, or each kind's, in the order its rows show
+    /// them.
+    pub glazes: &'a [Glaze],
+    pub hover: Option<InspectorControl>,
+    pub pressed: Option<InspectorControl>,
+    /// Nothing's body: the key hint, then the privacy line.
+    pub nothing: &'a str,
+}
+
+/// A row the inspector offers: a format, or a kind of file to narrow the
+/// selection to.
+struct TargetRow<'a> {
+    code: &'a str,
+    glaze: Glaze,
+    /// What it is for, or how many files a kind holds.
+    why: Option<&'a str>,
+    estimate: Option<&'a str>,
+    suggested: bool,
+}
 
 /// The options sheet this frame.
 pub struct SheetView<'a> {
@@ -207,6 +267,8 @@ pub struct View<'a> {
     pub sheet: Option<SheetView<'a>>,
     /// The help overlay, while it's open.
     pub help: Option<HelpView<'a>>,
+    /// The inspector, while it shows beside the list.
+    pub inspector: Option<InspectorView<'a>>,
 }
 
 /// The help overlay this frame.
@@ -276,7 +338,22 @@ pub struct Renderer {
     frame: u64,
     /// The narrowest chip (`chip_floor`), measured once.
     chip_floor: f32,
+    /// The inspector's wrapped texts' heights, by text, how it wraps and
+    /// width, so the same words are measured once. DirectWrite measures in
+    /// DIPs, which the Text size's zoom doesn't change.
+    measured: RefCell<HashMap<(String, Wrapped, u32), f32>>,
+    /// Numbers set with figures of one width, laid out once for each text
+    /// and box, with their widths.
+    tabulars: Tabulars,
 }
+
+/// Laid-out numbers by their text, whether they are the large figure, and
+/// their box's width and height.
+type Tabulars = RefCell<HashMap<(String, bool, u32, u32), (IDWriteTextLayout, f32)>>;
+
+/// The most measured or laid-out texts kept before starting over: far
+/// more than one frame uses.
+const TEXT_CACHE: usize = 64;
 
 /// Device-dependent resources, rebuilt if the device is lost.
 struct Target {
@@ -448,8 +525,25 @@ fn chip_floor(text: &Text) -> f32 {
 /// How wide a row's chip is: its code with padding, and at least `floor`
 /// (`chip_floor`). A longer code widens only its own chip.
 fn chip_width(text: &Text, e: &Entry, floor: f32) -> Result<f32> {
-    let (_, text_w) = text.code_layout(chip_code(e), 120.0, CHIP_HEIGHT)?;
+    code_chip_width(text, chip_code(e), floor)
+}
+
+/// How wide the chip for `code` is, as `chip_width` has it.
+fn code_chip_width(text: &Text, code: &str, floor: f32) -> Result<f32> {
+    let (_, text_w) = text.code_layout(code, 120.0, CHIP_HEIGHT)?;
     Ok((text_w + 16.0).ceil().max(floor))
+}
+
+/// The row whose file the inspector shows, or the first of several.
+fn first_row(model: &Inspector) -> Option<usize> {
+    match model {
+        Inspector::Nothing => None,
+        Inspector::Waiting { row, .. }
+        | Inspector::Converting { row, .. }
+        | Inspector::Done { row, .. }
+        | Inspector::Failed { row, .. } => Some(*row),
+        Inspector::Several { rows, .. } => rows.first().copied(),
+    }
 }
 
 /// Where a row's name and second line start: right of its chip, which
@@ -542,7 +636,29 @@ impl Renderer {
             shadow: depth::shadow_layers(),
             frame: 0,
             chip_floor,
+            measured: RefCell::new(HashMap::new()),
+            tabulars: RefCell::new(HashMap::new()),
         })
+    }
+
+    /// How tall an inspector text runs at `width`, wrapped as `how` says
+    /// and cut short at its most lines. The same words are measured once.
+    pub fn inspector_text_height(&self, s: &str, how: Wrapped, width: f32) -> f32 {
+        let key = (s.to_owned(), how, width.to_bits());
+        if let Some(h) = self.measured.borrow().get(&key) {
+            return *h;
+        }
+        let (format, lines) = match how {
+            Wrapped::Title(n) => (&self.text.inspector_title_block, n),
+            Wrapped::Body(n) => (&self.text.caption_block, n),
+        };
+        let h = self.text.lines_height(s, format, width, lines);
+        let mut measured = self.measured.borrow_mut();
+        if measured.len() >= TEXT_CACHE {
+            measured.clear();
+        }
+        measured.insert(key, h);
+        h
     }
 
     /// How tall the details dialog's text runs when wrapped to `width`.
@@ -746,6 +862,7 @@ impl Renderer {
             pictures: &t.pictures,
             frame: self.frame,
             chip_floor: self.chip_floor,
+            tabulars: &self.tabulars,
         };
         let mut result = d.header(&l, v);
         if result.is_ok() {
@@ -815,6 +932,7 @@ struct Draw<'a> {
     /// This frame's number, stamped on each picture drawn.
     frame: u64,
     chip_floor: f32,
+    tabulars: &'a Tabulars,
 }
 
 impl Draw<'_> {
@@ -1108,8 +1226,9 @@ impl Draw<'_> {
     }
 
     /// A file's preview in `dst`, with corners of `radius`: its glaze tile,
-    /// and over it, once Windows has made one, its picture cropped to
-    /// fill, fading in as the tile's icon fades out.
+    /// with its kind's icon at `icon` (scale and line), and over it, once
+    /// Windows has made one, its picture cropped to fill, fading in as the
+    /// tile's icon fades out.
     #[allow(clippy::too_many_arguments)]
     fn preview(
         &self,
@@ -1118,6 +1237,7 @@ impl Draw<'_> {
         picture: Option<(Arc<Pixels>, u64, f32)>,
         g: Glaze,
         kind: Option<Kind>,
+        icon: (f32, f32),
         a: f32,
         p: &Palette,
     ) {
@@ -1126,7 +1246,6 @@ impl Draw<'_> {
             Some((brush, px, fade.clamp(0.0, 1.0)))
         });
         let fade = shown.as_ref().map_or(0.0, |(_, _, f)| *f);
-        let icon = (ROW_ICON_SCALE, shape::ICON_STROKE * ROW_ICON_SCALE);
         self.glaze_tile(dst, radius, g, kind, icon, 1.0 - fade, a, p);
         let Some((brush, px, fade)) = shown else {
             return;
@@ -1261,15 +1380,7 @@ impl Draw<'_> {
             p.accent_strong
         };
         let k = e.mark.w / shape::ICON_GRID;
-        self.icon_lined(
-            "mark",
-            e.mark.x,
-            e.mark.y,
-            k,
-            MARK_LINE,
-            mark,
-            1.0,
-        );
+        self.icon_lined("mark", e.mark.x, e.mark.y, k, MARK_LINE, mark, 1.0);
         self.label(
             lines.headline,
             &self.text.lead_center,
@@ -1351,6 +1462,10 @@ impl Draw<'_> {
         // PushLayer took its own reference; release ours.
         drop(std::mem::ManuallyDrop::into_inner(params.geometricMask));
         result?;
+        // The inspector beside the rows, under the panel's edge.
+        if let Some(iv) = &v.inspector {
+            self.inspector(l, iv, v)?;
+        }
 
         if v.drag > 0.0 && !p.high_contrast {
             self.fill(
@@ -1433,7 +1548,17 @@ impl Draw<'_> {
         let picture = (v.preview)(i, PreviewSize::Row);
         let kind = (v.kind)(i);
         let preview = layout::row_preview(r);
-        self.preview(&preview, layout::PREVIEW_RADIUS, picture, glaze, kind, a, p);
+        let icon = (ROW_ICON_SCALE, shape::ICON_STROKE * ROW_ICON_SCALE);
+        self.preview(
+            &preview,
+            layout::PREVIEW_RADIUS,
+            picture,
+            glaze,
+            kind,
+            icon,
+            a,
+            p,
+        );
         let chip_y = r.y + (ROW_HEIGHT - CHIP_HEIGHT) / 2.0;
         let chip_w = chip_width(self.text, e, self.chip_floor)?;
         let chip = Rect::new(layout::row_text_left(r), chip_y, chip_w, CHIP_HEIGHT);
@@ -1632,6 +1757,484 @@ impl Draw<'_> {
                 }
             }
         }
+    }
+
+    /// Draw `f` clipped to `r` with corners of `radius`.
+    fn clipped<T>(&self, r: &Rect, radius: f32, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        let mask = unsafe {
+            self.factory
+                .CreateRoundedRectangleGeometry(&rounded(r, radius))?
+        };
+        let layer = unsafe { self.rt.CreateLayer(None)? };
+        let params = D2D1_LAYER_PARAMETERS {
+            contentBounds: rectf(r),
+            geometricMask: std::mem::ManuallyDrop::new(Some(mask.into())),
+            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            maskTransform: Matrix3x2::identity(),
+            opacity: 1.0,
+            opacityBrush: std::mem::ManuallyDrop::new(None),
+            layerOptions: D2D1_LAYER_OPTIONS_NONE,
+        };
+        unsafe { self.rt.PushLayer(&params, &layer) };
+        let result = f();
+        unsafe { self.rt.PopLayer() };
+        // PushLayer took its own reference; release ours.
+        drop(std::mem::ManuallyDrop::into_inner(params.geometricMask));
+        result
+    }
+
+    /// A number in `r` with figures of one width: a fact's value or an
+    /// estimate against the box's right, or (`figure`) a converting file's
+    /// percentage. Each text is laid out once for its box. Returns its
+    /// width.
+    fn tabular(&self, s: &str, figure: bool, r: &Rect, c: Rgb) -> Result<f32> {
+        let key = (s.to_owned(), figure, r.w.to_bits(), r.h.to_bits());
+        let cached = self.tabulars.borrow().get(&key).cloned();
+        let (layout, w) = match cached {
+            Some(laid) => laid,
+            None => {
+                let format = if figure {
+                    &self.text.figure
+                } else {
+                    &self.text.caption_right
+                };
+                let layout = self.text.tabular_layout(s, format, r.w, r.h)?;
+                let mut m = DWRITE_TEXT_METRICS::default();
+                unsafe { layout.GetMetrics(&mut m)? };
+                let laid = (layout, m.widthIncludingTrailingWhitespace);
+                let mut all = self.tabulars.borrow_mut();
+                if all.len() >= TEXT_CACHE {
+                    all.clear();
+                }
+                all.insert(key, laid.clone());
+                laid
+            }
+        };
+        unsafe {
+            self.rt.DrawTextLayout(
+                pt(r.x, r.y),
+                &layout,
+                self.paint(c, 1.0),
+                D2D1_DRAW_TEXT_OPTIONS_CLIP,
+            );
+        }
+        Ok(w)
+    }
+
+    /// The inspector beside the list: the rule before it, then, inside the
+    /// panel's rounded corner, the selection's glaze washing its top and
+    /// what it says for the selection, with its controls.
+    fn inspector(&self, l: &Layout, iv: &InspectorView, v: &View) -> Result<()> {
+        let p = v.palette;
+        let r = iv.rect;
+        let rule = Rect::new(
+            r.x - layout::INSPECTOR_RULE,
+            l.panel.y + shape::BORDER,
+            layout::INSPECTOR_RULE,
+            (l.panel.h - 2.0 * shape::BORDER).max(0.0),
+        );
+        self.fill(&rule, 0.0, p.edge, 1.0);
+        self.clipped(&l.panel, shape::RADIUS_PANEL, || {
+            // A contrast theme has no washes.
+            if let (Some(i), false) = (first_row(iv.model), p.high_contrast) {
+                let reach = r.h * INSPECTOR_WASH_REACH;
+                let ramp = self.glaze_ramp((v.glaze)(i));
+                unsafe {
+                    ramp.SetStartPoint(pt(r.x, r.y + reach));
+                    ramp.SetEndPoint(pt(r.x, r.y));
+                    ramp.SetOpacity(INSPECTOR_WASH);
+                    self.rt
+                        .FillRectangle(&rectf(&Rect::new(r.x, r.y, r.w, reach)), ramp);
+                }
+            }
+            self.inspector_says(iv, v)?;
+            self.inspector_controls(iv, p)
+        })
+    }
+
+    /// What the inspector says for the selection: its picture, title,
+    /// body, facts and heading.
+    fn inspector_says(&self, iv: &InspectorView, v: &View) -> Result<()> {
+        let p = v.palette;
+        let l = iv.layout;
+        let muted = p.text_muted;
+        let heading = |text: &str| {
+            if let Some(h) = l.label {
+                self.label(text, &self.text.small, &h, muted, 1.0);
+            }
+        };
+        // The body's 20 DIP lines, from the top.
+        let line = |k: f32| Rect::new(l.body.x, l.body.y + 20.0 * k, l.body.w, 20.0);
+        match iv.model {
+            Inspector::Nothing => {
+                if l.hero.h > 0.0 {
+                    let (h, k) = (&l.hero, NOTHING_MARK / shape::ICON_GRID);
+                    let x = h.x + (h.w - NOTHING_MARK) / 2.0;
+                    let y = h.y + (h.h - NOTHING_MARK) / 2.0;
+                    let c = if p.high_contrast {
+                        p.text_muted
+                    } else {
+                        p.accent_strong
+                    };
+                    self.icon_lined("mark", x, y, k, MARK_LINE, c, 1.0);
+                }
+                let title = &self.text.inspector_title_block;
+                self.label(insp::NOTHING_TITLE, title, &l.title, p.text, 1.0);
+                let body = &self.text.caption_block_center;
+                self.label(iv.nothing, body, &l.body, muted, 1.0);
+            }
+            Inspector::Waiting {
+                row, what, facts, ..
+            } => {
+                self.one_file(*row, l, v)?;
+                if let Some(what) = what {
+                    self.label(what, &self.text.caption_block, &l.body, muted, 1.0);
+                }
+                for ((label, value), f) in facts.iter().zip(&l.facts) {
+                    self.label(label, &self.text.caption, f, muted, 1.0);
+                    let at = Rect::new(f.x + FACT_LABEL, f.y, (f.w - FACT_LABEL).max(0.0), f.h);
+                    self.tabular(value, false, &at, p.text)?;
+                }
+                heading(insp::TURN_INTO);
+            }
+            Inspector::Converting { row, percent, left } => {
+                self.one_file(*row, l, v)?;
+                if l.hero.h > 0.0 {
+                    let fraction = percent.map(|pc| pc as f32 / 100.0);
+                    self.hero_heat(&l.hero, fraction, (v.glaze)(*row), v.heat, p)?;
+                }
+                if l.body.h > 0.0 {
+                    if let Some(pc) = percent {
+                        let figure = Rect::new(l.body.x, l.body.y, l.body.w, 40.0);
+                        self.tabular(&format!("{pc}%"), true, &figure, p.text)?;
+                    }
+                    // How long is left or, until that's known, what it does.
+                    let doing = v.entries.get(*row).and_then(|e| match &e.job {
+                        JobState::Running { action, .. } => Some(model::doing(action)),
+                        _ => None,
+                    });
+                    if let Some(time) = left.clone().or(doing) {
+                        let at = Rect::new(l.body.x, l.body.y + 40.0, l.body.w, 20.0);
+                        self.label(&time, &self.text.caption, &at, muted, 1.0);
+                    }
+                }
+            }
+            Inspector::Done {
+                row,
+                result,
+                change,
+                kept,
+            } => {
+                self.one_file(*row, l, v)?;
+                if l.hero.h > 0.0 {
+                    // The check fades in as the result settles.
+                    let settle = (v.row_anim)(*row).settle;
+                    self.check(&l.hero, settle, p);
+                }
+                if l.body.h > 0.0 {
+                    self.label(result, &self.text.body, &line(0.0), p.text, 1.0);
+                    let mut k = 1.0;
+                    if let Some(change) = change {
+                        self.label(change, &self.text.caption, &line(k), muted, 1.0);
+                        k += 1.0;
+                    }
+                    if *kept == Kept::Held {
+                        let y = l.body.y + 20.0 * k;
+                        let at = Rect::new(l.body.x, y, l.body.w, (l.body.bottom() - y).max(0.0));
+                        let hint = model::DRAG_HINT;
+                        self.label(hint, &self.text.caption_block, &at, muted, 1.0);
+                    }
+                }
+            }
+            Inspector::Failed { row, sentence, .. } => {
+                self.one_file(*row, l, v)?;
+                // In the tone the row says it in.
+                let c = match v.entries.get(*row).map(|e| e.line().1) {
+                    Some(Tone::Crack) => p.crack,
+                    Some(Tone::Result) => p.text,
+                    _ => muted,
+                };
+                self.label(sentence, &self.text.caption_block, &l.body, c, 1.0);
+            }
+            Inspector::Several {
+                rows,
+                kinds,
+                targets,
+                none_shared,
+                ..
+            } => {
+                self.stack(&l.hero, rows, v);
+                self.label(kinds, &self.text.inspector_title, &l.title, p.text, 1.0);
+                if let Some(none) = none_shared {
+                    self.label(none, &self.text.caption_block, &l.body, muted, 1.0);
+                }
+                heading(if targets.is_empty() {
+                    insp::ONE_KIND
+                } else {
+                    insp::TURN_INTO
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// One file's picture and its title: the chip and the file's name.
+    fn one_file(&self, i: usize, l: &InspectorLayout, v: &View) -> Result<()> {
+        let p = v.palette;
+        let Some(e) = v.entries.get(i) else {
+            return Ok(());
+        };
+        let g = (v.glaze)(i);
+        if l.hero.h > 0.0 {
+            let picture = (v.preview)(i, PreviewSize::Hero);
+            let icon = (HERO_ICON_SCALE, MARK_LINE);
+            self.preview(&l.hero, HERO_RADIUS, picture, g, (v.kind)(i), icon, 1.0, p);
+        }
+        let t = l.title;
+        if t.h > 0.0 {
+            let chip_w = chip_width(self.text, e, self.chip_floor)?;
+            let chip = Rect::new(t.x, t.y + (t.h - CHIP_HEIGHT) / 2.0, chip_w, CHIP_HEIGHT);
+            self.chip(chip_code(e), &chip, g, 1.0, p)?;
+            let x = chip.right() + 8.0;
+            let name = Rect::new(x, t.y, (t.right() - x).max(0.0), t.h);
+            self.label(&e.name, &self.text.inspector_title, &name, p.text, 1.0);
+        }
+        Ok(())
+    }
+
+    /// Several files' pictures, stacked in the picture's place: up to
+    /// three cards, each a step right and down from the one behind, the
+    /// first selected file's at the front.
+    fn stack(&self, hero: &Rect, rows: &[usize], v: &View) {
+        let p = v.palette;
+        let n = rows.len().min(3);
+        if hero.h <= 0.0 || n == 0 {
+            return;
+        }
+        let (dx, dy) = CARD_STEP;
+        let (w, h) = (hero.w - 2.0 * dx, hero.h - 2.0 * dy);
+        let steps = (n - 1) as f32;
+        let x0 = hero.x + (hero.w - w - dx * steps) / 2.0;
+        let y0 = hero.y + (hero.h - h - dy * steps) / 2.0;
+        let icon = (HERO_ICON_SCALE, MARK_LINE);
+        for back in 0..n {
+            let i = rows[n - 1 - back];
+            let card = Rect::new(x0 + dx * back as f32, y0 + dy * back as f32, w, h);
+            // A line of the surface parts each card from the one behind.
+            let around = Rect::new(card.x - 1.0, card.y - 1.0, card.w + 2.0, card.h + 2.0);
+            self.border(&around, HERO_RADIUS + 1.0, p.surface, 1.0, shape::BORDER);
+            let picture = (v.preview)(i, PreviewSize::Hero);
+            let (g, kind) = ((v.glaze)(i), (v.kind)(i));
+            self.preview(&card, HERO_RADIUS, picture, g, kind, icon, 1.0, p);
+            self.border(&card, HERO_RADIUS, p.edge, 1.0, shape::BORDER);
+        }
+    }
+
+    /// A converting file's heat over its picture: its glaze rising from
+    /// the bottom to `fraction` of the way up, with a brighter edge where
+    /// it has got to, breathing with `heat`. Without a fraction the whole
+    /// picture holds a heat that breathes. A contrast theme has no washes:
+    /// the level is a line in its highlight colour.
+    fn hero_heat(
+        &self,
+        hero: &Rect,
+        fraction: Option<f32>,
+        g: Glaze,
+        heat: f32,
+        p: &Palette,
+    ) -> Result<()> {
+        let f = fraction.unwrap_or(1.0).clamp(0.0, 1.0);
+        if f <= 0.0 {
+            return Ok(());
+        }
+        let top = hero.bottom() - hero.h * f;
+        if p.high_contrast {
+            if fraction.is_some() {
+                let level = Rect::new(hero.x, (top - 1.0).max(hero.y), hero.w, 2.0);
+                self.fill(&level, 0.0, p.accent_strong, 1.0);
+            }
+            return Ok(());
+        }
+        let breath = 1.0 - HEAT_BREATH * heat.clamp(0.0, 1.0);
+        self.clipped(hero, HERO_RADIUS, || {
+            let ramp = self.glaze_ramp(g);
+            unsafe {
+                ramp.SetStartPoint(pt(hero.x, top));
+                ramp.SetEndPoint(pt(hero.x, hero.bottom()));
+                ramp.SetOpacity(HERO_HEAT * breath);
+                let filled = Rect::new(hero.x, top, hero.w, hero.bottom() - top);
+                self.rt.FillRectangle(&rectf(&filled), ramp);
+            }
+            if fraction.is_some() && f < 1.0 {
+                let edge = Rect::new(hero.x, top - 1.0, hero.w, 2.0);
+                self.fill(&edge, 0.0, p.glaze(g), breath);
+            }
+            Ok(())
+        })
+    }
+
+    /// A finished file's check, a celadon disc at the picture's corner, at
+    /// `a` as it fades in.
+    fn check(&self, hero: &Rect, a: f32, p: &Palette) {
+        if a <= 0.0 {
+            return;
+        }
+        let cx = hero.right() - CHECK_INSET - CHECK_R;
+        let cy = hero.bottom() - CHECK_INSET - CHECK_R;
+        let disc = D2D1_ELLIPSE {
+            point: pt(cx, cy),
+            radiusX: CHECK_R,
+            radiusY: CHECK_R,
+        };
+        let tick = [
+            (cx - 6.0, cy + 0.5),
+            (cx - 2.0, cy + 4.5),
+            (cx + 6.0, cy - 4.5),
+        ];
+        unsafe {
+            self.rt.FillEllipse(&disc, self.paint(p.accent, a));
+            for w in tick.windows(2) {
+                self.rt.DrawLine(
+                    pt(w[0].0, w[0].1),
+                    pt(w[1].0, w[1].1),
+                    self.paint(p.on_accent, a),
+                    2.0,
+                    self.round,
+                );
+            }
+        }
+    }
+
+    /// The inspector's controls where its layout placed them: each format
+    /// or kind as a row, More as a link, and the rest as buttons.
+    fn inspector_controls(&self, iv: &InspectorView, p: &Palette) -> Result<()> {
+        use InspectorControl as C;
+        let targets = match iv.model {
+            Inspector::Waiting { targets, .. } | Inspector::Several { targets, .. } => &targets[..],
+            _ => &[],
+        };
+        let offered = match iv.model {
+            Inspector::Several { offered, .. } => &offered[..],
+            _ => &[],
+        };
+        for &(c, b) in iv.controls {
+            let (hot, pressed) = (iv.hover == Some(c), iv.pressed == Some(c));
+            match c {
+                C::Target(k) => {
+                    let Some(t) = targets.get(k) else {
+                        continue;
+                    };
+                    let g = iv.glazes.get(k).copied().unwrap_or(Glaze::Other);
+                    let estimate = t.estimate_label();
+                    let row = TargetRow {
+                        code: &t.ext,
+                        glaze: g,
+                        why: t.why,
+                        estimate: estimate.as_deref(),
+                        suggested: t.suggested,
+                    };
+                    self.target_row(&b, &row, hot, pressed, p)?;
+                }
+                C::Kind(k) => {
+                    let Some((code, n)) = offered.get(k) else {
+                        continue;
+                    };
+                    let g = iv.glazes.get(k).copied().unwrap_or(Glaze::Other);
+                    let files = insp::files_count(*n);
+                    let row = TargetRow {
+                        code,
+                        glaze: g,
+                        why: Some(&files),
+                        estimate: None,
+                        suggested: false,
+                    };
+                    self.target_row(&b, &row, hot, pressed, p)?;
+                }
+                C::More => self.more_link(&b, hot, p),
+                _ => {
+                    if let Some(label) = c.label() {
+                        self.button(label, &b, hot, pressed, p);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// A format or a kind the inspector offers, as a 6 DIP rounded row:
+    /// its chip, what it is for (muted) and its estimate at the right. The
+    /// suggestion has a celadon edge and wash, and its dot before the chip.
+    fn target_row(
+        &self,
+        b: &Rect,
+        row: &TargetRow,
+        hot: bool,
+        pressed: bool,
+        p: &Palette,
+    ) -> Result<()> {
+        let radius = shape::RADIUS_CONTROL;
+        if hot && !p.high_contrast {
+            self.fill(b, radius, p.line, 1.0);
+        }
+        if row.suggested {
+            self.wash(b, radius, p.accent, SUGGESTED_WASH, p);
+            if !p.high_contrast {
+                self.border(b, radius, p.accent, SUGGESTED_EDGE, shape::BORDER);
+            }
+        } else {
+            let edge = if hot && p.high_contrast {
+                p.text
+            } else {
+                p.edge
+            };
+            self.border(b, radius, edge, 1.0, shape::BORDER);
+        }
+        if pressed {
+            self.press_shadow(b, p);
+        }
+        // Muted text on a wash is a step brighter (darker in light).
+        let muted = if hot || row.suggested {
+            p.muted_on_wash
+        } else {
+            p.text_muted
+        };
+        let cy = b.y + b.h / 2.0;
+        if row.suggested {
+            self.dot(b.x + TARGET_INSET / 2.0, cy, 1.0, p);
+        }
+        let chip_w = code_chip_width(self.text, row.code, self.chip_floor)?;
+        let chip = Rect::new(
+            b.x + TARGET_INSET,
+            cy - CHIP_HEIGHT / 2.0,
+            chip_w,
+            CHIP_HEIGHT,
+        );
+        self.chip(row.code, &chip, row.glaze, 1.0, p)?;
+        let mut right = b.right() - TARGET_END;
+        if let Some(estimate) = row.estimate {
+            let at = Rect::new(chip.right(), b.y, (right - chip.right()).max(0.0), b.h);
+            right -= self.tabular(estimate, false, &at, muted)? + 8.0;
+        }
+        if let Some(why) = row.why {
+            let x = chip.right() + 8.0;
+            let at = Rect::new(x, b.y, (right - x).max(0.0), b.h);
+            self.label(why, &self.text.caption, &at, muted, 1.0);
+        }
+        Ok(())
+    }
+
+    /// "More formats…": an underlined link at the left of its line, full
+    /// text colour while hot.
+    fn more_link(&self, r: &Rect, hot: bool, p: &Palette) {
+        let c = if hot { p.text } else { p.link };
+        let tw = self
+            .text
+            .measure(insp::MORE_FORMATS, &self.text.caption)
+            .min(r.w);
+        let at = Rect::new(r.x, r.y, tw + 1.0, r.h);
+        self.label(insp::MORE_FORMATS, &self.text.caption, &at, c, 1.0);
+        let under = r.y + r.h / 2.0 + 5.0;
+        self.hline(r.x, r.x + tw, under, c, solid(p, effects::UNDERLINE));
     }
 
     fn footer(&self, l: &Layout, v: &View) -> Result<()> {

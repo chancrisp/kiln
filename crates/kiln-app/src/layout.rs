@@ -3,6 +3,8 @@
 
 use kiln_core::{Knob, Preset};
 
+use crate::inspector::{Inspector, InspectorControl, Kept, NOTHING_TITLE};
+use crate::model::DRAG_HINT;
 use crate::quality::DefaultSetting;
 use crate::settings::{Engine, ThemeChoice};
 use crate::theme::shape::{GRID, PANEL_PADDING};
@@ -1348,9 +1350,9 @@ fn snap(v: f32) -> f32 {
 /// it has (the count of its controls that are buttons).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InspectorShape {
-    /// Nothing selected: the mark in the hero's place, a title, and
-    /// two lines of body.
-    Nothing,
+    /// Nothing selected: the mark in the hero's place, then a title
+    /// `title_h` tall and a body `body_h` tall, each wrapped.
+    Nothing { title_h: f32, body_h: f32 },
     /// One file nothing has been done to. `what_h` is the height of what
     /// the format is, wrapped (0 for none); `facts` the labelled facts;
     /// `targets` the formats offered; `more` whether More follows them.
@@ -1363,12 +1365,13 @@ pub enum InspectorShape {
     /// A running job: the percentage and the time left in the body, and
     /// its `buttons` (Cancel).
     Converting { buttons: usize },
-    /// A finished job. Its body holds a line for the result, one for the
-    /// change when `change`, and one for the hint that the result can be
-    /// dragged out when `drag`, each 20 DIPs; then its `buttons`.
+    /// A finished job. Its body holds a 20 DIP line for the result, one
+    /// for the change when `change`, and then the hint that the result can
+    /// be dragged out, `drag_h` tall once wrapped (0 for none); then its
+    /// `buttons`.
     Done {
         change: bool,
-        drag: bool,
+        drag_h: f32,
         buttons: usize,
     },
     /// A failed or cancelled job: its sentence, `sentence_h` tall once
@@ -1387,8 +1390,8 @@ pub enum InspectorShape {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct InspectorLayout {
     /// The preview, [`HERO`] tall and as wide as the padding leaves. In
-    /// `Nothing` it is reserved for the 48 DIP mark, which nothing draws
-    /// yet. It is the first thing to go when the inspector is short.
+    /// `Nothing` it holds the 48 DIP mark, centred. It is the first thing
+    /// to go when the inspector is short.
     pub hero: Rect,
     pub title: Rect,
     /// What the format is, the sentence, or the lines of a running or
@@ -1411,6 +1414,95 @@ pub struct InspectorLayout {
 
 /// Width of an inspector button.
 pub const INSPECTOR_BUTTON_WIDTH: f32 = 96.0;
+
+/// How wide the inspector's text runs: its width inside the padding.
+pub const INSPECTOR_TEXT_WIDTH: f32 = INSPECTOR_WIDTH - 2.0 * PANEL_PADDING;
+
+/// How a text of the inspector's wraps: in the title's 15 px semibold or
+/// the body's 13 px, and the most lines it takes before it is cut short.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Wrapped {
+    Title(usize),
+    Body(usize),
+}
+
+/// Nothing's title takes at most two lines.
+pub const TITLE_LINES: usize = 2;
+/// What the format is, a failure's sentence and why several files share no
+/// format take at most four lines.
+pub const BODY_LINES: usize = 4;
+/// Nothing's body, the key hint then the privacy line, takes at most six.
+pub const NOTHING_LINES: usize = 6;
+/// The hint that a result can be dragged out takes at most two.
+pub const DRAG_LINES: usize = 2;
+
+/// The shape of what `model` shows. Each text that wraps is measured with
+/// `measure`: its height in DIPs at [`INSPECTOR_TEXT_WIDTH`], as it wraps
+/// (`Wrapped`). `nothing` is Nothing's body: the key hint, then the
+/// privacy line. The buttons are the controls that aren't a format, a
+/// kind or More.
+pub fn inspector_shape(
+    model: &Inspector,
+    nothing: &str,
+    measure: &dyn Fn(&str, Wrapped) -> f32,
+) -> InspectorShape {
+    let wrapped = |s: Option<&str>, w: Wrapped| s.map_or(0.0, |s| measure(s, w));
+    let buttons = model
+        .controls()
+        .iter()
+        .filter(|c| {
+            !matches!(
+                c,
+                InspectorControl::Target(_) | InspectorControl::Kind(_) | InspectorControl::More
+            )
+        })
+        .count();
+    match model {
+        Inspector::Nothing => InspectorShape::Nothing {
+            title_h: measure(NOTHING_TITLE, Wrapped::Title(TITLE_LINES)),
+            body_h: measure(nothing, Wrapped::Body(NOTHING_LINES)),
+        },
+        Inspector::Waiting {
+            what,
+            facts,
+            targets,
+            more,
+            ..
+        } => InspectorShape::Waiting {
+            what_h: wrapped(*what, Wrapped::Body(BODY_LINES)),
+            facts: facts.len(),
+            targets: targets.len(),
+            more: *more,
+        },
+        Inspector::Converting { .. } => InspectorShape::Converting { buttons },
+        Inspector::Done { change, kept, .. } => InspectorShape::Done {
+            change: change.is_some(),
+            drag_h: wrapped(
+                (*kept == Kept::Held).then_some(DRAG_HINT),
+                Wrapped::Body(DRAG_LINES),
+            ),
+            buttons,
+        },
+        Inspector::Failed { sentence, .. } => InspectorShape::Failed {
+            sentence_h: wrapped(Some(sentence), Wrapped::Body(BODY_LINES)),
+            buttons,
+        },
+        Inspector::Several {
+            targets,
+            none_shared,
+            offered,
+            ..
+        } => InspectorShape::Several {
+            // The shared formats, or with none, each kind to narrow to.
+            targets: if targets.is_empty() {
+                offered.len()
+            } else {
+                targets.len()
+            },
+            none_h: wrapped(none_shared.as_deref(), Wrapped::Body(BODY_LINES)),
+        },
+    }
+}
 
 /// The inspector's parts stacked down `r`, inside 16 DIPs of padding. `r`
 /// is the whole inspector, [`INSPECTOR_WIDTH`] wide: the fold slides it in
@@ -1478,37 +1570,44 @@ fn inspector_stack(
         placed: false,
         fits: true,
     };
-    // The body's height, the facts, the targets, whether More follows
-    // them, and the buttons.
-    let (body_h, fact_count, targets, more, buttons) = match *shape {
-        InspectorShape::Nothing => (40.0, 0, 0, false, 0),
+    // The title's height, the body's, the facts, the targets, whether
+    // More follows them, and the buttons.
+    let (title_h, body_h, fact_count, targets, more, buttons) = match *shape {
+        InspectorShape::Nothing { title_h, body_h } => (title_h, body_h, 0, 0, false, 0),
         InspectorShape::Waiting {
             what_h,
             facts,
             targets,
             more,
-        } => (what_h, facts, targets, more, 0),
-        InspectorShape::Converting { buttons } => (60.0, 0, 0, false, buttons),
+        } => (TITLE, what_h, facts, targets, more, 0),
+        InspectorShape::Converting { buttons } => (TITLE, 60.0, 0, 0, false, buttons),
         InspectorShape::Done {
             change,
-            drag,
+            drag_h,
             buttons,
         } => {
-            let lines = 1 + u8::from(change) + u8::from(drag);
-            (LINE * f32::from(lines), 0, 0, false, buttons)
+            let lines = 1 + u8::from(change);
+            (
+                TITLE,
+                LINE * f32::from(lines) + drag_h,
+                0,
+                0,
+                false,
+                buttons,
+            )
         }
         InspectorShape::Failed {
             sentence_h,
             buttons,
-        } => (sentence_h, 0, 0, false, buttons),
-        InspectorShape::Several { targets, none_h } => (none_h, 0, targets, false, 0),
+        } => (TITLE, sentence_h, 0, 0, false, buttons),
+        InspectorShape::Several { targets, none_h } => (TITLE, none_h, 0, targets, false, 0),
     };
 
     // Without the hero the stack starts at the title, and when the hero
     // is offered but doesn't fit, nothing after it does either.
     let hero = if hero { s.place(0.0, HERO.1) } else { None };
     let hero = s.or_empty(hero);
-    let title = s.place(12.0, TITLE);
+    let title = s.place(12.0, title_h);
     let title = s.or_empty(title);
     let body = if body_h > 0.0 {
         s.place(8.0, body_h)
@@ -2828,7 +2927,10 @@ mod tests {
     /// Every shape the inspector can take, with the most parts it has.
     fn every_shape() -> [InspectorShape; 7] {
         [
-            InspectorShape::Nothing,
+            InspectorShape::Nothing {
+                title_h: 40.0,
+                body_h: 104.0,
+            },
             InspectorShape::Waiting {
                 what_h: 40.0,
                 facts: 4,
@@ -2838,7 +2940,7 @@ mod tests {
             InspectorShape::Converting { buttons: 1 },
             InspectorShape::Done {
                 change: true,
-                drag: true,
+                drag_h: 34.0,
                 buttons: 1,
             },
             InspectorShape::Failed {
@@ -2859,7 +2961,7 @@ mod tests {
     /// What a shape asks for: its facts, targets, whether More, its buttons.
     fn asks_for(shape: &InspectorShape) -> (usize, usize, bool, usize) {
         match *shape {
-            InspectorShape::Nothing => (0, 0, false, 0),
+            InspectorShape::Nothing { .. } => (0, 0, false, 0),
             InspectorShape::Waiting {
                 facts,
                 targets,
@@ -2978,24 +3080,25 @@ mod tests {
         assert!(failed(0).buttons.is_empty());
 
         // A finished job's body holds a 20 DIP line for the result, one for
-        // the change and one for the drag-out hint, when it has them.
-        let done = |change, drag, buttons| {
+        // the change, and the drag-out hint as tall as it wraps, when it
+        // has them.
+        let done = |change, drag_h, buttons| {
             inspector_layout(
                 &r,
                 &InspectorShape::Done {
                     change,
-                    drag,
+                    drag_h,
                     buttons,
                 },
             )
         };
-        assert_eq!(done(false, false, 1).body.h, 20.0);
-        assert_eq!(done(true, false, 1).body.h, 40.0);
-        assert_eq!(done(false, true, 1).body.h, 40.0);
-        assert_eq!(done(true, true, 1).body.h, 60.0);
-        assert_eq!(done(true, true, 1).buttons.len(), 1);
-        assert!(done(true, true, 0).buttons.is_empty());
-        let full = done(true, true, 1);
+        assert_eq!(done(false, 0.0, 1).body.h, 20.0);
+        assert_eq!(done(true, 0.0, 1).body.h, 40.0);
+        assert_eq!(done(false, 34.0, 1).body.h, 54.0);
+        assert_eq!(done(true, 34.0, 1).body.h, 74.0);
+        assert_eq!(done(true, 34.0, 1).buttons.len(), 1);
+        assert!(done(true, 34.0, 0).buttons.is_empty());
+        let full = done(true, 34.0, 1);
         assert_eq!(full.buttons[0].y, full.body.bottom() + 12.0);
 
         // Several files list their shared formats, or when they share
@@ -3029,12 +3132,20 @@ mod tests {
         );
         assert!(no_list.label.is_none() && no_list.targets.is_empty());
 
-        // Nothing selected: the mark's hero, a title and two lines of
-        // body, and no facts, targets or buttons.
-        let nothing = inspector_layout(&r, &InspectorShape::Nothing);
+        // Nothing selected: the mark's hero, a title and a body as tall as
+        // they wrap, and no facts, targets or buttons.
+        let nothing = inspector_layout(
+            &r,
+            &InspectorShape::Nothing {
+                title_h: 40.0,
+                body_h: 70.0,
+            },
+        );
         assert_eq!((nothing.hero.w, nothing.hero.h), HERO);
         assert!(nothing.hero.w >= 48.0 && nothing.hero.h >= 48.0);
-        assert_eq!((nothing.title.h, nothing.body.h), (24.0, 40.0));
+        assert_eq!((nothing.title.h, nothing.body.h), (40.0, 70.0));
+        assert_eq!(nothing.title.y, nothing.hero.bottom() + 12.0);
+        assert_eq!(nothing.body.y, nothing.title.bottom() + 8.0);
         assert!(nothing.facts.is_empty() && nothing.label.is_none());
         assert!(nothing.targets.is_empty() && nothing.more.is_none());
         assert!(nothing.buttons.is_empty());
@@ -3086,6 +3197,140 @@ mod tests {
         };
         assert_eq!(cancel(200.0), (0.0, 1));
         assert_eq!(cancel(500.0), (HERO.1, 1));
+    }
+
+    #[test]
+    fn nothing_selected_wraps_its_words_without_overlap_in_a_short_inspector() {
+        // The window of 800 x 480 gives the inspector 300 x 348. Its title
+        // at two lines and its body at six still leave room for the mark,
+        // and no part touches another or leaves the padding.
+        let r = layout(800.0, 480.0, 3).inspector.unwrap();
+        let shape = InspectorShape::Nothing {
+            title_h: 40.0,
+            body_h: 104.0,
+        };
+        let l = inspector_layout(&r, &shape);
+        assert_eq!(l.hero.h, HERO.1);
+        assert_eq!((l.title.h, l.body.h), (40.0, 104.0));
+        let inner = r.inset(16.0);
+        let parts = every_rect(&l);
+        assert_eq!(parts.len(), 3, "{parts:?}");
+        for (i, (name, p)) in parts.iter().enumerate() {
+            assert!(p.y >= inner.y && p.bottom() <= inner.bottom(), "{name}");
+            assert!(p.x >= inner.x && p.right() <= inner.right(), "{name}");
+            for (other, q) in &parts[i + 1..] {
+                assert!(apart(p, q), "{name} {p:?} overlaps {other} {q:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_shape_follows_what_the_inspector_says() {
+        use crate::inspector::{Target, MAX_TARGETS};
+        // A measure that says what it was asked: the text's length, a
+        // thousand for each line it may take and, for the title, 10,000.
+        let measure = |s: &str, w: Wrapped| match w {
+            Wrapped::Title(n) => 10_000.0 + s.len() as f32 + 1000.0 * n as f32,
+            Wrapped::Body(n) => s.len() as f32 + 1000.0 * n as f32,
+        };
+        let shape = |m: &Inspector| inspector_shape(m, "keys\nprivacy", &measure);
+        assert_eq!(
+            shape(&Inspector::Nothing),
+            InspectorShape::Nothing {
+                title_h: 12_000.0 + NOTHING_TITLE.len() as f32,
+                body_h: 6012.0,
+            }
+        );
+        let target = |ext: &str| Target {
+            ext: ext.to_owned(),
+            why: None,
+            estimate: None,
+            suggested: false,
+        };
+        let waiting = Inspector::Waiting {
+            row: 0,
+            what: Some("abcd"),
+            facts: vec![("Size", "1 MB".to_owned()), ("Folder", "x".to_owned())],
+            targets: vec![target("webp"), target("avif")],
+            more: true,
+        };
+        assert_eq!(
+            shape(&waiting),
+            InspectorShape::Waiting {
+                what_h: 4004.0,
+                facts: 2,
+                targets: 2,
+                more: true
+            }
+        );
+        let converting = Inspector::Converting {
+            row: 0,
+            percent: None,
+            left: None,
+        };
+        assert_eq!(
+            shape(&converting),
+            InspectorShape::Converting { buttons: 1 }
+        );
+        // Only a held result says it can be dragged out.
+        let done = |kept| Inspector::Done {
+            row: 0,
+            result: "a.webp".to_owned(),
+            change: Some("1 MB → 1 KB".to_owned()),
+            kept,
+        };
+        assert_eq!(
+            shape(&done(Kept::Held)),
+            InspectorShape::Done {
+                change: true,
+                drag_h: 2000.0 + DRAG_HINT.len() as f32,
+                buttons: 1
+            }
+        );
+        assert_eq!(
+            shape(&done(Kept::Dropped)),
+            InspectorShape::Done {
+                change: true,
+                drag_h: 0.0,
+                buttons: 0
+            }
+        );
+        let failed = Inspector::Failed {
+            row: 0,
+            sentence: "abc".to_owned(),
+            retry: true,
+            details: true,
+        };
+        assert_eq!(
+            shape(&failed),
+            InspectorShape::Failed {
+                sentence_h: 4003.0,
+                buttons: 2
+            }
+        );
+        // Several files list their shared formats, or the kinds on offer.
+        let several = |targets: Vec<Target>, none: Option<&str>, offered| Inspector::Several {
+            rows: vec![0, 1],
+            kinds: "2 images".to_owned(),
+            targets,
+            none_shared: none.map(str::to_owned),
+            offered,
+        };
+        assert_eq!(
+            shape(&several(vec![target("jpg"); MAX_TARGETS], None, vec![])),
+            InspectorShape::Several {
+                targets: 3,
+                none_h: 0.0
+            }
+        );
+        let kinds = vec![("MP4".to_owned(), 2), ("DOCX".to_owned(), 1)];
+        assert_eq!(
+            shape(&several(vec![], Some("ab"), kinds)),
+            InspectorShape::Several {
+                targets: 2,
+                none_h: 4002.0
+            }
+        );
     }
 
     #[test]
@@ -3187,7 +3432,7 @@ mod tests {
                 InspectorShape::Converting { buttons },
                 InspectorShape::Done {
                     change: true,
-                    drag: true,
+                    drag_h: 34.0,
                     buttons,
                 },
                 InspectorShape::Failed {

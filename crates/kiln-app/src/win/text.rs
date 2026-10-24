@@ -28,6 +28,23 @@ pub struct Text {
     /// Captions that may take two lines, centred on their box's height.
     pub caption_wrap: IDWriteTextFormat,
     pub code: IDWriteTextFormat,
+    /// The inspector's file name: 15 px semibold on one line.
+    pub inspector_title: IDWriteTextFormat,
+    /// The inspector's title when it wraps, centred from the top of its
+    /// box: Nothing's.
+    pub inspector_title_block: IDWriteTextFormat,
+    /// Captions that wrap from the top of their box: the inspector's body.
+    pub caption_block: IDWriteTextFormat,
+    /// The same, centred: Nothing's body.
+    pub caption_block_center: IDWriteTextFormat,
+    /// Captions set against the right of their box: a fact's value.
+    pub caption_right: IDWriteTextFormat,
+    /// 12 px labels from the left: the inspector's headings.
+    pub small: IDWriteTextFormat,
+    /// A converting file's percentage in the inspector: 32 px semibold.
+    pub figure: IDWriteTextFormat,
+    /// Figures of one width each, so numbers that change don't jiggle.
+    pub tabular: IDWriteTypography,
     /// True if the bundled serif loaded; false means the fallback is used.
     pub display_bundled: bool,
 }
@@ -83,7 +100,60 @@ impl Text {
 
         let display_collection: Option<IDWriteFontCollection> =
             display_collection.map(|c| c.cast()).transpose()?;
+        let tabular = unsafe {
+            let t = factory.CreateTypography()?;
+            t.AddFontFeature(DWRITE_FONT_FEATURE {
+                nameTag: DWRITE_FONT_FEATURE_TAG_TABULAR_FIGURES,
+                parameter: 1,
+            })?;
+            t
+        };
+        let block = |f: IDWriteTextFormat| -> Result<IDWriteTextFormat> {
+            unsafe {
+                f.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
+                f.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
+            }
+            Ok(f)
+        };
+        let semibold = DWRITE_FONT_WEIGHT_SEMI_BOLD;
+        let title = type_scale::INSPECTOR_TITLE;
         Ok(Self {
+            inspector_title: make(ui, None, semibold, title, false)?,
+            inspector_title_block: block(make(ui, None, semibold, title, true)?)?,
+            caption_block: block(make(
+                ui,
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                type_scale::CAPTION,
+                false,
+            )?)?,
+            caption_block_center: block(make(
+                ui,
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                type_scale::CAPTION,
+                true,
+            )?)?,
+            caption_right: {
+                let f = make(
+                    ui,
+                    None,
+                    DWRITE_FONT_WEIGHT_NORMAL,
+                    type_scale::CAPTION,
+                    false,
+                )?;
+                unsafe { f.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING)? };
+                f
+            },
+            small: make(
+                ui,
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                type_scale::SMALL,
+                false,
+            )?,
+            figure: make(ui, None, semibold, type_scale::DISPLAY, false)?,
+            tabular,
             display: make(
                 &display_family,
                 display_collection.as_ref(),
@@ -217,6 +287,61 @@ impl Text {
                 return 0.0;
             }
             m.widthIncludingTrailingWhitespace
+        }
+    }
+
+    /// `s` laid out in `format` in a box `w` x `h`, its figures all one
+    /// width, for numbers that change in place.
+    pub fn tabular_layout(
+        &self,
+        s: &str,
+        format: &IDWriteTextFormat,
+        w: f32,
+        h: f32,
+    ) -> Result<IDWriteTextLayout> {
+        let wide: Vec<u16> = s.encode_utf16().collect();
+        unsafe {
+            let layout = self
+                .factory
+                .CreateTextLayout(&wide, format, w.max(1.0), h.max(1.0))?;
+            let range = DWRITE_TEXT_RANGE {
+                startPosition: 0,
+                length: wide.len() as u32,
+            };
+            layout.SetTypography(&self.tabular, range)?;
+            Ok(layout)
+        }
+    }
+
+    /// Height of `s` wrapped to `width` in `format`, counting at most
+    /// `lines` of it: a longer text is cut short there. Rounded up, so the
+    /// last line it counts is never left out for want of a fraction.
+    pub fn lines_height(
+        &self,
+        s: &str,
+        format: &IDWriteTextFormat,
+        width: f32,
+        lines: usize,
+    ) -> f32 {
+        let wide: Vec<u16> = s.encode_utf16().collect();
+        unsafe {
+            let Ok(layout) = self
+                .factory
+                .CreateTextLayout(&wide, format, width.max(1.0), 1e6)
+            else {
+                return 0.0;
+            };
+            let mut m = DWRITE_TEXT_METRICS::default();
+            if layout.GetMetrics(&mut m).is_err() || m.lineCount == 0 {
+                return 0.0;
+            }
+            let mut each = vec![DWRITE_LINE_METRICS::default(); m.lineCount as usize];
+            let mut count = 0;
+            if layout.GetLineMetrics(Some(&mut each), &mut count).is_err() {
+                return 0.0;
+            }
+            let h: f32 = each.iter().take(lines).map(|l| l.height).sum();
+            h.ceil()
         }
     }
 
