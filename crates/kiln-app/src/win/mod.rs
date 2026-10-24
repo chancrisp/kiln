@@ -1320,10 +1320,9 @@ impl App {
             return;
         }
         self.drop_moved_page();
-        // Minimised, the window has no client area: the inspector stays as
-        // it was built, so it comes back as it went.
-        let (w, h) = self.renderer.size_dips();
-        if w <= 0.0 || h <= 0.0 {
+        // Minimised, the inspector stays as it was built, so it comes back
+        // as it went.
+        if self.minimised() {
             return;
         }
         if !self.inspector_live() {
@@ -1455,6 +1454,13 @@ impl App {
         }
     }
 
+    /// Whether the window is minimised, as Windows says. Its client area
+    /// is then measured as 1 pixel (`Renderer::size_dips`), which nothing
+    /// that follows the window's size should follow.
+    fn minimised(&self) -> bool {
+        unsafe { IsIconic(self.hwnd).as_bool() }
+    }
+
     /// Run `CLOCK_TIMER` while `on`, and only then.
     fn keep_clock(&mut self, on: bool) {
         if on == self.clock {
@@ -1477,7 +1483,9 @@ impl App {
     /// before every frame: when nothing changed it does nothing, and it
     /// keeps nothing new but a button the first time it is hovered.
     fn follow(&mut self) {
-        if self.destroyed {
+        // Minimised, there is nothing on screen to follow: restoring shows
+        // the window as it was.
+        if self.destroyed || self.minimised() {
             return;
         }
         let (now, animations) = (Instant::now(), theme::motion::animations());

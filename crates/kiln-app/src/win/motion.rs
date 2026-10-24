@@ -19,6 +19,12 @@ use crate::model::{self, FocusButton, JobState};
 use super::render::RowAnim;
 use super::FACTS_MS;
 
+/// Narrower than any window Kiln can be: half the narrowest
+/// (`layout::MIN_WINDOW`), so rounding at the minimum never comes near
+/// it. A minimised window's client, which the renderer measures as 1
+/// pixel, about a DIP or less, is far below.
+const NO_WINDOW: f32 = layout::MIN_WINDOW.0 / 2.0;
+
 /// A sheet's way in, `since` it opened: how far it has faded in, and how
 /// far it still has to rise (`anim::rise`).
 pub(super) fn sheet_rise(since: Instant, now: Instant, animations: bool) -> (f32, f32) {
@@ -299,11 +305,11 @@ impl Motion {
     /// Fold the inspector away, or bring it back, for a window `w` zoomed
     /// DIPs wide. It slides over `anim::FOLD_MS` while files are `listed`;
     /// with none there is no inspector to watch, and it is simply there.
-    /// A window with no width, minimised, has nothing to follow: the fold
-    /// stays as it is, so the window comes back as it went. Returns
-    /// whether a slide began.
+    /// A width no window can have (`NO_WINDOW`), a minimised one's, has
+    /// nothing to follow: the fold stays as it is, so the window comes
+    /// back as it went. Returns whether a slide began.
     pub(super) fn fold_to(&mut self, w: f32, listed: bool, now: Instant, animations: bool) -> bool {
-        if w <= 0.0 {
+        if w < NO_WINDOW {
             return false;
         }
         let to = if layout::inspector_fits(w) { 1.0 } else { 0.0 };
@@ -631,19 +637,30 @@ mod tests {
 
     #[test]
     fn minimising_leaves_the_fold_as_it_was() {
+        // A minimised window's client is 1 pixel wide, as the renderer
+        // measures it: a DIP at 96 DPI, 0.8 at 120, less at a larger Text
+        // size.
+        let minimised = [96.0 / 96.0, 96.0 / 120.0, 96.0 / 144.0 / 1.5];
         let t = Instant::now();
         let mut m = Motion::new(t, 1.0);
-        // Minimised, the window has no width: nothing folds, so coming
-        // back shows the inspector as it was, with nothing sliding in.
-        assert!(!m.fold_to(0.0, true, t, true));
-        assert_eq!(m.fold_target(), 1.0);
+        // Nothing folds, so coming back shows the inspector as it was,
+        // with nothing sliding in.
+        for w in minimised {
+            assert!(!m.fold_to(w, true, t, true), "{w}");
+            assert_eq!(m.fold_target(), 1.0, "{w}");
+        }
         assert_eq!(m.shown(ms(t, anim::FOLD_MS)), 1.0);
         assert!(!m.moving_at(t, true));
         assert!(!m.fold_to(1300.0, true, t, true));
         // Folded away, the same: it stays folded.
         assert!(!m.fold_to(700.0, true, t, false));
-        assert_eq!(m.fold_target(), 0.0);
-        assert!(!m.fold_to(0.0, true, t, true));
+        for w in minimised {
+            assert!(!m.fold_to(w, true, t, true), "{w}");
+            assert_eq!(m.fold_target(), 0.0, "{w}");
+        }
+        // The narrowest a window can be still folds it away.
+        assert!(!m.fold_to(1300.0, true, t, false));
+        assert!(m.fold_to(layout::MIN_WINDOW.0, true, t, true));
         assert_eq!(m.fold_target(), 0.0);
     }
 
