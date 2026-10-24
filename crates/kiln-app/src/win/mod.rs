@@ -3197,8 +3197,17 @@ impl App {
             scale: 1.0,
             source_code: wheel::source_code(&paths),
         };
-        // Placed so the outer ring fits too, should More be opened.
-        (wheel.center, wheel.scale) = wheel::place(at.0, at.1, w, h, wheel.extent());
+        // Placed so the outer ring fits too, should More be opened. Poured
+        // over the list beside the inspector, as from a row, it keeps to
+        // the list, so it never covers the inspector.
+        let l = self.layout();
+        (wheel.center, wheel.scale) = match l.inspector {
+            Some(_) if l.list.contains(at.0, at.1) => {
+                let across = (l.list.x, l.list.right());
+                wheel::place_within(at.0, at.1, w, h, wheel.extent(), across)
+            }
+            _ => wheel::place(at.0, at.1, w, h, wheel.extent()),
+        };
         let suggestion = self.wheel_suggestion(kind, &paths);
         // From the keyboard it starts on the suggestion, or on More when
         // the suggestion is in it.
@@ -3233,7 +3242,8 @@ impl App {
             return;
         }
         // The wheel pours beside the file the keyboard is on, so its name
-        // stays readable; with no such row, from the middle of the list.
+        // stays readable; with no such row, from the middle of the list,
+        // not of the panel the inspector shares.
         let at = self
             .files
             .focus()
@@ -3241,7 +3251,7 @@ impl App {
             .and_then(|i| self.row_anchor(i))
             .unwrap_or_else(|| {
                 let l = self.layout();
-                (l.panel.x + l.panel.w / 2.0, l.panel.y + l.panel.h / 2.0)
+                (l.list.x + l.list.w / 2.0, l.list.y + l.list.h / 2.0)
             });
         self.open_choice(kind, paths, at, true);
     }
@@ -6115,9 +6125,10 @@ impl App {
                 None => model::footer_status(&self.status, &plain, self.sticky),
             };
         // While the work under way is what it says, it says how to cancel
-        // a selected file that is converting, as the selection is now.
+        // a selected file that is converting, as the selection is now. The
+        // selection is looked through only then.
         let status =
-            ways_in::with_cancel_hint(status, self.working.as_deref(), self.footer_cancel());
+            ways_in::with_cancel_hint(status, self.working.as_deref(), || self.footer_cancel());
         // While several rows are selected, their count stands over all of
         // that, unless something is running or went wrong.
         let count = model::selected_line(self.files.selected_rows().len());

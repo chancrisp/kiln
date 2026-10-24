@@ -46,11 +46,12 @@ pub const BLOOM_SCALE: f32 = 0.86;
 pub const BLOOM_TURN_DEG: f32 = -8.0;
 
 /// The wheel's segments follow the disc, each `SEGMENT_STAGGER_MS` after
-/// the one before, growing from `SEGMENT_SCALE`. Each takes `BLOOM_MS`.
-pub const SEGMENT_STAGGER_MS: u32 = 18;
+/// the one before, growing from `SEGMENT_SCALE`. Each takes `BLOOM_MS`, so
+/// the ninth, the most a wheel has, lands 300 ms after the wheel opened.
+pub const SEGMENT_STAGGER_MS: u32 = 10;
 pub const SEGMENT_SCALE: f32 = 0.94;
 /// Where the first segment starts, after the disc has begun.
-const SEGMENT_LEAD_MS: u32 = 40;
+const SEGMENT_LEAD_MS: u32 = 20;
 
 /// Sheets (Settings, Help, options) sliding up and fading in.
 pub const SHEET_MS: u32 = 180;
@@ -368,7 +369,12 @@ mod tests {
         assert_eq!(bloom(0.0, true), (0.0, BLOOM_SCALE, BLOOM_TURN_DEG));
         assert_eq!(bloom(BLOOM_MS as f32, true), (1.0, 1.0, 0.0));
         assert_eq!(
-            segment(40.0 + 3.0 * SEGMENT_STAGGER_MS as f32, 3, true).0,
+            segment(
+                SEGMENT_LEAD_MS as f32 + 3.0 * SEGMENT_STAGGER_MS as f32,
+                3,
+                true
+            )
+            .0,
             0.0
         );
         assert_eq!(bloom(0.0, false), (1.0, 1.0, 0.0));
@@ -376,15 +382,28 @@ mod tests {
 
     #[test]
     fn the_segments_follow_one_after_another() {
-        // The first waits 40 ms, then each waits 18 ms more.
-        assert_eq!(segment(40.0, 0, true), (0.0, SEGMENT_SCALE));
+        // The first waits 20 ms, then each waits 10 ms more.
+        assert_eq!(segment(20.0, 0, true), (0.0, SEGMENT_SCALE));
+        assert_eq!(segment(30.0, 1, true), (0.0, SEGMENT_SCALE));
         let a = segment(100.0, 0, true).0;
         let b = segment(100.0, 1, true).0;
         let c = segment(100.0, 2, true).0;
         assert!(a > b && b > c && c > 0.0);
-        let done = 40.0 + 7.0 * SEGMENT_STAGGER_MS as f32 + BLOOM_MS as f32;
+        let done = 20.0 + 7.0 * SEGMENT_STAGGER_MS as f32 + BLOOM_MS as f32;
         assert_eq!(segment(done, 7, true), (1.0, 1.0));
         assert_eq!(segment(0.0, 7, false), (1.0, 1.0));
+    }
+
+    #[test]
+    fn the_fullest_wheels_last_segment_lands_within_300_ms() {
+        // The most segments a wheel has: eight formats and More.
+        let last = crate::wheel::COMMON;
+        assert_eq!(segment(300.0, last, true), (1.0, 1.0));
+        // Not long before: it is still opening, so 300 ms is its end.
+        assert!(segment(290.0, last, true).0 < 1.0);
+        // Each still follows the one before.
+        let at = |i| segment(120.0, i, true).0;
+        assert!((1..=last).all(|i| at(i) < at(i - 1)));
     }
 
     #[test]

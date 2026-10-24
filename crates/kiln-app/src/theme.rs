@@ -67,8 +67,9 @@ pub mod tokens {
 
     // Glazes: one colour per kind of file. The plain name is the dark
     // theme's, `_DEEP` the light theme's. Images are celadon itself
-    // (`CELADON`, `CELADON_DEEP`) and Other is stone, so only their inks
-    // are new.
+    // (`CELADON`, `CELADON_DEEP`), so only their inks are new. Other has
+    // glazes of its own: in dark the same stone as `STONE`, and in light
+    // a deeper stone of its own.
     pub const GLAZE_VIDEO: Rgb = Rgb::hex(0x8FA6C9);
     pub const GLAZE_VIDEO_DEEP: Rgb = Rgb::hex(0x4D6489);
     /// Ki-seto yellow. Kept at hue 48 degrees and saturation 0.38: a

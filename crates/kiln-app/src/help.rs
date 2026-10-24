@@ -48,7 +48,7 @@ const HELD_NOTE: &str =
     "Results wait in Kiln until you export them. Nothing is saved until you do.";
 
 /// Where results go with Save results next to the original on.
-const BESIDE_NOTE: &str = "Results are saved next to their originals as soon as they're ready.      To keep them in Kiln until you export them, turn off Save results next to the original in Settings.";
+const BESIDE_NOTE: &str = "Results are saved next to their originals as soon as they're ready. To keep them in Kiln until you export them, turn off Save results next to the original in Settings.";
 
 /// Where results go, as Help explains it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -354,6 +354,25 @@ mod tests {
         assert!(!results.lines[0].what.contains("Nothing is saved"));
         // Nothing is held, so there is nothing to drag out.
         assert!(results.lines.iter().all(|l| l.keys != "Drag out"));
+    }
+
+    #[test]
+    fn no_line_of_help_has_two_spaces_in_a_row() {
+        // Help wraps its text, so a run of spaces shows as a gap in the
+        // middle of a sentence.
+        for results in [Results::Held, Results::Beside, Results::NoHolding] {
+            for section in help_content(&KeyMap::default(), results) {
+                for line in &section.lines {
+                    for text in [line.keys.as_str(), line.what.as_str()] {
+                        assert!(
+                            !text.contains("  "),
+                            "{results:?}, {}: {text:?}",
+                            section.title
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

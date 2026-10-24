@@ -278,9 +278,14 @@ pub const CANCEL_HINT: &str = "Space cancels the selected file.";
 /// `working`, the line last said about the work under way, and the
 /// selection holds a file that is converting (`selected_running`). The
 /// hint follows the selection: it comes and goes as rows are selected, and
-/// never stays on a line about something else.
-pub fn with_cancel_hint(status: &str, working: Option<&str>, selected_running: bool) -> String {
-    if selected_running && working == Some(status) {
+/// never stays on a line about something else. The selection is looked
+/// through only while the status is about the work.
+pub fn with_cancel_hint(
+    status: &str,
+    working: Option<&str>,
+    selected_running: impl FnOnce() -> bool,
+) -> String {
+    if working == Some(status) && selected_running() {
         format!("{status} {CANCEL_HINT}")
     } else {
         status.to_owned()
@@ -612,19 +617,21 @@ mod tests {
         let working = "3 of 50 done.";
         // A converting file is selected while the footer says the work.
         assert_eq!(
-            with_cancel_hint(working, Some(working), true),
+            with_cancel_hint(working, Some(working), || true),
             "3 of 50 done. Space cancels the selected file."
         );
         // The selection moved off it, or was cleared: the hint goes.
-        assert_eq!(with_cancel_hint(working, Some(working), false), working);
-        // Something else has been said since: the hint isn't added to it.
+        assert_eq!(with_cancel_hint(working, Some(working), || false), working);
+        // Something else has been said since: the hint isn't added to it,
+        // and the selection isn't looked through to find that out.
         let copied = "Copied the path.";
-        assert_eq!(with_cancel_hint(copied, Some(working), true), copied);
-        assert_eq!(with_cancel_hint(working, None, true), working);
+        let unasked = || -> bool { panic!("the selection was looked through") };
+        assert_eq!(with_cancel_hint(copied, Some(working), unasked), copied);
+        assert_eq!(with_cancel_hint(working, None, unasked), working);
         // A job's finish said with the count still counts as the work.
         let ready = "photo.jpg is ready. 13 of 50 done.";
         assert_eq!(
-            with_cancel_hint(ready, Some(ready), true),
+            with_cancel_hint(ready, Some(ready), || true),
             "photo.jpg is ready. 13 of 50 done. Space cancels the selected file."
         );
     }

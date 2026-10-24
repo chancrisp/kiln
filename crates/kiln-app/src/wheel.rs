@@ -598,6 +598,34 @@ pub fn place(x: f32, y: f32, w: f32, h: f32, extent: f32) -> ((f32, f32), f32) {
     ((cx, cy), scale)
 }
 
+/// Where a wheel goes that pours over the list beside the inspector, and
+/// its scale: as [`place`] puts it in the `w` x `h` window, then moved
+/// across so all it reaches stays between `across`, the list's left and
+/// right edges, and made smaller when the list is narrower than it. So it
+/// never covers the inspector, even once More's ring pours open.
+pub fn place_within(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    extent: f32,
+    across: (f32, f32),
+) -> ((f32, f32), f32) {
+    let ((cx, cy), scale) = place(x, y, w, h, extent);
+    let (left, right) = across;
+    let room = ((right - left) / 2.0 - EDGE_GAP).max(1.0);
+    // Never larger than the window allowed: a smaller wheel still fits
+    // where `place` put it up and down.
+    let scale = scale.min(room / extent);
+    let r = extent * scale + EDGE_GAP;
+    let cx = if right - left >= 2.0 * r {
+        cx.clamp(left + r, right - r)
+    } else {
+        (left + right) / 2.0
+    };
+    ((cx, cy), scale)
+}
+
 /// Keep a plain wheel inside a `w` x `h` window.
 pub fn clamp_center(x: f32, y: f32, w: f32, h: f32) -> (f32, f32) {
     place(x, y, w, h, R_OUTER).0
@@ -870,6 +898,47 @@ mod tests {
         assert!(s < 1.0);
         assert!(cy - R_MORE_OUTER * s >= EDGE_GAP - 0.01, "{cy} {s}");
         assert!(cx - R_MORE_OUTER * s >= EDGE_GAP - 0.01);
+    }
+
+    #[test]
+    fn a_wheel_poured_beside_a_row_stays_over_the_list() {
+        // Poured at a row's right end, where its link is, right by the
+        // inspector: the wheel and the ring More pours keep to the list.
+        let (w, h) = (1300.0, 800.0);
+        let l = crate::layout::layout(w, h, 5);
+        let (list, inspector) = (l.list, l.inspector.expect("an inspector"));
+        let at = (list.right() - 30.0, list.y + 40.0);
+        for extent in [R_OUTER, R_MORE_OUTER] {
+            let ((cx, cy), s) = place_within(at.0, at.1, w, h, extent, (list.x, list.right()));
+            assert_eq!(s, 1.0, "the list is wide enough for it whole");
+            assert!(cx + extent <= list.right() - EDGE_GAP + 0.01, "{cx}");
+            assert!(cx + extent < inspector.x);
+            assert!(cx - extent >= list.x + EDGE_GAP - 0.01);
+            // Up and down, it goes where it would in the window.
+            assert_eq!(cy, place(at.0, at.1, w, h, extent).0 .1);
+        }
+        // Anywhere well inside the list, it pours where it was asked.
+        let mid = (list.x + list.w / 2.0, list.y + list.h / 2.0);
+        let (c, _) = place_within(mid.0, mid.1, w, h, R_OUTER, (list.x, list.right()));
+        assert_eq!(c, mid);
+        // At the fold point the list is narrower than More's ring: the
+        // wheel is made smaller rather than reach over the inspector.
+        let (w, h) = (760.0, 600.0);
+        let l = crate::layout::layout(w, h, 5);
+        let (list, inspector) = (l.list, l.inspector.expect("an inspector at 760"));
+        assert!(list.w < 2.0 * (R_MORE_OUTER + EDGE_GAP), "{list:?}");
+        let ((cx, _), s) = place_within(
+            list.right(),
+            list.y,
+            w,
+            h,
+            R_MORE_OUTER,
+            (list.x, list.right()),
+        );
+        assert!(s < 1.0);
+        assert!(cx + R_MORE_OUTER * s <= list.right() + 0.01);
+        assert!(cx + R_MORE_OUTER * s < inspector.x);
+        assert!(cx - R_MORE_OUTER * s >= list.x - 0.01);
     }
 
     #[test]
