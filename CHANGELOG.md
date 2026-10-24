@@ -35,7 +35,7 @@ The first version.
   - Progress, results and errors shown in each row, plus a details dialog. The progress line glows and breathes while a job runs.
   - Pressed controls show a soft inner shadow, and the empty list's hint follows the wheel keys.
   - One window: files dropped on the icon while Kiln is open go to the open window.
-  - Other ways in: an **Add files** button in the empty window and the footer, and Ctrl+O, open the Windows Open dialog; Ctrl+V adds files copied in File Explorer; and right-clicking a row, the Menu key or Shift+F10 opens a native menu with the wheels, Export, Open, Show in folder and Remove. The empty window puts the instruction second and the tagline last, the footer says what to do next once files are listed, and each wheel's title names its key.
+  - Other ways in: an **Add files** button in the empty window and the footer, and Ctrl+O, open the Windows Open dialog; Ctrl+V adds files copied in File Explorer; and right-clicking a row, the Menu key or Shift+F10 opens a native menu with the wheels, Export, Open, Show in folder and Remove. The empty window says what to do under its headline, the footer says what to do next once files are listed, and each wheel's title names its key.
   - Check for updates in Settings, the app's only network call, made only when pressed.
   - A settings panel and `%APPDATA%\Kiln\settings.toml`, covering the output folder, wheel keys, theme, quality defaults and engine paths for FFmpeg, Pandoc, LibreOffice and Calibre.
   - Light and dark themes that follow Windows.
@@ -45,9 +45,9 @@ The first version.
   - Only targets whose engine is installed are suggested. For several files, a conversion is suggested only when every file gets the same answer.
   - Picks are counted per source type in `settings.toml` under `[habits]`. A target picked at least three times, and more than any other, becomes the suggestion.
   - `kiln suggest FILE...` prints each file's suggestion and the set's, ignoring picks.
-  - In the app, files are inspected on one low-priority thread as they are added. Each row's second line shows what Kiln found and its suggestion, then the size and folder, fading in over 160 ms.
+  - In the app, files are inspected on one low-priority thread as they are added. Each row's second line shows what Kiln found and the size, then the suggestion in the file's glaze colour, fading in over 160 ms.
   - The convert and Tools wheels mark the suggestion with a small celadon dot, on More and in the ring when it sits there. Opened from the keyboard, a wheel starts on the suggestion, and the footer gives the reason.
-  - **Settings > General** gains **Suggestions**, On or Off, and **Forget picks**. `settings.toml` gains `suggestions = true`.
+  - **Settings > General** gains **Suggestions**, On or Off, and **Reset suggestions**. `settings.toml` gains `suggestions = true`.
 - A new look: previews, a colour for each kind of file, a panel for the selected file, and smoother motion.
 - Packaging: an MSI installer, a portable ZIP and optional code signing.
 - The installer adds Kiln to Explorer's Open with and Send to.

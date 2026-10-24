@@ -47,10 +47,37 @@ fn line(keys: impl Into<String>, what: impl Into<String>) -> HelpLine {
 const HELD_NOTE: &str =
     "Results wait in Kiln until you export them. Nothing is saved until you do.";
 
+/// Where results go with Save results next to the original on.
+const BESIDE_NOTE: &str = "Results are saved next to their originals as soon as they're ready.      To keep them in Kiln until you export them, turn off Save results next to the original in Settings.";
+
+/// Where results go, as Help explains it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Results {
+    /// They wait in Kiln until they are exported.
+    Held,
+    /// Each is saved next to its original as soon as it's ready.
+    Beside,
+    /// This run has no holding folder, so they are saved next to each file.
+    NoHolding,
+}
+
+impl Results {
+    /// Where results go, given whether this run has a holding folder and
+    /// the answer to the one-time question about saving next to the
+    /// original: whether it was `asked`, and whether the setting is `on`.
+    /// Until it is answered, results wait in Kiln.
+    pub fn of(holding: bool, asked: bool, on: bool) -> Self {
+        match crate::model::autosave_for(holding, asked, on) {
+            _ if !holding => Results::NoHolding,
+            crate::model::AutoSave::Beside => Results::Beside,
+            _ => Results::Held,
+        }
+    }
+}
+
 /// Everything the overlay says, with the wheel keys as they are set now.
-/// `holding` is whether this run has a holding folder: without one,
-/// results are saved next to each file, and the Results note says so.
-pub fn help_content(keys: &KeyMap, holding: bool) -> Vec<HelpSection> {
+/// `results` says where results go, and the Results note says the same.
+pub fn help_content(keys: &KeyMap, results: Results) -> Vec<HelpSection> {
     let enter = |w: WheelKind| MenuItem::Wheel(w).parts(keys).1;
     let held = |w: WheelKind| format!("Hold {} and drop", keys.key_for(w).name());
     vec![
@@ -78,10 +105,10 @@ pub fn help_content(keys: &KeyMap, holding: bool) -> Vec<HelpSection> {
             lines: vec![
                 line(
                     "",
-                    if holding {
-                        HELD_NOTE
-                    } else {
-                        crate::model::NO_HOLDING
+                    match results {
+                        Results::Held => HELD_NOTE,
+                        Results::Beside => BESIDE_NOTE,
+                        Results::NoHolding => crate::model::NO_HOLDING,
                     },
                 ),
                 line("Ctrl+S", "Export the selected results."),
@@ -89,7 +116,11 @@ pub fn help_content(keys: &KeyMap, holding: bool) -> Vec<HelpSection> {
                 line("Double-click", "Open a result to look at it."),
             ]
             .into_iter()
-            .chain(holding.then(|| line("Drag out", "Save a result where you drop it.")))
+            // Only a held result can be dragged out.
+            .chain(
+                (results == Results::Held)
+                    .then(|| line("Drag out", "Save a result where you drop it.")),
+            )
             .collect(),
         },
         HelpSection {
@@ -250,7 +281,7 @@ mod tests {
 
     #[test]
     fn every_line_of_help_has_a_place_in_order() {
-        let h = help_content(&KeyMap::default(), true);
+        let h = help_content(&KeyMap::default(), Results::Held);
         let places = line_places(&h, 400.0, |_, _| 18.0);
         let lines: usize = h.iter().map(|s| s.lines.len()).sum();
         assert_eq!(places.len(), lines);
@@ -270,7 +301,7 @@ mod tests {
 
     #[test]
     fn help_has_the_ways_in_results_and_shortcuts() {
-        let h = help_content(&KeyMap::default(), true);
+        let h = help_content(&KeyMap::default(), Results::Held);
         let titles: Vec<_> = h.iter().map(|s| s.title).collect();
         assert_eq!(
             titles,
@@ -310,8 +341,37 @@ mod tests {
     }
 
     #[test]
+    fn with_save_next_to_the_original_on_help_says_results_are_saved_there() {
+        let h = help_content(&KeyMap::default(), Results::Beside);
+        let results = find(&h, "Results");
+        assert!(
+            results.lines[0]
+                .what
+                .starts_with("Results are saved next to their originals"),
+            "{}",
+            results.lines[0].what
+        );
+        assert!(!results.lines[0].what.contains("Nothing is saved"));
+        // Nothing is held, so there is nothing to drag out.
+        assert!(results.lines.iter().all(|l| l.keys != "Drag out"));
+    }
+
+    #[test]
+    fn results_are_held_until_the_question_says_otherwise() {
+        // Asked, and on: saved next to the original.
+        assert_eq!(Results::of(true, true, true), Results::Beside);
+        // Asked and off, or not asked yet whatever the file says: held.
+        assert_eq!(Results::of(true, true, false), Results::Held);
+        assert_eq!(Results::of(true, false, true), Results::Held);
+        assert_eq!(Results::of(true, false, false), Results::Held);
+        // No holding folder: saved next to each file either way.
+        assert_eq!(Results::of(false, true, true), Results::NoHolding);
+        assert_eq!(Results::of(false, false, false), Results::NoHolding);
+    }
+
+    #[test]
     fn without_a_holding_folder_help_says_results_are_saved_by_their_files() {
-        let h = help_content(&KeyMap::default(), false);
+        let h = help_content(&KeyMap::default(), Results::NoHolding);
         let results = find(&h, "Results");
         assert_eq!(results.lines[0].what, crate::model::NO_HOLDING);
         assert!(results.lines[0].what.contains("saved next to each file"));
@@ -320,7 +380,7 @@ mod tests {
 
     #[test]
     fn the_table_lists_the_keys_the_window_handles() {
-        let h = help_content(&KeyMap::default(), true);
+        let h = help_content(&KeyMap::default(), Results::Held);
         // The table's content, pinned. Nothing here ties it to the
         // handlers: each entry was checked by hand against `App::key`,
         // `WM_CONTEXTMENU` and `WM_LBUTTONDBLCLK`, and a key added there
@@ -370,7 +430,7 @@ mod tests {
     fn help_follows_the_wheel_keys() {
         let mut keys = KeyMap::default();
         keys.assign(WheelKind::Tools, Modifier::Shift);
-        let h = help_content(&keys, true);
+        let h = help_content(&keys, Results::Held);
         let ways = keys_of(find(&h, "Ways in"));
         assert_eq!(
             ways[5..],
@@ -394,7 +454,7 @@ mod tests {
         assert_eq!(CONVERT_TIP, "Convert the selected files (Enter)");
         assert_eq!(EXPORT_ALL_TIP, "Export all (Ctrl+Shift+S)");
         // Each shortcut a tip names is one the help table lists.
-        let h = help_content(&KeyMap::default(), true);
+        let h = help_content(&KeyMap::default(), Results::Held);
         let listed = |k: &str| h.iter().flat_map(|s| &s.lines).any(|l| l.keys == k);
         for k in ["Ctrl+,", "F1", "Ctrl+S", "Ctrl+O", "Ctrl+Shift+S"] {
             assert!(listed(k), "{k}");
@@ -403,7 +463,7 @@ mod tests {
 
     #[test]
     fn help_reads_calmly() {
-        for s in help_content(&KeyMap::default(), true) {
+        for s in help_content(&KeyMap::default(), Results::Held) {
             for l in &s.lines {
                 assert!(l.what.ends_with('.'), "{}", l.what);
                 assert!(!l.what.contains('!'), "{}", l.what);
@@ -422,7 +482,7 @@ mod tests {
             ("Up, Down, Home, End", 135.3),
             ("Left, Right, Up, Down", 130.2),
         ];
-        let h = help_content(&KeyMap::default(), true);
+        let h = help_content(&KeyMap::default(), Results::Held);
         for (keys, w) in WIDEST {
             assert!(h.iter().flat_map(|s| &s.lines).any(|l| l.keys == keys));
             assert!(w <= KEYS_WIDTH, "{keys}");
@@ -439,7 +499,7 @@ mod tests {
 
     #[test]
     fn lines_stack_and_notes_run_the_width() {
-        let h = help_content(&KeyMap::default(), true);
+        let h = help_content(&KeyMap::default(), Results::Held);
         // A fake measure: 20 per line at 7 DIPs a character.
         let height = |s: &str, w: f32| {
             let per = (w / 7.0).floor().max(1.0) as usize;

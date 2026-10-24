@@ -11,13 +11,23 @@
 
   The seal is docs/readme/kiln-seal.svg; the wordmark is the bundled
   Fraunces subset; the window on the right is a mock drawn here, not a
-  screenshot, so it shows the current mark. Colours are DESIGN.md's tokens.
+  screenshot, so it shows the current mark. It is laid out in the app's
+  own DIPs (an 885 x 602 window, tall enough that the inspector keeps its
+  picture, placed as layout.rs places things) and scaled to
+  fit: previews and glaze tiles, glaze chips, the inspector beside the
+  list, and Convert with its Enter keycap. Colours are DESIGN.md's tokens
+  and glazes; the pictures are drawn gradients, not anyone's files.
 -->
 <style>
 @font-face { font-family: "Fraunces Kiln"; src: url("../../crates/kiln-app/assets/fonts/fraunces-kiln.ttf"); font-weight: 600; }
 :root {
   --soot: #1C1B19; --clay: #2A2825; --ash: #3B3834; --flint: #7C756B;
   --bone: #EDE6DA; --stone: #A89E8F; --stone-light: #C4BCB0; --celadon: #7FB5A0; --celadon-deep: #467966; --brick: #D99D93;
+  /* Glazes (dark) and the inks text is drawn in. */
+  --g-image: #7FB5A0; --i-image: #83B7A2;
+  --g-video: #8FA6C9; --i-video: #99ADCB;
+  --g-audio: #C8BA83; --i-audio: #C8BA83;
+  --g-doc: #B3A5CF;   --i-doc: #B3A5CF;
   --serif: "Fraunces Kiln", Georgia, serif;
   --sans: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
   --mono: "Cascadia Mono", Consolas, monospace;
@@ -40,37 +50,106 @@ body {
 .tagline { margin-top: 56px; font-family: var(--serif); font-weight: 600; font-size: 44px; line-height: 1.15; color: var(--bone); }
 .sub { margin-top: 22px; font-size: 24px; line-height: 1.3; color: var(--stone); }
 .chips { margin-top: 30px; display: flex; gap: 14px; }
+/* A chip: the glaze at 16% over the surface, a 35% outline, the code in the glaze's ink. */
 .chip {
+  --g: var(--g-image); --i: var(--i-image);
   font-family: var(--mono); font-size: 20px; letter-spacing: 0.06em; text-transform: uppercase;
-  padding: 10px 18px; border-radius: 6px; background: var(--clay); color: var(--stone-light);
-  border: 1px solid var(--flint);
+  padding: 10px 18px; border-radius: 6px;
+  background: color-mix(in srgb, var(--g) 16%, var(--clay)); color: var(--i);
+  border: 1px solid color-mix(in srgb, var(--g) 35%, transparent);
 }
 .chip.lit { background: var(--celadon); border-color: var(--celadon); color: var(--soot); }
+.video { --g: var(--g-video); --i: var(--i-video); }
+.audio { --g: var(--g-audio); --i: var(--i-audio); }
+.doc { --g: var(--g-doc); --i: var(--i-doc); }
 
+/* The window: 664 x 452 on the banner, drawn at 885 x 602 DIPs. */
 .win {
-  position: absolute; left: 896px; top: 90px; width: 664px; height: 442px; box-sizing: border-box;
-  border: 1px solid var(--flint); border-radius: 12px; background: var(--soot); overflow: hidden;
+  position: absolute; left: 896px; top: 84px; width: 664px; height: 452px; box-sizing: border-box;
+  border: 1px solid var(--flint); border-radius: 12px; overflow: hidden; background: var(--soot);
   box-shadow: 0 10px 30px -18px rgba(14,13,12,0.45);
 }
-.win .top { height: 1px; background: rgba(237,230,218,0.05); }
-.win header { height: 56px; display: flex; align-items: center; gap: 10px; padding: 0 20px; border-bottom: 1px solid var(--flint); }
-.win header svg { width: 22px; height: 22px; }
-.win header .name { font-family: var(--serif); font-weight: 600; font-size: 22px; color: var(--bone); }
-.panel { position: absolute; left: 16px; right: 16px; top: 68px; bottom: 54px; background: var(--clay); border: 1px solid var(--flint); border-radius: 12px; overflow: hidden; }
-.row { height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 16px; border-bottom: 1px solid rgba(124,117,107,0.5); position: relative; }
-.row:last-child { border-bottom: 0; }
-.row.sel { background: rgba(127,181,160,0.10); }
+.app {
+  position: absolute; left: 0; top: 0; width: 885px; height: 602px; transform: scale(0.75); transform-origin: 0 0;
+  background: radial-gradient(ellipse 520px 160px at 50% 0, rgba(127,181,160,0.06), transparent 80%), var(--soot);
+}
+.app header { position: absolute; left: 0; right: 0; top: 0; height: 56px; border-bottom: 1px solid var(--flint); }
+.app header .mark { position: absolute; left: 20px; top: 16px; width: 24px; height: 24px; }
+.app header .name { position: absolute; left: 56px; top: 13px; font-family: var(--serif); font-weight: 600; font-size: 22px; line-height: 28px; }
+.app header .icon { position: absolute; top: 16px; width: 24px; height: 24px; }
+.icon path, .tile path { fill: none; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.5; }
+
+.panel {
+  position: absolute; left: 16px; top: 72px; width: 853px; height: 470px; box-sizing: border-box;
+  background: var(--clay); border: 1px solid var(--flint); border-radius: 12px; overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(237,230,218,0.05), 0 10px 30px -18px rgba(14,13,12,0.45);
+}
+.list { position: absolute; left: 0; top: 0; width: 552px; bottom: 0; }
+.rule { position: absolute; left: 552px; top: 0; bottom: 0; width: 1px; background: var(--flint); }
+
+.row { position: relative; height: 56px; border-bottom: 1px solid rgba(124,117,107,0.5); box-sizing: border-box; }
+.row.sel { background: rgba(127,181,160,0.18); }
 .row.sel::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 1px; background: var(--celadon); }
-.code { font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em; padding: 5px 9px; border-radius: 6px; background: var(--ash); color: var(--stone-light); border: 1px solid rgba(124,117,107,0.6); width: 34px; text-align: center; }
-.row .t { font-size: 14px; color: var(--bone); line-height: 1.25; }
-.row .s { font-size: 12px; color: var(--stone); }
-.row .s.err { color: var(--brick); }
-.row .link { margin-left: auto; font-size: 12px; color: var(--stone); text-decoration: underline; }
-.status { position: absolute; left: 16px; right: 16px; bottom: 0; height: 54px; display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--stone); }
-.btn { padding: 7px 14px; border-radius: 6px; border: 1px solid var(--flint); background: var(--clay); color: var(--bone); font-size: 13px; }
-.wheel { position: absolute; left: 190px; top: 90px; width: 300px; height: 300px; }
-.wheel text { font-family: var(--sans); }
-.wheel .code { font-family: var(--mono); }
+.row.hot { background: linear-gradient(90deg, color-mix(in srgb, var(--g) 9%, transparent), transparent 60%); }
+.pv { position: absolute; left: 12px; top: 11px; width: 34px; height: 34px; border-radius: 6px; overflow: hidden; }
+.tile { background: color-mix(in srgb, var(--g) 16%, var(--clay)); display: flex; align-items: center; justify-content: center; }
+.tile svg { width: 18px; height: 18px; }
+.tile path { stroke: var(--g); stroke-width: 2; }
+.code {
+  --g: var(--g-image); --i: var(--i-image);
+  position: absolute; left: 58px; top: 16px; width: 50px; height: 24px; box-sizing: border-box; border-radius: 6px;
+  font-family: var(--mono); font-size: 13px; letter-spacing: 0.06em; line-height: 22px; text-align: center;
+  background: color-mix(in srgb, var(--g) 16%, var(--clay)); color: var(--i);
+  border: 1px solid color-mix(in srgb, var(--g) 35%, transparent);
+}
+.row .t { position: absolute; left: 120px; top: 8px; font-size: 14px; line-height: 20px; color: var(--bone); white-space: nowrap; }
+.row .s { position: absolute; left: 120px; top: 28px; font-size: 13px; line-height: 20px; color: var(--stone); white-space: nowrap; }
+/* Muted text on the selected row's wash is Stone Light, as the app draws it (muted_on_wash). */
+.row.sel .s { color: var(--stone-light); }
+.row .s .ink { color: var(--i); }
+.row .s.result { color: var(--bone); }
+.heat { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: var(--ash); }
+.heat i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--g); }
+.heat i::after { content: ""; position: absolute; right: 0; top: -1px; bottom: 0; width: 40px; background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--bone) 35%, var(--g))); }
+
+.ins { position: absolute; left: 553px; top: 0; width: 300px; bottom: 0; }
+.ins .wash { position: absolute; left: 0; right: 0; top: 0; height: 40%; background: linear-gradient(180deg, rgba(127,181,160,0.07), transparent); }
+.hero { position: absolute; left: 16px; top: 16px; width: 268px; height: 120px; border-radius: 8px; }
+.ins .title { position: absolute; left: 16px; top: 147px; width: 268px; height: 28px; }
+.ins .title .code { left: 0; top: 2px; }
+.ins .title .nm { position: absolute; left: 58px; top: 2px; font-size: 15px; font-weight: 600; line-height: 24px; }
+.ins .what { position: absolute; left: 16px; top: 180px; font-size: 13px; line-height: 20px; color: var(--stone); }
+.fact { position: absolute; left: 16px; width: 268px; height: 18px; font-size: 13px; line-height: 18px; }
+.fact b { font-weight: 400; color: var(--stone); }
+.fact span { position: absolute; right: 0; top: 0; color: var(--bone); font-variant-numeric: tabular-nums; }
+.ins .label { position: absolute; left: 16px; top: 276px; font-size: 12px; line-height: 16px; color: var(--stone); }
+.target {
+  position: absolute; left: 16px; width: 268px; height: 36px; box-sizing: border-box; border-radius: 6px;
+  border: 1px solid var(--flint);
+}
+.target.sug { border-color: var(--celadon); background: rgba(127,181,160,0.09); }
+.target .code { left: 16px; top: 5px; width: 48px; }
+.target .dot { position: absolute; left: 6px; top: 16px; width: 4px; height: 4px; border-radius: 2px; background: var(--celadon); }
+.target .why { position: absolute; left: 74px; right: 10px; top: 8px; font-size: 13px; line-height: 18px; color: var(--stone-light); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.target.sug .why { right: 84px; }
+.target .est { position: absolute; right: 10px; top: 8px; font-size: 13px; line-height: 18px; color: var(--stone); font-variant-numeric: tabular-nums; }
+.more { position: absolute; left: 16px; top: 428px; font-size: 13px; line-height: 18px; color: var(--stone); text-decoration: underline; text-underline-offset: 3px; }
+
+.status { position: absolute; left: 21px; top: 557px; font-size: 13px; line-height: 18px; color: var(--stone); }
+.btn {
+  position: absolute; top: 550px; height: 32px; box-sizing: border-box; border-radius: 6px;
+  border: 1px solid var(--flint); background: var(--clay); color: var(--bone);
+  font-size: 14px; line-height: 30px; text-align: center;
+  box-shadow: inset 0 1px 0 rgba(237,230,218,0.05);
+}
+.btn.primary { background: var(--celadon); border-color: var(--celadon); color: var(--soot); box-shadow: 0 10px 30px -18px rgba(14,13,12,0.45); }
+.key { display: inline-block; margin-left: 6px; padding: 0 4px; border-radius: 3px; border: 1px solid rgba(28,27,25,0.45); font-size: 13px; line-height: 16px; vertical-align: 1px; }
+
+/* Pictures: drawn gradients standing in for thumbnails. */
+.p-harbour { background: linear-gradient(115deg, #E8336F 0%, #E8336F 30%, #6FD45A 40%, #E0477A 50%, #CFC27E 58%, #7A3FB0 68%, #5B2E9E 100%); }
+.p-bars { background: linear-gradient(90deg, #D93A3A 0 17%, #3FB34F 17% 33%, #E3D23E 33% 50%, #3A55D9 50% 67%, #C93FC9 67% 83%, #3FC9D9 83%); }
+.p-bars2 { background: linear-gradient(90deg, #C93FC9 0 17%, #3FC9D9 17% 33%, #E3D23E 33% 50%, #3FB34F 50% 67%, #3A55D9 67% 83%, #D93A3A 83%); }
+.p-clay { background: radial-gradient(circle at 30% 30%, #B9CBBE, transparent 45%), linear-gradient(160deg, #9FB7A8 0%, #5D7466 45%, #2F3B35 100%); }
 </style>
 </head>
 <body>
@@ -83,62 +162,66 @@ body {
     <div class="wordmark">Kiln</div>
   </div>
   <div class="tagline">Fire raw files into finished ones.</div>
-  <div class="sub">A native Windows file converter. Offline, and about 7.5 MB.</div>
+  <div class="sub">A native Windows file converter. Offline, and about 8.6 MB.</div>
   <div class="chips">
-    <span class="chip">PNG</span><span class="chip">MP4</span><span class="chip">FLAC</span><span class="chip">DOCX</span><span class="chip">XLSX</span><span class="chip lit">WEBM</span>
+    <span class="chip">PNG</span><span class="chip video">MP4</span><span class="chip audio">FLAC</span><span class="chip doc">DOCX</span><span class="chip doc">XLSX</span><span class="chip lit">WEBM</span>
   </div>
 </div>
 
-<div class="win">
-  <div class="top"></div>
-  <header>
-    <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#7FB5A0" d="M4.71 20.75 L4.71 7.62 C4.71 6.38 5.33 5.75 6.58 5.75 C7.83 5.75 8.46 6.38 8.46 7.62 L8.46 11.58 C9.71 11.58 10.96 10.75 11.79 9.5 C13.04 7.83 13.46 5.33 14.29 3.25 C19.29 7 16.38 12 11.38 14.08 L16.79 20.75 L13.04 20.75 L9.71 16.58 L8.46 17.83 L8.46 20.75 Z"/></svg>
-    <span class="name">Kiln</span>
-  </header>
-  <div class="panel">
-    <div class="row"><span class="code">PNG</span><div><div class="t">Glaze test.png</div><div class="s">Glaze test.jpg</div></div></div>
-    <div class="row"><span class="code">MP3</span><div><div class="t">Firing log.mp3</div><div class="s">D:\Studio\Recordings · 4.5 MB</div></div></div>
-    <div class="row"><span class="code">WAV</span><div><div class="t">Kiln notes.wav</div><div class="s err">FFmpeg couldn't convert the file to FLAC. It stopped when processing the stream.</div></div><span class="link">Show details</span></div>
-    <div class="row sel"><span class="code">MP4</span><div><div class="t">Studio tour.mp4</div><div class="s">D:\Studio\Clips · 128 MB</div></div></div>
-  </div>
-  <div class="status"><span>Couldn't convert the file to FLAC.</span><span class="btn">Clear</span></div>
-  <svg class="wheel" viewBox="0 0 300 300" id="wheel" aria-label="The convert wheel"></svg>
-</div>
+<div class="win" aria-label="A mock of Kiln's window">
+  <div class="app">
+    <header>
+      <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path fill="#7FB5A0" d="M4.71 20.75 L4.71 7.62 C4.71 6.38 5.33 5.75 6.58 5.75 C7.83 5.75 8.46 6.38 8.46 7.62 L8.46 11.58 C9.71 11.58 10.96 10.75 11.79 9.5 C13.04 7.83 13.46 5.33 14.29 3.25 C19.29 7 16.38 12 11.38 14.08 L16.79 20.75 L13.04 20.75 L9.71 16.58 L8.46 17.83 L8.46 20.75 Z"/></svg>
+      <span class="name">Kiln</span>
+      <svg class="icon" style="left: 761px" viewBox="0 0 24 24" aria-hidden="true"><path stroke="#C4BCB0" d="M12 4.75 C16 4.75 19.25 8 19.25 12 C19.25 16 16 19.25 12 19.25 C8 19.25 4.75 16 4.75 12 C4.75 8 8 4.75 12 4.75 Z M9.75 9.75 C9.75 8.5 10.75 7.75 12 7.75 C13.25 7.75 14.25 8.5 14.25 9.75 C14.25 11.25 12 11.5 12 13.25 M12.5 16 L12.35 16.35 L12 16.5 L11.65 16.35 L11.5 16 L11.65 15.65 L12 15.5 L12.35 15.65 Z"/></svg>
+      <svg class="icon" style="left: 801px" viewBox="0 0 24 24" aria-hidden="true"><path stroke="#C4BCB0" d="M12 4.75 C16 4.75 19.25 8 19.25 12 C19.25 16 16 19.25 12 19.25 C8 19.25 4.75 16 4.75 12 C4.75 8 8 4.75 12 4.75 Z M12 12 L15.25 8.75 M7.5 16.5 L8.5 15.5 M16.5 16.5 L15.5 15.5"/></svg>
+    </header>
 
-<script>
-// The convert wheel: nine segments clockwise from the top, WEBM lit.
-(function () {
-  const svg = document.getElementById('wheel');
-  const ns = 'http://www.w3.org/2000/svg';
-  const cx = 150, cy = 150, R = 136, r = 56, n = 9;
-  const items = ['FLAC','M4A','MKV','MOV','MP3','OGG','OPUS','WAV','WEBM'];
-  const video = new Set(['MKV','MOV','WEBM']);
-  const el = (t, a, parent) => { const e = document.createElementNS(ns, t); for (const k in a) e.setAttribute(k, a[k]); (parent || svg).appendChild(e); return e; };
-  const pol = (rad, ang) => [cx + rad * Math.sin(ang), cy - rad * Math.cos(ang)];
-  el('circle', { cx, cy, r: R + 8, fill: 'rgba(28,27,25,0.92)' });
-  el('circle', { cx, cy, r: R + 8, fill: 'none', stroke: '#7C756B', 'stroke-width': 1 });
-  for (let i = 0; i < n; i++) {
-    const a0 = (i - 0.5) * 2 * Math.PI / n, a1 = (i + 0.5) * 2 * Math.PI / n;
-    const [x0, y0] = pol(R, a0), [x1, y1] = pol(R, a1), [x2, y2] = pol(r, a1), [x3, y3] = pol(r, a0);
-    const lit = items[i] === 'WEBM';
-    el('path', { d: `M${x0} ${y0} A${R} ${R} 0 0 1 ${x1} ${y1} L${x2} ${y2} A${r} ${r} 0 0 0 ${x3} ${y3} Z`,
-      fill: lit ? 'rgba(127,181,160,0.18)' : '#2A2825', stroke: '#7C756B', 'stroke-width': 1 });
-    if (lit) el('path', { d: `M${x0} ${y0} A${R} ${R} 0 0 1 ${x1} ${y1}`, fill: 'none', stroke: '#7FB5A0', 'stroke-width': 1.5 });
-    // The icon sits over its label, both centred on the segment's middle.
-    const am = (a0 + a1) / 2, [mx, my] = pol((R + r) / 2 + 2, am), ix = mx, iy = my - 10;
-    const c = lit ? '#EDE6DA' : '#C4BCB0';
-    const t = el('text', { x: mx, y: my + 18, 'text-anchor': 'middle', fill: c, 'font-size': 12, 'letter-spacing': '0.06em', class: 'code' }); t.textContent = items[i];
-    if (video.has(items[i])) {
-      el('rect', { x: ix - 8, y: iy - 5, width: 11, height: 10, rx: 1.5, fill: 'none', stroke: c, 'stroke-width': 1.5 });
-      el('path', { d: `M${ix + 3} ${iy - 1} L${ix + 8} ${iy - 4} L${ix + 8} ${iy + 4} L${ix + 3} ${iy + 1} Z`, fill: 'none', stroke: c, 'stroke-width': 1.5, 'stroke-linejoin': 'round' });
-    } else {
-      [[-6, 4], [-2, 8], [2, 6], [6, 3]].forEach(([dx, h]) => el('line', { x1: ix + dx, y1: iy - h, x2: ix + dx, y2: iy + h, stroke: c, 'stroke-width': 1.5, 'stroke-linecap': 'round' }));
-    }
-  }
-  el('circle', { cx, cy, r: r - 1, fill: '#1C1B19', stroke: '#7C756B', 'stroke-width': 1 });
-  const t1 = el('text', { x: cx, y: cy + 2, 'text-anchor': 'middle', fill: '#EDE6DA', 'font-size': 22, 'font-weight': 600, style: 'font-family: var(--serif)' }); t1.textContent = 'Convert';
-  const t2 = el('text', { x: cx, y: cy + 20, 'text-anchor': 'middle', fill: '#A89E8F', 'font-size': 12, 'letter-spacing': '0.06em', class: 'code' }); t2.textContent = 'MP4';
-})();
-</script>
+    <div class="panel">
+      <div class="list">
+        <div class="row sel"><div class="pv p-harbour"></div><span class="code">PNG</span>
+          <div class="t">Harbour.png</div>
+          <div class="s">1600 × 1200 photo&nbsp; · &nbsp;3.9 MB&nbsp; · &nbsp;<span class="ink">as JPG about 890 KB</span></div></div>
+        <div class="row video"><div class="pv p-bars"></div><span class="code video">MOV</span>
+          <div class="t">Studio tour.mov</div>
+          <div class="s video">1920 × 1080 video, 1:30&nbsp; · &nbsp;48 MB&nbsp; · &nbsp;<span class="ink">as MP4 about 21 MB</span></div></div>
+        <div class="row audio"><div class="pv tile audio"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 10 L6 14 M9 7 L9 17 M12 4.5 L12 19.5 M15 8 L15 16 M18 10.5 L18 13.5"/></svg></div><span class="code audio">WAV</span>
+          <div class="t">Firing log.wav</div>
+          <div class="s audio">audio, 2:14&nbsp; · &nbsp;23 MB&nbsp; · &nbsp;<span class="ink">as MP3 about 3.2 MB</span></div></div>
+        <div class="row hot video"><div class="pv p-bars2"></div><span class="code video">MP4</span>
+          <div class="t">Long take.mp4</div>
+          <div class="s">Converting to WEBM&nbsp; · &nbsp;38%&nbsp; · &nbsp;about 2 min</div>
+          <div class="heat"><i style="width: 38%"></i></div></div>
+        <div class="row doc"><div class="pv tile doc"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 3.5 L14 3.5 L18 7.5 L18 20.5 L6.5 20.5 Z M14 3.5 L14 7.5 L18 7.5 M9.5 12 L15 12 M9.5 15.5 L15 15.5"/></svg></div><span class="code doc">DOCX</span>
+          <div class="t">Glaze notes.docx</div>
+          <div class="s">Converts to 23 formats&nbsp; · &nbsp;11 KB&nbsp; · &nbsp;Studio</div></div>
+        <div class="row"><div class="pv p-clay"></div><span class="code">PNG</span>
+          <div class="t">Clay study.png</div>
+          <div class="s result">Saved next to the original: Clay study.jpg</div></div>
+      </div>
+      <div class="rule"></div>
+
+      <div class="ins">
+        <div class="wash"></div>
+        <div class="hero p-harbour"></div>
+        <div class="title"><span class="code">PNG</span><span class="nm">Harbour.png</span></div>
+        <div class="what">a lossless image with transparency</div>
+        <div class="fact" style="top: 210px"><b>Size</b><span>3.9 MB</span></div>
+        <div class="fact" style="top: 228px"><b>Pixels</b><span>1600 × 1200</span></div>
+        <div class="fact" style="top: 246px"><b>Folder</b><span>Studio</span></div>
+        <div class="label">Turn it into</div>
+        <div class="target sug" style="top: 298px"><i class="dot"></i><span class="code">JPG</span><span class="why">a photo that opens anywhere</span><span class="est">≈ 890 KB</span></div>
+        <div class="target" style="top: 340px"><span class="code">AVIF</span><span class="why">a very small, modern image</span></div>
+        <div class="target" style="top: 382px"><span class="code">BMP</span><span class="why">an uncompressed Windows image</span></div>
+        <div class="more">More formats…</div>
+      </div>
+    </div>
+
+    <div class="status">Clay study.jpg is ready. 1 of 2 done.</div>
+    <div class="btn primary" style="left: 569px; width: 124px">Convert<span class="key">Enter</span></div>
+    <div class="btn" style="left: 701px; width: 88px">Add files</div>
+    <div class="btn" style="left: 797px; width: 72px">Clear</div>
+  </div>
+</div>
 </body>
 </html>

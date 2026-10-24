@@ -623,8 +623,8 @@ pub const INSPECTOR_NAME: &str = "Selected file";
 /// What an inspector control is called: a format as its target says it
 /// ("Convert to WEBP, a small image for the web, about 410 KB"), a kind
 /// by what choosing it does, and the rest with the file they act on:
-/// "Cancel harbour.png", or the result for Save and Show in folder,
-/// "Save harbour.webp".
+/// "Cancel harbour.png", or the result for Export and Show in folder,
+/// "Export harbour.webp".
 pub fn inspector_name(c: InspectorControl, model: &Inspector, file: &str) -> String {
     use InspectorControl as C;
     let result = match model {
@@ -643,7 +643,7 @@ pub fn inspector_name(c: InspectorControl, model: &Inspector, file: &str) -> Str
         (C::Target(_) | C::Kind(_), _) => String::new(),
         (C::More, _) => format!("More formats for {file}"),
         (C::Cancel, _) => format!("Cancel {file}"),
-        (C::Save, _) => format!("Save {result}"),
+        (C::Export, _) => format!("Export {result}"),
         (C::ShowInFolder, _) => format!("Show {result} in folder"),
         (C::Retry, _) => format!("Retry {file}"),
         (C::ShowDetails, _) => format!("Show details for {file}"),
@@ -668,7 +668,7 @@ pub fn inspector_controls(model: &Inspector, l: &InspectorLayout) -> Vec<(Inspec
                 C::Target(i) | C::Kind(i) => l.targets.get(i).copied(),
                 C::More => l.more,
                 C::Cancel
-                | C::Save
+                | C::Export
                 | C::ShowInFolder
                 | C::Retry
                 | C::ShowDetails
@@ -1682,7 +1682,7 @@ mod tests {
     #[test]
     fn help_lines_scrolled_out_of_the_panel_are_off_screen() {
         let lines = empty_lines(&Settings::default());
-        let sections = crate::help::help_content(&KeyMap::default(), true);
+        let sections = crate::help::help_content(&KeyMap::default(), crate::help::Results::Held);
         let body = layout::help(800.0, 600.0).body;
         let shown = Rect::new(body.x, body.y + 10.0, 100.0, 20.0);
         let hidden = Rect::new(body.x, body.bottom() + 40.0, 100.0, 20.0);
@@ -2163,7 +2163,7 @@ mod tests {
     #[test]
     fn help_reads_each_section() {
         let lines = empty_lines(&Settings::default());
-        let sections = help_content(&KeyMap::default(), true);
+        let sections = help_content(&KeyMap::default(), crate::help::Results::Held);
         let mut i = input(&lines, vec![]);
         i.help = Some(&sections);
         let t = tree(&i);
@@ -2396,8 +2396,8 @@ mod tests {
             "Cancel interview.mp4"
         );
         assert_eq!(
-            inspector_name(C::Save, &done_held, "voice memo.m4a"),
-            "Save voice memo.mp3"
+            inspector_name(C::Export, &done_held, "voice memo.m4a"),
+            "Export voice memo.mp3"
         );
         assert_eq!(
             inspector_name(C::ShowInFolder, &done(Kept::InFolder), "voice memo.m4a"),
@@ -2667,7 +2667,7 @@ mod tests {
         let (_, il) = inspector_at(size, es.len(), shape);
         assert_eq!(rect_of(&pane, "Converting to WEBP"), il.line(1).unwrap());
         assert_eq!(il.line(1).unwrap().y, il.title.bottom() + 8.0);
-        // Done: the result, the change, the drag-out hint and Save.
+        // Done: the result, the change, the drag-out hint and Export.
         let done = Inspector::Done {
             row: 0,
             result: "harbour.webp".to_owned(),
@@ -2701,8 +2701,8 @@ mod tests {
             assert_eq!(rect_of(&pane, said), il.line(k).unwrap(), "{said}");
         }
         assert_eq!(
-            named(&pane, Role::Button, "Save harbour.webp").id,
-            Id::InspectorControl(C::Save)
+            named(&pane, Role::Button, "Export harbour.webp").id,
+            Id::InspectorControl(C::Export)
         );
         // Several sharing nothing: the kinds, why, and each kind to pick.
         let several = Inspector::Several {

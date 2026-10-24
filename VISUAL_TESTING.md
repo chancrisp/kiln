@@ -23,9 +23,9 @@ window between them as well.
 ## Empty state
 
 - [ ] The drop panel fills the body with 16 px padding on every side.
-- [ ] Copy reads, in order: "Drop files here", "Or add them with the button below, or Ctrl+O.", an **Add files** button, the key hint, the privacy line, and last, muted, "Fire raw files into finished ones."
+- [ ] Copy reads, in order: "Drop files here", "Or add them with the button below, or Ctrl+O.", an **Add files** button, the key hint and the privacy line, and last the four glaze tiles. There is no tagline; "Fire raw files into finished ones." is in Help's About Kiln.
 - [ ] **Add files** and Ctrl+O open the Windows Open dialog with multi-select. Picked files are listed as a drop would list them. The next time, it opens in the folder files were last added from.
-- [ ] Copying files in File Explorer and pressing Ctrl+V in Kiln lists them. A copied folder is reported as skipped, as a dropped one is. With no files on the clipboard, the footer reads "There are no files to paste."
+- [ ] Copying files in File Explorer and pressing Ctrl+V in Kiln lists them. A copied folder adds its files, as a dropped one does. With no files on the clipboard, the footer reads "There are no files to paste."
 - [ ] In the empty window, a status such as "There are no files to paste." or "Skipped 1 item that isn't a file." shows as one muted line under the **Add files** button. The group doesn't move when it appears.
 - [ ] Dragging files over the window fades in a celadon edge and a faint wash in about 120 ms, and leaving fades them out.
 - [ ] Dragging something that isn't a file (text from a browser) shows the "no drop" cursor and no highlight.
@@ -37,7 +37,7 @@ window between them as well.
 - [ ] Rows show the preview, the chip, the name in bone, then in stone the number of conversions (or what the file is), the size and the folder's last part. With a suggestion, it comes last in the file's glaze ink ("as JPG about 890 KB") and the folder gives way to it.
 - [ ] Hovering a row shows a native tooltip: the whole line when the row cuts it short, then the full folder path on its own line. A running row's Cancel says "Cancel" and a held row's Export link says "Export (Ctrl+S)".
 - [ ] A file with no conversions says "No formats for this type".
-- [ ] Dropping the same file twice reports it as already in the list. Dropping a folder reports it as skipped.
+- [ ] Dropping the same file twice reports it as already in the list. Dropping a folder adds its files (see below).
 - [ ] Hover tints a row; every selected row has the 18% celadon fill, clipped to the panel's rounded corners.
 - [ ] Up, Down, Home and End move the selection to one row. With Shift they extend it from where it started. Delete removes it. Escape clears it.
 - [ ] A click selects one row, Ctrl-click adds or takes away a row, Shift-click selects a range, and Ctrl+A selects every row.
@@ -55,7 +55,7 @@ window between them as well.
 - [ ] In a window narrower than 760 px, a file nothing has been done to has a **Convert** link at the right end of its row; it selects the row and opens the format choice beside the row, with the file's name still readable. Enter on a selected row opens the same.
 - [ ] Selecting an MP4 and a DOCX and pressing Convert (or Enter) opens no wheel: the footer says "These files have no format in common: …" and Ctrl+A on many mixed files says the same.
 - [ ] The first plain drop that adds files shows "Tip: hold Shift, Ctrl or Alt as you drop." in the footer. A second drop, and any drop after restarting, does not.
-- [ ] Tab goes from the list to Convert (while enabled), then Add files.
+- [ ] Tab goes from the list to the inspector's controls (in a window 760 DIPs wide or more), then to Convert (while enabled), then Add files.
 - [ ] With FFmpeg hidden from Kiln, an MP4 reads "Needs FFmpeg to convert" with a **Get FFmpeg** link that opens the download page, and the footer says once that FFmpeg isn't installed. Opening the choice for it explains the same. Installing it (or choosing it in Settings) and closing Settings brings its formats back without re-adding the file.
 - [ ] An empty file reads "Empty file (0 bytes)", a DOCX made of random bytes reads "Isn't really a DOCX file", and a file with an unknown extension reads "Unknown type (.XYZ)". None has a Convert link or a wheel. A real DOCX, a PNG with trailing data and a text file renamed .txt are not rejected.
 - [ ] Dropping a folder of photos adds them: "Added 12 files from Holiday." Hidden items and folders two levels down are named as skipped. A folder with more than 200 files asks "Add them all?" first.
@@ -102,7 +102,7 @@ window between them as well.
 - [ ] **One text column.** The file names and second lines of PNG, MP4, DOCX and XLSX rows all start at the same x; only a longer code (five letters or more) pushes its own row's text right.
 - [ ] **Audio keeps its tile.** An MP3 or WAV row always shows its yellow tile with the waveform, even when the file has album art.
 - [ ] **The fold at 760.** With files listed, narrow the window past 760 DIPs (950 pixels at 125%): the inspector slides out to the right over about a fifth of a second as the list widens, and the rows' links come back. Widening brings it back the same way. The header and footer never jump. At a larger Text size it folds in a wider window. Minimising and restoring the window leaves it where it was.
-- [ ] **The inspector, case by case.** One file waiting: its preview, chip and name, what the format is, Size, Pixels or Length, and Folder, then under "Turn it into" up to three formats, the suggestion first with its dot and "≈ 890 KB", then "More formats…". Converting: the glaze's heat rising over the preview, the percentage in large figures, the time left, and Cancel. Done: the result's name, its size before and after, a check on the preview, and Save, which becomes Show in folder once saved. Failed: the sentence in brick, Retry where it helps, and Show details. Several files: up to three stacked previews and "1 video, 1 document"; with no format in common, the footer's sentence and "Select one kind", each kind's button selecting only its files. Nothing selected: the mark, the hint and the privacy line.
+- [ ] **The inspector, case by case.** One file waiting: its preview, chip and name, what the format is, Size, Pixels or Length, and Folder, then under "Turn it into" up to three formats, the suggestion first with its dot and "≈ 890 KB", then "More formats…". Converting: the glaze's heat rising over the preview, the percentage in large figures, the time left, and Cancel. Done: the result's name, its size before and after, a check on the preview, and Export, which becomes Show in folder once saved. Failed: the sentence in brick, Retry where it helps, and Show details. Several files: up to three stacked previews and "1 video, 1 document"; with no format in common, the footer's sentence and "Select one kind", each kind's button selecting only its files. Nothing selected: the mark, the hint and the privacy line.
 - [ ] **The inspector on the keyboard.** Tab goes from the list through the inspector's formats, More formats… and its buttons, then the footer. Narrator reads the panel as "Selected file", a format as "Convert to JPG, a photo that opens anywhere, about 890 KB", and the preview as "Preview of harbour.png".
 - [ ] **Previews keep up.** In a list of 500 files, previews fill in nearest first as you scroll, and the list never stutters while they load. The inspector's preview is 268 x 120, cropped to fill, never stretched; with no thumbnail it is the glaze tile with a larger icon.
 - [ ] **Glazes in both themes.** In dark and in light, the inspector's top wash, the heat over its preview and its formats' chips take the selected file's glaze, and all its text stays readable. A video, an image, an MP3 and a DOCX side by side are blue, celadon, yellow and lavender.
@@ -145,7 +145,7 @@ window between them as well.
 ## Help and tooltips
 
 - [ ] The ? beside the dial, or F1, opens help over a scrim. F1 does nothing while Settings, an options sheet or the details dialog is up, and closes an open wheel.
-- [ ] Help lists the ways in, that nothing is saved until you export, and every shortcut, following the keys chosen in Settings. At the smallest window it scrolls with the wheel, arrows, Page Up, Page Down, Home and End, with a thin thumb.
+- [ ] Help lists the ways in, where results go (they wait in Kiln until exported; with Save results next to the original on, it says they are saved next to their originals instead), and every shortcut, following the keys chosen in Settings. At the smallest window it scrolls with the wheel, arrows, Page Up, Page Down, Home and End, with a thin thumb.
 - [ ] Close has the focus ring. Escape, Enter, Close or a click on the scrim closes help.
 - [ ] Hovering the dial, the ?, Add files and Export all shows "Settings (Ctrl+,)", "Help (F1)", "Add files (Ctrl+O)" and "Export all (Ctrl+Shift+S)". No tooltips show while a wheel, panel or dialog is up. They are sized right after moving to a monitor with another scale.
 

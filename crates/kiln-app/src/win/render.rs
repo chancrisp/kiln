@@ -3330,6 +3330,25 @@ impl Draw<'_> {
             }
         }
 
+        // The key buttons sit side by side only when all three fit, so
+        // they never disagree (`layout::keys_side_by_side`).
+        let key_side = match l
+            .controls
+            .iter()
+            .find(|(c, _)| matches!(c, Control::Key(_)))
+        {
+            Some((_, r)) => {
+                let mut needs = vec![];
+                for wheel in crate::wheel::WheelKind::ALL {
+                    let code = sv.keys.key_for(wheel).code();
+                    let (_, cw) = self.text.code_layout(code, r.w, r.h)?;
+                    let label_w = self.text.measure(wheel.title(), &self.text.body);
+                    needs.push(label_w + layout::KEY_GAP + cw.ceil());
+                }
+                layout::keys_side_by_side(r.w, &needs)
+            }
+            None => false,
+        };
         // Segmented groups, outlined once each after their fills.
         let mut groups: Vec<(Control, Vec<(bool, Rect)>)> = vec![];
         for (k, (control, r)) in l.controls.iter().enumerate() {
@@ -3411,20 +3430,21 @@ impl Draw<'_> {
                     self.button_face(r, lift, sink, false, p);
                     let code = sv.keys.key_for(*wheel).code();
                     let (_, cw) = self.text.code_layout(code, r.w, r.h)?;
-                    let label_w = self.text.measure(wheel.title(), &self.text.body);
-                    if r.w >= 12.0 + label_w + 8.0 + cw.ceil() + 12.0 {
+                    let pad = layout::KEY_PAD;
+                    if key_side {
                         // The name on the left, the key on the right.
-                        let name = Rect::new(r.x + 12.0, r.y, r.w - 12.0, r.h);
+                        let name = Rect::new(r.x + pad, r.y, r.w - pad, r.h);
                         self.label(wheel.title(), &self.text.body, &name, p.text, 1.0);
-                        let cr = Rect::new(r.right() - 12.0 - cw.ceil(), r.y, cw.ceil(), r.h);
+                        let cr = Rect::new(r.right() - pad - cw.ceil(), r.y, cw.ceil(), r.h);
                         self.code(code, &cr, p.text_muted, 1.0)?;
                     } else {
-                        // Too narrow for both side by side, as at the
-                        // smallest window: one above the other, so the
-                        // two never overlap.
-                        let name = Rect::new(r.x + 12.0, r.y + 1.0, (r.w - 24.0).max(0.0), 16.0);
+                        // Too narrow for all three side by side, as at the
+                        // smallest window: each one above the other, so
+                        // the two never overlap.
+                        let inner = (r.w - 2.0 * pad).max(0.0);
+                        let name = Rect::new(r.x + pad, r.y + 1.0, inner, 16.0);
                         self.label(wheel.title(), &self.text.caption, &name, p.text, 1.0);
-                        let cr = Rect::new(r.x + 12.0, r.y + 15.0, (r.w - 24.0).max(0.0), 16.0);
+                        let cr = Rect::new(r.x + pad, r.y + 15.0, inner, 16.0);
                         self.code(code, &cr, p.text_muted, 1.0)?;
                     }
                     None

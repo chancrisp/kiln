@@ -933,6 +933,22 @@ const SETTINGS_ROWS: usize = 5;
 pub const ENGINE_ROW: f32 = 48.0;
 /// A missing engine's Get it link, left of Choose.
 pub const GET_IT_WIDTH: f32 = 48.0;
+/// The widest a key button grows: room for "Convert" and "SHIFT" side by
+/// side, with [`KEY_PAD`] inside each end and [`KEY_GAP`] between.
+pub const KEY_WIDTH: f32 = 128.0;
+/// Inside each end of a key button.
+pub const KEY_PAD: f32 = 12.0;
+/// Between a key button's wheel name and its key.
+pub const KEY_GAP: f32 = 8.0;
+
+/// Whether the key buttons, each `w` wide, show their wheel's name and key
+/// side by side. `needs` is each button's name and key measured side by
+/// side, the gap between them included. Only when every one fits do all
+/// of them sit side by side; otherwise all three stack the name over the
+/// key, so the three buttons never disagree.
+pub fn keys_side_by_side(w: f32, needs: &[f32]) -> bool {
+    needs.iter().all(|n| 2.0 * KEY_PAD + n <= w)
+}
 
 /// What the settings panel needs to know to lay itself out: the page, and
 /// which values are set, since those rows grow a Reset button.
@@ -1090,7 +1106,7 @@ pub fn settings(w: f32, h: f32, shape: SettingsShape) -> SettingsLayout {
             }
             rows.push(row("Theme", 1, None));
 
-            let key_w = (((right - x0 - 16.0) / 3.0).min(120.0) / GRID).floor() * GRID;
+            let key_w = (((right - x0 - 16.0) / 3.0).min(KEY_WIDTH) / GRID).floor() * GRID;
             for (k, wheel) in WheelKind::ALL.into_iter().enumerate() {
                 controls.push((
                     Control::Key(wheel),
@@ -3686,6 +3702,32 @@ mod tests {
                 assert!(r.w >= 56.0 && r.h >= 32.0, "{r:?} at {w}x{h}");
             }
         }
+    }
+
+    #[test]
+    fn the_key_buttons_are_at_their_widest_in_the_default_window() {
+        // From a window as wide as the default up, the panel is at its
+        // widest and so are the three key buttons.
+        for (w, h) in [DEFAULT_WINDOW, (1600.0, 1000.0)] {
+            let s = settings(w, h, SettingsShape::default());
+            let widths: Vec<f32> = s
+                .controls
+                .iter()
+                .filter(|(c, _)| matches!(c, Control::Key(_)))
+                .map(|(_, r)| r.w)
+                .collect();
+            assert_eq!(widths, [KEY_WIDTH; 3], "at {w}x{h}");
+        }
+    }
+
+    #[test]
+    fn the_key_buttons_sit_side_by_side_only_all_together() {
+        // "Convert SHIFT" is the longest; when it fits, all three do.
+        assert!(keys_side_by_side(KEY_WIDTH, &[100.0, 80.0, 86.0]));
+        assert!(keys_side_by_side(124.0, &[100.0, 80.0, 86.0]));
+        // One that doesn't fit stacks all three, not just itself.
+        assert!(!keys_side_by_side(120.0, &[100.0, 80.0, 86.0]));
+        assert!(!keys_side_by_side(92.0, &[100.0, 80.0, 86.0]));
     }
 
     #[test]

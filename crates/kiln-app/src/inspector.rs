@@ -23,7 +23,8 @@ pub enum InspectorControl {
     /// "More formats…", which opens the format choice.
     More,
     Cancel,
-    Save,
+    /// Export a held result, as the row's link and Export all do.
+    Export,
     ShowInFolder,
     Retry,
     ShowDetails,
@@ -156,7 +157,7 @@ impl InspectorControl {
     pub fn label(self) -> Option<&'static str> {
         match self {
             InspectorControl::Cancel => Some("Cancel"),
-            InspectorControl::Save => Some("Save"),
+            InspectorControl::Export => Some("Export"),
             InspectorControl::ShowInFolder => Some("Show in folder"),
             InspectorControl::Retry => Some("Retry"),
             InspectorControl::ShowDetails => Some("Show details"),
@@ -442,7 +443,7 @@ impl Inspector {
             },
             Inspector::Converting { .. } => vec![C::Cancel],
             Inspector::Done { kept, .. } => match kept {
-                Kept::Held => vec![C::Save],
+                Kept::Held => vec![C::Export],
                 Kept::InFolder => vec![C::ShowInFolder],
                 Kept::Dropped => vec![],
             },
@@ -1282,7 +1283,7 @@ mod tests {
             change: None,
             kept,
         };
-        assert_eq!(done(Kept::Held).controls(), [C::Save]);
+        assert_eq!(done(Kept::Held).controls(), [C::Export]);
         assert_eq!(done(Kept::InFolder).controls(), [C::ShowInFolder]);
         // Dragged out: nothing to save, and no folder to show.
         assert_eq!(done(Kept::Dropped).controls(), []);
@@ -1321,7 +1322,7 @@ mod tests {
         use InspectorControl as C;
         let labels: Vec<_> = [
             C::Cancel,
-            C::Save,
+            C::Export,
             C::ShowInFolder,
             C::Retry,
             C::ShowDetails,
@@ -1330,7 +1331,13 @@ mod tests {
         .to_vec();
         assert_eq!(
             labels,
-            ["Cancel", "Save", "Show in folder", "Retry", "Show details"]
+            [
+                "Cancel",
+                "Export",
+                "Show in folder",
+                "Retry",
+                "Show details"
+            ]
         );
         // A format, a kind and More say what they are in their own way.
         assert!([C::Target(0), C::Kind(0), C::More]

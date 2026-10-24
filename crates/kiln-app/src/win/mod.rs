@@ -818,6 +818,9 @@ struct App {
     /// What adding files last said, and when, so the footer's idle hint
     /// can take its place once it has been read.
     added: Option<(String, Instant)>,
+    /// The line last said about the work under way, so the footer can add
+    /// how to cancel the selected file while it still says it.
+    working: Option<String>,
     /// The last status that reported something going wrong or not
     /// happening. While the status still says it, it stands over the
     /// selection count.
@@ -1684,7 +1687,7 @@ impl App {
                 }
             }
             (C::Cancel, I::Converting { row, .. }) => self.cancel_row(*row),
-            (C::Save, I::Done { row, .. }) => self.export_row(*row),
+            (C::Export, I::Done { row, .. }) => self.export_row(*row),
             (C::ShowInFolder, I::Done { row, .. }) => self.show_row(*row),
             (C::Retry, I::Failed { row, .. }) => self.retry_row(*row),
             (C::ShowDetails, I::Failed { row, .. }) => self.show_details(*row),
@@ -3934,7 +3937,7 @@ impl App {
                 },
             );
         }
-        self.say(self.working_status());
+        self.say_working(self.working_status());
         self.sync_taskbar();
         self.held_changed();
         self.animate();
@@ -4063,7 +4066,7 @@ impl App {
                             .unwrap_or_default();
                         let cancelled = matches!(&result, Err(e) if e.cancelled);
                         let said = model::job_outcome(&name, result.is_ok(), cancelled);
-                        self.say(format!("{said} {}", self.working_status()));
+                        self.say_working(format!("{said} {}", self.working_status()));
                     }
                 }
                 if let Ok(outputs) = &result {
@@ -4219,16 +4222,21 @@ impl App {
         }
     }
 
-    /// What the footer says while jobs run: how many of them are done,
-    /// and how to stop the selected one.
+    /// What the footer says while jobs run: how many of them are done.
+    /// How to stop the selected one is added as the footer is drawn, from
+    /// the selection then (`ways_in::with_cancel_hint`).
     fn working_status(&self) -> String {
         let total: usize = self.batches.values().map(|b| b.groups).sum();
         let pending: usize = self.batches.values().map(|b| b.pending).sum();
-        let mut line = model::batch_progress(total - pending, total);
-        if self.footer_cancel() {
-            line.push_str(" Space cancels the selected file.");
-        }
-        line
+        model::batch_progress(total - pending, total)
+    }
+
+    /// Say `line` about the work under way, and remember it as that line,
+    /// so the footer adds how to cancel the selected file while it still
+    /// says it.
+    fn say_working(&mut self, line: String) {
+        self.say(line);
+        self.working = Some(self.status.clone());
     }
 
     /// The row for `path`, if it's waiting on job `id`: a row removed and
@@ -4506,7 +4514,14 @@ impl App {
         }
         self.close_wheel();
         self.help = Some(HelpUi {
-            sections: help::help_content(&self.settings.keys, self.holding.is_some()),
+            sections: help::help_content(
+                &self.settings.keys,
+                help::Results::of(
+                    self.holding.is_some(),
+                    self.settings.save_asked,
+                    self.settings.save_next_to_original,
+                ),
+            ),
             scroll: 0.0,
             hover: false,
             pressed: false,
@@ -6095,10 +6110,14 @@ impl App {
                 Some(hint) => self.sticky.unwrap_or(hint),
                 None => model::footer_status(&self.status, &plain, self.sticky),
             };
+        // While the work under way is what it says, it says how to cancel
+        // a selected file that is converting, as the selection is now.
+        let status =
+            ways_in::with_cancel_hint(status, self.working.as_deref(), self.footer_cancel());
         // While several rows are selected, their count stands over all of
         // that, unless something is running or went wrong.
         let count = model::selected_line(self.files.selected_rows().len());
-        ways_in::footer_line(status, count.as_deref(), running, self.alerting()).to_owned()
+        ways_in::footer_line(&status, count.as_deref(), running, self.alerting()).to_owned()
     }
 
     /// The empty window has no footer: what the status says, past the
@@ -6852,6 +6871,7 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         convert_pressed: false,
         last_add: None,
         added: None,
+        working: None,
         alert: None,
         uia: uia::Host::new(hwnd),
         progress: a11y::ProgressGate::default(),

@@ -28,9 +28,9 @@ background, right on your PC. Or select a file and press **Convert**.
 - **Quality you can set.** Resolution, frame rate, bitrate and page DPI, offered only where they fit the file, with an estimate of the result.
 - **Progress you can read.** A converting row says how far it has got and about how long is left, as in `Converting to WEBM · 38% · about 2 min`. **Cancel** is on the row, or in the panel for the selected file. A failed row says what went wrong in one plain line, and offers **Retry** when trying again can help. While Kiln works, its taskbar button shows the progress. When the last job ends while Kiln is behind other windows, the button flashes and a notification names the result.
 - **Offline.** Converting never touches the network. Nothing is uploaded, ever.
-- **Results wait for you.** A finished file waits in Kiln until you export it to a folder you pick, one at a time or all at once, or drag it out. With **Save results next to the original** on, each result is saved beside its file as soon as it's ready. Kiln asks about this once, the first time a result is ready, and Settings changes it. Kiln never overwrites a file: a taken name becomes `name (1).jpg`.
-- **Files are checked when added.** An empty file, a file that isn't what its name says, or one Windows won't let Kiln read says so on its row, and isn't offered for converting. Kiln offers only what it can make with the helper apps it finds, and a file that needs a missing one says which, with a link to its download page.
-- **Folders too.** Drop or add a folder and Kiln adds its files, and those of the folders directly inside it, and says how many: `Added 12 files from Holiday.`
+- **Results wait for you.** A finished file waits in Kiln until you export it to a folder you pick, one at a time or all at once, or drag it out. With **Save results next to the original** on, each result is saved beside its file as soon as it's ready. Kiln asks about this once, the first time a result is ready, and Settings changes it. Kiln never overwrites a file without asking: exporting into a folder makes a taken name `name (1).jpg`.
+- **Files are checked when added.** An empty file, a file that isn't what its name says, or one Windows won't let Kiln read says so on its row, and isn't offered for converting. Kiln offers only what it can make with the helper apps it finds, and a file that needs a missing one says which, with **Get FFmpeg** (or the app it needs) to open its download page: a button in the panel, or a link on the row.
+- **Folders too.** Drop, paste or send a folder to Kiln and it adds its files, and those of the folders directly inside it, and says how many: `Added 12 files from Holiday.`
 - **Undo.** Removing several rows can be undone with **Undo** in the footer, or <kbd>Ctrl</kbd>+<kbd>Z</kbd>.
 - **Small and quick.** A single native executable of about 8.6 MB, drawn with Direct2D. No web view. The window is up in under 100 ms.
 - **Other ways in.** **Add files** or <kbd>Ctrl</kbd>+<kbd>O</kbd> opens the Windows Open dialog, <kbd>Ctrl</kbd>+<kbd>V</kbd> adds files copied in File Explorer, and right-clicking a row opens a menu with every wheel.
@@ -206,8 +206,9 @@ up, so a 720p clip stays 720p when the cap is 1080p.
 
 Images convert out of the box. The other kinds use free helper apps that Kiln
 finds on your PC. It never bundles or downloads them. A file that needs a
-missing one says so on its row, with a link such as **Get FFmpeg** to the app's
-own download page.
+missing one says so, with **Get FFmpeg** (or the app it needs) to open the
+app's own download page: a button in the panel beside the list, or a link on
+the row when the panel is folded away.
 
 | Helper app | Needed for |
 |---|---|
