@@ -1351,16 +1351,24 @@ fn snap(v: f32) -> f32 {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InspectorShape {
     /// Nothing selected: the mark in the hero's place, then a title
-    /// `title_h` tall and a body `body_h` tall, each wrapped.
-    Nothing { title_h: f32, body_h: f32 },
+    /// `title_h` tall, the key hint `hint_h` tall and the privacy line
+    /// `privacy_h` tall, each wrapped.
+    Nothing {
+        title_h: f32,
+        hint_h: f32,
+        privacy_h: f32,
+    },
     /// One file nothing has been done to. `what_h` is the height of what
     /// the format is, wrapped (0 for none); `facts` the labelled facts;
-    /// `targets` the formats offered; `more` whether More follows them.
+    /// `targets` the formats offered; `more` how wide More's words are,
+    /// when it follows them. Then its `buttons`, where the formats would
+    /// be: Get, for a file waiting on its helper app.
     Waiting {
         what_h: f32,
         facts: usize,
         targets: usize,
-        more: bool,
+        more: Option<f32>,
+        buttons: usize,
     },
     /// A running job: the percentage and the time left in the body, and
     /// its `buttons` (Cancel).
@@ -1394,9 +1402,21 @@ pub struct InspectorLayout {
     /// to go when the inspector is short.
     pub hero: Rect,
     pub title: Rect,
-    /// What the format is, the sentence, or the lines of a running or
-    /// finished job (a running job's 40 DIP percentage, then a 20 DIP
-    /// time line). Empty when the shape has none.
+    /// The texts under the title, one rect each, in the order the shape
+    /// has them whether or not there is one to show:
+    /// - Nothing: the key hint, then the privacy line;
+    /// - Waiting: what the format is;
+    /// - Converting: the 40 DIP percentage, then the 20 DIP time line;
+    /// - Done: the 20 DIP result, the 20 DIP change, then the drag-out
+    ///   hint;
+    /// - Failed: the sentence;
+    /// - Several: why the files share no format.
+    ///
+    /// A text the shape doesn't have, or that has no room, is 0 tall:
+    /// it is neither drawn nor read out. See [`InspectorLayout::line`].
+    pub lines: Vec<Rect>,
+    /// Where those texts run, from the first placed to the last. Empty
+    /// when none is.
     pub body: Rect,
     /// One rect per fact, [`FACT_HEIGHT`] tall.
     pub facts: Vec<Rect>,
@@ -1412,8 +1432,20 @@ pub struct InspectorLayout {
     pub buttons: Vec<Rect>,
 }
 
+impl InspectorLayout {
+    /// Where the body's `k`th text goes (see [`InspectorLayout::lines`]),
+    /// while it has room.
+    pub fn line(&self, k: usize) -> Option<Rect> {
+        self.lines.get(k).copied().filter(|r| r.h > 0.0)
+    }
+}
+
 /// Width of an inspector button.
 pub const INSPECTOR_BUTTON_WIDTH: f32 = 96.0;
+
+/// How far a link's hit area runs past the end of its words, so the
+/// pointer has some room past the last letter and the focus ring clears it.
+pub const LINK_PAD: f32 = 8.0;
 
 /// How wide the inspector's text runs: its width inside the padding.
 pub const INSPECTOR_TEXT_WIDTH: f32 = INSPECTOR_WIDTH - 2.0 * PANEL_PADDING;
@@ -1431,19 +1463,21 @@ pub const TITLE_LINES: usize = 2;
 /// What the format is, a failure's sentence and why several files share no
 /// format take at most four lines.
 pub const BODY_LINES: usize = 4;
-/// Nothing's body, the key hint then the privacy line, takes at most six.
-pub const NOTHING_LINES: usize = 6;
+/// Nothing's key hint takes at most four lines, and its privacy line two.
+pub const HINT_LINES: usize = 4;
+pub const PRIVACY_LINES: usize = 2;
 /// The hint that a result can be dragged out takes at most two.
 pub const DRAG_LINES: usize = 2;
 
 /// The shape of what `model` shows. Each text that wraps is measured with
 /// `measure`: its height in DIPs at [`INSPECTOR_TEXT_WIDTH`], as it wraps
-/// (`Wrapped`). `nothing` is Nothing's body: the key hint, then the
-/// privacy line. The buttons are the controls that aren't a format, a
-/// kind or More.
+/// (`Wrapped`). `nothing` is what Nothing says under its title: the key
+/// hint, then the privacy line. `more_w` is how wide More's words are. The
+/// buttons are the controls that aren't a format, a kind or More.
 pub fn inspector_shape(
     model: &Inspector,
-    nothing: &str,
+    nothing: [&str; 2],
+    more_w: f32,
     measure: &dyn Fn(&str, Wrapped) -> f32,
 ) -> InspectorShape {
     let wrapped = |s: Option<&str>, w: Wrapped| s.map_or(0.0, |s| measure(s, w));
@@ -1460,7 +1494,8 @@ pub fn inspector_shape(
     match model {
         Inspector::Nothing => InspectorShape::Nothing {
             title_h: measure(NOTHING_TITLE, Wrapped::Title(TITLE_LINES)),
-            body_h: measure(nothing, Wrapped::Body(NOTHING_LINES)),
+            hint_h: measure(nothing[0], Wrapped::Body(HINT_LINES)),
+            privacy_h: measure(nothing[1], Wrapped::Body(PRIVACY_LINES)),
         },
         Inspector::Waiting {
             what,
@@ -1472,7 +1507,8 @@ pub fn inspector_shape(
             what_h: wrapped(*what, Wrapped::Body(BODY_LINES)),
             facts: facts.len(),
             targets: targets.len(),
-            more: *more,
+            more: more.then_some(more_w),
+            buttons,
         },
         Inspector::Converting { .. } => InspectorShape::Converting { buttons },
         Inspector::Done { change, kept, .. } => InspectorShape::Done {
@@ -1563,6 +1599,7 @@ fn inspector_stack(
     const LABEL: f32 = 16.0;
     const MORE: f32 = 24.0;
     const LINE: f32 = 20.0;
+    const FIGURE: f32 = 40.0;
     let inner = r.inset(PANEL_PADDING);
     let mut s = Stack {
         inner,
@@ -1570,37 +1607,35 @@ fn inspector_stack(
         placed: false,
         fits: true,
     };
-    // The title's height, the body's, the facts, the targets, whether
-    // More follows them, and the buttons.
-    let (title_h, body_h, fact_count, targets, more, buttons) = match *shape {
-        InspectorShape::Nothing { title_h, body_h } => (title_h, body_h, 0, 0, false, 0),
+    // The title's height, each text's under it (see `lines`), the facts,
+    // the targets, how wide More is when it follows them, and the buttons.
+    let (title_h, heights, fact_count, targets, more, buttons) = match *shape {
+        InspectorShape::Nothing {
+            title_h,
+            hint_h,
+            privacy_h,
+        } => (title_h, vec![hint_h, privacy_h], 0, 0, None, 0),
         InspectorShape::Waiting {
             what_h,
             facts,
             targets,
             more,
-        } => (TITLE, what_h, facts, targets, more, 0),
-        InspectorShape::Converting { buttons } => (TITLE, 60.0, 0, 0, false, buttons),
+            buttons,
+        } => (TITLE, vec![what_h], facts, targets, more, buttons),
+        InspectorShape::Converting { buttons } => (TITLE, vec![FIGURE, LINE], 0, 0, None, buttons),
         InspectorShape::Done {
             change,
             drag_h,
             buttons,
         } => {
-            let lines = 1 + u8::from(change);
-            (
-                TITLE,
-                LINE * f32::from(lines) + drag_h,
-                0,
-                0,
-                false,
-                buttons,
-            )
+            let change_h = if change { LINE } else { 0.0 };
+            (TITLE, vec![LINE, change_h, drag_h], 0, 0, None, buttons)
         }
         InspectorShape::Failed {
             sentence_h,
             buttons,
-        } => (TITLE, sentence_h, 0, 0, false, buttons),
-        InspectorShape::Several { targets, none_h } => (TITLE, none_h, 0, targets, false, 0),
+        } => (TITLE, vec![sentence_h], 0, 0, None, buttons),
+        InspectorShape::Several { targets, none_h } => (TITLE, vec![none_h], 0, targets, None, 0),
     };
 
     // Without the hero the stack starts at the title, and when the hero
@@ -1609,12 +1644,22 @@ fn inspector_stack(
     let hero = s.or_empty(hero);
     let title = s.place(12.0, title_h);
     let title = s.or_empty(title);
-    let body = if body_h > 0.0 {
-        s.place(8.0, body_h)
-    } else {
-        None
+    // The texts one under the next, the first 8 below the title. One with
+    // nothing to show takes no room, and one without room is 0 tall.
+    let mut lines = Vec::with_capacity(heights.len());
+    let mut span: Option<(Rect, Rect)> = None;
+    for h in heights {
+        let gap = if span.is_some() { 0.0 } else { 8.0 };
+        let at = if h > 0.0 { s.place(gap, h) } else { None };
+        if let Some(r) = at {
+            span = Some(span.map_or((r, r), |(first, _)| (first, r)));
+        }
+        lines.push(s.or_empty(at));
+    }
+    let body = match span {
+        Some((first, last)) => Rect::new(first.x, first.y, first.w, last.bottom() - first.y),
+        None => s.or_empty(None),
     };
-    let body = s.or_empty(body);
 
     let facts: Vec<Rect> = if facts {
         (0..fact_count)
@@ -1636,7 +1681,17 @@ fn inspector_stack(
             label = None;
         }
     }
-    let more = if more { s.place(6.0, MORE) } else { None };
+    // More's hit area is its words and a link's room past them, as wide
+    // as the pointer, the focus ring and the tree all take it.
+    let more = more.and_then(|w| {
+        let line = s.place(6.0, MORE)?;
+        Some(Rect::new(
+            line.x,
+            line.y,
+            (w + LINK_PAD).min(line.w),
+            line.h,
+        ))
+    });
 
     // The buttons in a row, as many as fit across the padded width.
     let step = INSPECTOR_BUTTON_WIDTH + 8.0;
@@ -1665,6 +1720,7 @@ fn inspector_stack(
     let layout = InspectorLayout {
         hero,
         title,
+        lines,
         body,
         facts,
         label,
@@ -2913,7 +2969,8 @@ mod tests {
                 what_h: 40.0,
                 facts: 3,
                 targets: 3,
-                more: true,
+                more: Some(MORE_W),
+                buttons: 0,
             },
         );
         let inner = r.inset(16.0);
@@ -2924,18 +2981,23 @@ mod tests {
         assert!(l.more.is_none());
     }
 
+    /// How wide "More formats…" is at 13 px, near enough.
+    const MORE_W: f32 = 88.0;
+
     /// Every shape the inspector can take, with the most parts it has.
-    fn every_shape() -> [InspectorShape; 7] {
+    fn every_shape() -> [InspectorShape; 8] {
         [
             InspectorShape::Nothing {
                 title_h: 40.0,
-                body_h: 104.0,
+                hint_h: 68.0,
+                privacy_h: 36.0,
             },
             InspectorShape::Waiting {
                 what_h: 40.0,
                 facts: 4,
                 targets: 3,
-                more: true,
+                more: Some(MORE_W),
+                buttons: 0,
             },
             InspectorShape::Converting { buttons: 1 },
             InspectorShape::Done {
@@ -2955,6 +3017,15 @@ mod tests {
                 targets: 0,
                 none_h: 80.0,
             },
+            // A file waiting on its helper app: Get where its formats
+            // would be.
+            InspectorShape::Waiting {
+                what_h: 40.0,
+                facts: 4,
+                targets: 0,
+                more: None,
+                buttons: 1,
+            },
         ]
     }
 
@@ -2966,8 +3037,9 @@ mod tests {
                 facts,
                 targets,
                 more,
+                buttons,
                 ..
-            } => (facts, targets, more, 0),
+            } => (facts, targets, more.is_some(), buttons),
             InspectorShape::Several { targets, .. } => (0, targets, false, 0),
             InspectorShape::Converting { buttons }
             | InspectorShape::Done { buttons, .. }
@@ -2978,17 +3050,14 @@ mod tests {
     /// The parts of an inspector layout that stand, in reading order, with
     /// every button slot.
     fn every_rect(l: &InspectorLayout) -> Vec<(String, Rect)> {
-        let mut parts = vec![
-            ("hero".to_string(), l.hero),
-            ("title".to_string(), l.title),
-            ("body".to_string(), l.body),
-        ];
+        let mut parts = vec![("hero".to_string(), l.hero), ("title".to_string(), l.title)];
         let numbered = |name: &str, rs: &[Rect]| -> Vec<(String, Rect)> {
             rs.iter()
                 .enumerate()
                 .map(|(i, r)| (format!("{name} {i}"), *r))
                 .collect()
         };
+        parts.extend(numbered("line", &l.lines));
         parts.extend(numbered("fact", &l.facts));
         parts.extend(l.label.map(|r| ("label".to_string(), r)));
         parts.extend(numbered("target", &l.targets));
@@ -3015,7 +3084,8 @@ mod tests {
                 what_h: 40.0,
                 facts: 3,
                 targets: 3,
-                more: true,
+                more: Some(MORE_W),
+                buttons: 0,
             },
         );
         // The hero, then 12, the title, 8, the body, 12, the facts one
@@ -3025,6 +3095,7 @@ mod tests {
         assert_eq!(waiting.title.h, 24.0);
         assert_eq!(waiting.body.y, waiting.title.bottom() + 8.0);
         assert_eq!(waiting.body.h, 40.0);
+        assert_eq!(waiting.lines, [waiting.body]);
         assert_eq!(waiting.facts.len(), 3);
         assert_eq!(waiting.facts[0].y, waiting.body.bottom() + 12.0);
         for pair in waiting.facts.windows(2) {
@@ -3043,16 +3114,34 @@ mod tests {
         let more = waiting.more.unwrap();
         assert_eq!(more.y, waiting.targets[2].bottom() + 6.0);
         assert_eq!(more.h, 24.0);
+        // More is as wide as its words and a link's room past them.
+        assert_eq!((more.x, more.w), (inner.x, MORE_W + LINK_PAD));
         assert!(waiting.buttons.is_empty());
-        // Every part is as wide as the padding leaves.
+        // Every other part is as wide as the padding leaves.
         for (name, p) in standing(&waiting) {
-            assert_eq!((p.x, p.w), (inner.x, inner.w), "{name}");
+            if name != "more" {
+                assert_eq!((p.x, p.w), (inner.x, inner.w), "{name}");
+            }
         }
 
-        // A running job: the percentage and the time left share the body,
-        // and Cancel follows, 12 below.
+        // A file waiting on its helper app: Get where the formats would
+        // be, 12 under the facts.
+        let get = inspector_layout(&r, &every_shape()[7]);
+        assert!(get.label.is_none() && get.targets.is_empty() && get.more.is_none());
+        assert_eq!(get.buttons.len(), 1);
+        assert_eq!(get.buttons[0].y, get.facts[3].bottom() + 12.0);
+        assert_eq!(get.buttons[0].x, inner.x);
+
+        // A running job: the percentage, then the time left under it, and
+        // Cancel follows, 12 below.
         let running = inspector_layout(&r, &InspectorShape::Converting { buttons: 1 });
         assert_eq!(running.body.h, 40.0 + 20.0);
+        assert_eq!(running.line(0).unwrap().h, 40.0);
+        assert_eq!(
+            running.line(1).unwrap().y,
+            running.line(0).unwrap().bottom()
+        );
+        assert_eq!(running.line(1).unwrap().h, 20.0);
         assert!(running.facts.is_empty() && running.label.is_none());
         assert_eq!(running.buttons.len(), 1);
         let cancel = running.buttons[0];
@@ -3096,6 +3185,13 @@ mod tests {
         assert_eq!(done(true, 0.0, 1).body.h, 40.0);
         assert_eq!(done(false, 34.0, 1).body.h, 54.0);
         assert_eq!(done(true, 34.0, 1).body.h, 74.0);
+        // Each text has its own line; one it hasn't takes no room.
+        let heights = |l: &InspectorLayout| l.lines.iter().map(|r| r.h).collect::<Vec<_>>();
+        assert_eq!(heights(&done(true, 34.0, 1)), [20.0, 20.0, 34.0]);
+        assert_eq!(heights(&done(false, 34.0, 1)), [20.0, 0.0, 34.0]);
+        let no_change = done(false, 34.0, 1);
+        assert_eq!(no_change.line(1), None);
+        assert_eq!(no_change.lines[2].y, no_change.lines[0].bottom());
         assert_eq!(done(true, 34.0, 1).buttons.len(), 1);
         assert!(done(true, 34.0, 0).buttons.is_empty());
         let full = done(true, 34.0, 1);
@@ -3138,7 +3234,8 @@ mod tests {
             &r,
             &InspectorShape::Nothing {
                 title_h: 40.0,
-                body_h: 70.0,
+                hint_h: 50.0,
+                privacy_h: 20.0,
             },
         );
         assert_eq!((nothing.hero.w, nothing.hero.h), HERO);
@@ -3146,6 +3243,10 @@ mod tests {
         assert_eq!((nothing.title.h, nothing.body.h), (40.0, 70.0));
         assert_eq!(nothing.title.y, nothing.hero.bottom() + 12.0);
         assert_eq!(nothing.body.y, nothing.title.bottom() + 8.0);
+        // The key hint and the privacy line each have their own place.
+        let (hint, privacy) = (nothing.line(0).unwrap(), nothing.line(1).unwrap());
+        assert_eq!((hint.y, hint.h), (nothing.body.y, 50.0));
+        assert_eq!((privacy.y, privacy.h), (hint.bottom(), 20.0));
         assert!(nothing.facts.is_empty() && nothing.label.is_none());
         assert!(nothing.targets.is_empty() && nothing.more.is_none());
         assert!(nothing.buttons.is_empty());
@@ -3157,7 +3258,8 @@ mod tests {
             what_h: 40.0,
             facts: 3,
             targets: 3,
-            more: true,
+            more: Some(MORE_W),
+            buttons: 0,
         };
         // A window 800 x 480 gives the inspector 300 x 348: too short for
         // the picture and the facts with the targets. The targets and More
@@ -3207,14 +3309,16 @@ mod tests {
         let r = layout(800.0, 480.0, 3).inspector.unwrap();
         let shape = InspectorShape::Nothing {
             title_h: 40.0,
-            body_h: 104.0,
+            hint_h: 68.0,
+            privacy_h: 36.0,
         };
         let l = inspector_layout(&r, &shape);
         assert_eq!(l.hero.h, HERO.1);
         assert_eq!((l.title.h, l.body.h), (40.0, 104.0));
         let inner = r.inset(16.0);
         let parts = every_rect(&l);
-        assert_eq!(parts.len(), 3, "{parts:?}");
+        // The mark, the title, the key hint and the privacy line.
+        assert_eq!(parts.len(), 4, "{parts:?}");
         for (i, (name, p)) in parts.iter().enumerate() {
             assert!(p.y >= inner.y && p.bottom() <= inner.bottom(), "{name}");
             assert!(p.x >= inner.x && p.right() <= inner.right(), "{name}");
@@ -3233,12 +3337,13 @@ mod tests {
             Wrapped::Title(n) => 10_000.0 + s.len() as f32 + 1000.0 * n as f32,
             Wrapped::Body(n) => s.len() as f32 + 1000.0 * n as f32,
         };
-        let shape = |m: &Inspector| inspector_shape(m, "keys\nprivacy", &measure);
+        let shape = |m: &Inspector| inspector_shape(m, ["keys", "privacy"], MORE_W, &measure);
         assert_eq!(
             shape(&Inspector::Nothing),
             InspectorShape::Nothing {
                 title_h: 12_000.0 + NOTHING_TITLE.len() as f32,
-                body_h: 6012.0,
+                hint_h: 4004.0,
+                privacy_h: 2007.0,
             }
         );
         let target = |ext: &str| Target {
@@ -3253,6 +3358,7 @@ mod tests {
             facts: vec![("Size", "1 MB".to_owned()), ("Folder", "x".to_owned())],
             targets: vec![target("webp"), target("avif")],
             more: true,
+            helper: None,
         };
         assert_eq!(
             shape(&waiting),
@@ -3260,13 +3366,33 @@ mod tests {
                 what_h: 4004.0,
                 facts: 2,
                 targets: 2,
-                more: true
+                more: Some(MORE_W),
+                buttons: 0,
+            }
+        );
+        // Waiting on its helper app: no formats, and Get as a button.
+        let needs = Inspector::Waiting {
+            row: 0,
+            what: None,
+            facts: vec![("Size", "1 MB".to_owned())],
+            targets: vec![],
+            more: false,
+            helper: Some("Get FFmpeg"),
+        };
+        assert_eq!(
+            shape(&needs),
+            InspectorShape::Waiting {
+                what_h: 0.0,
+                facts: 1,
+                targets: 0,
+                more: None,
+                buttons: 1,
             }
         );
         let converting = Inspector::Converting {
             row: 0,
             percent: None,
-            left: None,
+            time: String::new(),
         };
         assert_eq!(
             shape(&converting),
@@ -3298,6 +3424,7 @@ mod tests {
         let failed = Inspector::Failed {
             row: 0,
             sentence: "abc".to_owned(),
+            tone: crate::model::Tone::Crack,
             retry: true,
             details: true,
         };

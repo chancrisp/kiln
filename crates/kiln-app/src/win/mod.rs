@@ -12,7 +12,7 @@ mod tips;
 mod uia;
 mod updates;
 
-use std::cell::{Cell, OnceCell, RefCell};
+use std::cell::{Cell, OnceCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -600,9 +600,9 @@ struct Panel {
     rect: layout::Rect,
     /// What it says.
     model: insp::Inspector,
-    /// Nothing's body as it was built with: the key hint, then the privacy
-    /// line.
-    nothing: String,
+    /// What Nothing says under its title as it was built with: the key
+    /// hint, then the privacy line.
+    nothing: (String, &'static str),
     layout: layout::InspectorLayout,
     /// Its controls that are placed, in reading order, with where each is.
     /// The pointer, Tab, the drawing and the tree all go by these.
@@ -830,9 +830,42 @@ struct App {
     /// acts when the pointer is released over it.
     panel_hover: Option<InspectorControl>,
     panel_pressed: Option<InspectorControl>,
-    /// Finished results' sizes as first read, for the inspector's before
-    /// and after, so the disk is asked once for each.
-    result_sizes: RefCell<HashMap<PathBuf, Option<u64>>>,
+    /// What the inspector was last built from, so a message that changed
+    /// none of it builds nothing: see `refresh_panel`.
+    panel_built: Option<PanelInputs>,
+    /// Moves when something the inspector is built from changes outside
+    /// the list: Settings, the habits, a result's size, the Text size.
+    panel_rev: u64,
+    /// Finished results' sizes, for the inspector's before and after. The
+    /// runner's thread reads them as each job finishes, so the window
+    /// never waits on the disk for them; a result not here has no size to
+    /// show yet.
+    result_sizes: HashMap<PathBuf, u64>,
+}
+
+/// What the inspector is built from: the list's revision, the window's
+/// own (`App::panel_rev`) and the window's size in DIPs.
+type PanelInputs = (u64, u64, (f32, f32));
+
+/// A job's news as the runner's thread posts it: the event and, for a
+/// finished job, its results' sizes, read there and then.
+struct JobNews {
+    event: JobEvent,
+    sizes: Vec<(PathBuf, u64)>,
+}
+
+impl JobNews {
+    /// What the runner's thread posts for `event`.
+    fn of(event: JobEvent) -> Self {
+        let sizes = match &event {
+            JobEvent::Finished(_, Ok(outputs)) => outputs
+                .iter()
+                .filter_map(|p| Some((p.clone(), std::fs::metadata(p).ok()?.len())))
+                .collect(),
+            _ => vec![],
+        };
+        JobNews { event, sizes }
+    }
 }
 
 impl App {
@@ -869,6 +902,7 @@ impl App {
             return;
         }
         self.zoom = zoom;
+        self.panel_stale();
         let dpi = self.unit_dpi();
         self.renderer.set_dpi(dpi);
         if let Some(t) = &self.tips {
@@ -887,6 +921,7 @@ impl App {
             return;
         }
         self.text_scale = scale;
+        self.panel_stale();
         let (w, h) = self.client_dips();
         let (mw, mh) = layout::min_window(scale);
         if w < mw || h < mh {
@@ -1122,15 +1157,28 @@ impl App {
     // The inspector.
 
     /// Build the inspector again for the selection as it is now, when what
-    /// it says or where it is has changed: the selection, a row's job, its
-    /// facts or its results, the window's size. Its words are measured only
-    /// when they change. A control the keyboard or the pointer was on that
-    /// has gone hands the focus back to the list; one still there keeps it.
+    /// it is built from has changed: the list's revision (the selection, a
+    /// row's job, its facts or its results), the window's own (Settings,
+    /// the habits, a result's size, the Text size) or the window's size.
+    /// Otherwise it does nothing at all. Its words are measured only when
+    /// they change. A control the keyboard or the pointer was on that has
+    /// gone hands the focus back to the list; one still there keeps it.
     /// Run after every message and before every frame.
     fn refresh_panel(&mut self) {
         if self.destroyed {
             return;
         }
+        // Nothing it is built from has changed: nothing to do, and nothing
+        // allocated to find that out.
+        let inputs = (
+            self.files.revision(),
+            self.panel_rev,
+            self.renderer.size_dips(),
+        );
+        if self.panel_built == Some(inputs) {
+            return;
+        }
+        self.panel_built = Some(inputs);
         let Some(rect) = self.layout().inspector else {
             if self.panel.take().is_some() {
                 self.panel_lost();
@@ -1142,13 +1190,7 @@ impl App {
             let kiln = &self.kiln;
             let sizes = &self.result_sizes;
             let kind = |e: &model::Entry| kind_of(kiln, e);
-            // A result's size is read once, not on every message.
-            let size = |p: &Path| -> Option<u64> {
-                *sizes
-                    .borrow_mut()
-                    .entry(p.to_path_buf())
-                    .or_insert_with(|| std::fs::metadata(p).ok().map(|m| m.len()))
-            };
+            let size = |p: &Path| sizes.get(p).copied();
             let look = insp::Lookups {
                 kind_of: &kind,
                 size_of: &size,
@@ -1156,7 +1198,7 @@ impl App {
             insp::inspect(&self.files, &look, &self.settings.habits)
         };
         let lines = ways_in::empty_lines(&self.settings);
-        let nothing = format!("{}\n{}", lines.keys, lines.privacy);
+        let nothing = (lines.keys, lines.privacy);
         if self
             .panel
             .as_ref()
@@ -1168,7 +1210,8 @@ impl App {
         let measure = |s: &str, how: layout::Wrapped| {
             renderer.inspector_text_height(s, how, layout::INSPECTOR_TEXT_WIDTH)
         };
-        let shape = layout::inspector_shape(&model, &nothing, &measure);
+        let said = [nothing.0.as_str(), nothing.1];
+        let shape = layout::inspector_shape(&model, said, renderer.more_width(), &measure);
         let il = layout::inspector_layout(&rect, &shape);
         let controls = a11y::inspector_controls(&model, &il);
         let glazes = self.offer_glazes(&model);
@@ -1182,6 +1225,12 @@ impl App {
         });
         self.panel_lost();
         self.invalidate();
+    }
+
+    /// Something the inspector is built from changed outside the list:
+    /// build it again after this message.
+    fn panel_stale(&mut self) {
+        self.panel_rev = self.panel_rev.wrapping_add(1);
     }
 
     /// The inspector changed or went: a control the keyboard, the pointer
@@ -1232,14 +1281,14 @@ impl App {
         match (c, &model) {
             (C::Target(k), I::Waiting { row, targets, .. }) => {
                 if let (Some(t), Some(file)) = (targets.get(k), path(self, *row)) {
-                    self.start(Action::Convert(t.ext.clone()), vec![file], None);
+                    self.convert_now(&t.ext, vec![file]);
                 }
             }
             // Every selected file shares the format, not just those pictured.
             (C::Target(k), I::Several { targets, .. }) => {
                 if let Some(t) = targets.get(k) {
                     let paths = self.selected_paths();
-                    self.start(Action::Convert(t.ext.clone()), paths, None);
+                    self.convert_now(&t.ext, paths);
                 }
             }
             (C::More, I::Waiting { row, .. }) => {
@@ -1256,6 +1305,18 @@ impl App {
                     self.select_kind(code, keyboard);
                 }
             }
+            // The row's own way to get its helper app.
+            (C::GetHelper, I::Waiting { row, .. }) => {
+                let backend = self
+                    .files
+                    .entries()
+                    .get(*row)
+                    .and_then(|e| e.needs_helper())
+                    .map(str::to_owned);
+                if let Some(backend) = backend {
+                    self.get_helper(&backend);
+                }
+            }
             (C::Cancel, I::Converting { row, .. }) => self.cancel_row(*row),
             (C::Save, I::Done { row, .. }) => self.export_row(*row),
             (C::ShowInFolder, I::Done { row, .. }) => self.show_row(*row),
@@ -1266,6 +1327,16 @@ impl App {
         self.invalidate();
     }
 
+    /// Convert `paths` to `ext` from the inspector, unless one of them is
+    /// converting already: then the footer says so, as the format choice
+    /// would.
+    fn convert_now(&mut self, ext: &str, paths: Vec<PathBuf>) {
+        match self.files.convert_busy(&paths) {
+            Some(why) => self.alert(why.to_owned()),
+            None => self.start(Action::Convert(ext.to_owned()), paths, None),
+        }
+    }
+
     /// Narrow the selection to its files of type `code`, as the inspector
     /// offers when several files share no format.
     fn select_kind(&mut self, code: &str, keyboard: bool) {
@@ -1274,12 +1345,7 @@ impl App {
             .files
             .selection()
             .into_iter()
-            .filter(|&i| {
-                entries.get(i).is_some_and(|e| {
-                    let own = if e.code.is_empty() { "Other" } else { &e.code };
-                    own == code
-                })
-            })
+            .filter(|&i| entries.get(i).is_some_and(|e| insp::type_code(e) == code))
             .collect();
         let Some(&first) = rows.first() else {
             return;
@@ -1361,7 +1427,7 @@ impl App {
                 self.helper_notice = true;
                 let name = model::helper_name(&backend);
                 self.alert(format!(
-                    "{name} isn't installed, so some files can't be converted yet. Use Get {name} on their rows."
+                    "{name} isn't installed, so some files can't be converted yet. Use Get {name} to download it."
                 ));
             }
         }
@@ -1676,9 +1742,20 @@ impl App {
         }
         .as_bool()
         {
-            let ev = unsafe { Box::from_raw(msg.lParam.0 as *mut JobEvent) };
-            self.on_job(*ev);
+            let news = unsafe { Box::from_raw(msg.lParam.0 as *mut JobNews) };
+            self.on_job_news(*news);
         }
+    }
+
+    /// A job's news from the runner's thread: its results' sizes, then
+    /// the event.
+    fn on_job_news(&mut self, news: JobNews) {
+        if !news.sizes.is_empty() {
+            // A result written where an older one was has its new size.
+            self.result_sizes.extend(news.sizes);
+            self.panel_stale();
+        }
+        self.on_job(news.event);
     }
 
     /// The held files exports are moving now.
@@ -2452,6 +2529,12 @@ impl App {
         if !moved.is_empty() {
             self.last_export = Some(folder.to_path_buf());
         }
+        // A result keeps its size where it went.
+        for (from, to) in &moved {
+            if let Some(size) = self.result_sizes.remove(from) {
+                self.result_sizes.insert(to.clone(), size);
+            }
+        }
         self.files.exported(&moved, folder);
         let failed_files: Vec<PathBuf> = failed.iter().map(|f| (*f).clone()).collect();
         self.files.export_failed(&failed_files);
@@ -2563,12 +2646,10 @@ impl App {
         let Some(e) = self.files.entries().get(i) else {
             return;
         };
-        if let (JobState::Idle, Some((backend, _)), true) =
-            (&e.job, &e.missing, e.targets.is_empty())
-        {
+        if let Some(backend) = e.needs_helper().map(str::to_owned) {
             // Nothing can be done with this file until its helper app is
             // installed: the link goes to where to get it.
-            self.get_helper(&backend.clone());
+            self.get_helper(&backend);
         } else if matches!(e.job, JobState::Idle) {
             // A file nothing has been done to: its link asks what to do.
             let paths = vec![e.path.clone()];
@@ -2816,15 +2897,12 @@ impl App {
         at: (f32, f32),
         keyboard: bool,
     ) {
-        let busy = kind == WheelKind::Convert
-            && paths.iter().any(|p| {
-                self.files
-                    .index_of(p)
-                    .and_then(|i| self.files.entries().get(i))
-                    .is_some_and(|e| matches!(e.job, JobState::Running { .. }))
-            });
-        let said = if busy {
-            model::convert_block(paths.len(), 1).map(str::to_owned)
+        let busy = match kind {
+            WheelKind::Convert => self.files.convert_busy(&paths),
+            _ => None,
+        };
+        let said = if let Some(why) = busy {
+            Some(why.to_owned())
         } else {
             let offer = wheel::offer(kind, &self.kiln, self.availability(), &paths);
             wheel::offer_sentence(kind, &offer)
@@ -3512,6 +3590,8 @@ impl App {
         for (from, to) in &picks {
             self.settings.habits.record(from, to);
         }
+        // The inspector's formats follow the habits.
+        self.panel_stale();
         let changed = favourites(&self.settings.habits) != before;
         // Picks can't change the engines, so the cached search stands.
         // Not over a settings.toml that couldn't be read: see Store.
@@ -3551,13 +3631,6 @@ impl App {
                     return;
                 };
                 let now = Instant::now();
-                // A result written where an older one was is read afresh.
-                if let Ok(outputs) = &result {
-                    let mut sizes = self.result_sizes.borrow_mut();
-                    for p in outputs {
-                        sizes.remove(p);
-                    }
-                }
                 let state = match &result {
                     Ok(outputs) => JobState::Done {
                         action: job.action.clone(),
@@ -3938,6 +4011,7 @@ impl App {
         let (s, err) = self.settings_store.load();
         self.settings = s;
         self.engines.forget();
+        self.panel_stale();
         if let Some(e) = err {
             self.alert(format!("{e}. Using the defaults."));
             log(&self.status);
@@ -3982,8 +4056,10 @@ impl App {
 
     /// Save after an explicit change in Settings.
     fn save_settings(&mut self) {
-        // The engines may be others now.
+        // The engines may be others now, and the inspector's words with
+        // the keys.
         self.engines.forget();
+        self.panel_stale();
         if let Err(e) = self.settings_store.save(&self.settings) {
             self.alert(e);
         }
@@ -5756,7 +5832,7 @@ impl App {
                 // Nothing over the list: a wheel or panel takes the pointer.
                 hover: self.panel_hover.filter(|_| self.over().list_live()),
                 pressed: self.panel_pressed,
-                nothing: &p.nothing,
+                nothing: [&p.nothing.0, p.nothing.1],
             }),
             sheet: match (&self.sheet, &sheet_layout, &sheet_lines) {
                 (Some(s), Some(l), Some((title, target, context, result))) => Some(SheetView {
@@ -6273,8 +6349,10 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
 
     let kiln = Arc::new(Kiln::new());
     let target = PostTarget(hwnd.0 as usize);
+    // A finished job's results are read for their sizes here, on the
+    // runner's thread, not by the window.
     let runner = Runner::new(kiln.clone(), Runner::default_workers(), move |ev| {
-        target.post(WM_KILN_JOB, ev)
+        target.post(WM_KILN_JOB, JobNews::of(ev))
     });
     // The inspect thread has its own Kiln and never touches the app's.
     let inspect_kiln = Kiln::new();
@@ -6380,7 +6458,9 @@ fn run_window(files: Vec<PathBuf>) -> Result<()> {
         panel: None,
         panel_hover: None,
         panel_pressed: None,
-        result_sizes: RefCell::new(HashMap::new()),
+        panel_built: None,
+        panel_rev: 0,
+        result_sizes: HashMap::new(),
     });
     let app = Box::into_raw(app);
     unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, app as isize) };
@@ -7039,8 +7119,8 @@ fn handle(app: &mut App, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRE
             Some(LRESULT(0))
         }
         WM_KILN_JOB => {
-            let ev = unsafe { Box::from_raw(lparam.0 as *mut JobEvent) };
-            app.on_job(*ev);
+            let news = unsafe { Box::from_raw(lparam.0 as *mut JobNews) };
+            app.on_job_news(*news);
             Some(LRESULT(0))
         }
         // Coming back to Kiln: a held result may have been removed by hand

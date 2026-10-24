@@ -647,6 +647,8 @@ pub fn inspector_name(c: InspectorControl, model: &Inspector, file: &str) -> Str
         (C::ShowInFolder, _) => format!("Show {result} in folder"),
         (C::Retry, _) => format!("Retry {file}"),
         (C::ShowDetails, _) => format!("Show details for {file}"),
+        // As the row's link says it: the helper app is what it gets.
+        (C::GetHelper, _) => model.label(c).unwrap_or_default().to_owned(),
     }
 }
 
@@ -665,9 +667,12 @@ pub fn inspector_controls(model: &Inspector, l: &InspectorLayout) -> Vec<(Inspec
             let at = match c {
                 C::Target(i) | C::Kind(i) => l.targets.get(i).copied(),
                 C::More => l.more,
-                C::Cancel | C::Save | C::ShowInFolder | C::Retry | C::ShowDetails => {
-                    slots.next().copied()
-                }
+                C::Cancel
+                | C::Save
+                | C::ShowInFolder
+                | C::Retry
+                | C::ShowDetails
+                | C::GetHelper => slots.next().copied(),
             };
             at.map(|r| (c, r))
         })
@@ -952,35 +957,27 @@ fn inspector(input: &Input, ins: &InspectorIn) -> Node {
             l.hero,
         ));
     }
-    // The body's lines: a 20 DIP line from `y` down, or the rest of it.
-    let body = |top: f32, h: Option<f32>| {
-        let y = l.body.y + top;
-        let h = h.unwrap_or(l.body.bottom() - y).max(0.0);
-        Rect::new(l.body.x, y, l.body.w, h)
-    };
+    // Each text where the layout put it, as it is drawn: the title, then
+    // the texts under it in the order `InspectorLayout::lines` has them.
+    let line = |k: usize| l.line(k).unwrap_or_default();
     let mut lines: Vec<(String, Rect)> = vec![];
     match ins.model {
         Inspector::Nothing => {
             lines.push((NOTHING_TITLE.to_owned(), l.title));
-            lines.push((input.empty.keys.clone(), l.body));
-            lines.push((input.empty.privacy.to_owned(), l.body));
+            lines.push((input.empty.keys.clone(), line(0)));
+            lines.push((input.empty.privacy.to_owned(), line(1)));
         }
         Inspector::Waiting { what, facts, .. } => {
             lines.push((ins.file.to_owned(), l.title));
-            lines.extend(what.map(|w| (w.to_owned(), l.body)));
+            lines.extend(what.map(|w| (w.to_owned(), line(0))));
             for ((label, value), r) in facts.iter().zip(&l.facts) {
                 lines.push((format!("{label} {value}"), *r));
             }
         }
-        Inspector::Converting { row, percent, left } => {
+        Inspector::Converting { percent, time, .. } => {
             lines.push((ins.file.to_owned(), l.title));
-            lines.extend(percent.map(|p| (format!("{p}%"), body(0.0, Some(40.0)))));
-            // How long is left, or until that's known, what it is doing.
-            let doing = input.rows.get(*row).and_then(|r| match &r.entry.job {
-                JobState::Running { action, .. } => Some(crate::model::doing(action)),
-                _ => None,
-            });
-            lines.extend(left.clone().or(doing).map(|t| (t, body(40.0, Some(20.0)))));
+            lines.extend(percent.map(|p| (format!("{p}%"), line(0))));
+            lines.push((time.clone(), line(1)));
         }
         Inspector::Done {
             result,
@@ -989,28 +986,24 @@ fn inspector(input: &Input, ins: &InspectorIn) -> Node {
             ..
         } => {
             lines.push((ins.file.to_owned(), l.title));
-            lines.push((result.clone(), body(0.0, Some(20.0))));
-            let mut top = 20.0;
-            if let Some(c) = change {
-                lines.push((c.clone(), body(top, Some(20.0))));
-                top += 20.0;
-            }
+            lines.push((result.clone(), line(0)));
+            lines.extend(change.as_ref().map(|c| (c.clone(), line(1))));
             if *kept == Kept::Held {
-                lines.push((DRAG_HINT.to_owned(), body(top, None)));
+                lines.push((DRAG_HINT.to_owned(), line(2)));
             }
         }
         Inspector::Failed { sentence, .. } => {
             lines.push((ins.file.to_owned(), l.title));
-            lines.push((sentence.clone(), l.body));
+            lines.push((sentence.clone(), line(0)));
         }
         Inspector::Several {
             kinds, none_shared, ..
         } => {
             lines.push((kinds.clone(), l.title));
-            lines.extend(none_shared.as_ref().map(|n| (n.clone(), l.body)));
+            lines.extend(none_shared.as_ref().map(|n| (n.clone(), line(0))));
         }
     }
-    // A line its part had no room for isn't drawn, so isn't read either.
+    // A text its part had no room for isn't drawn, so isn't read either.
     let placed = lines.into_iter().filter(|(_, r)| r.h > 0.0);
     children.extend(
         placed
@@ -2286,8 +2279,12 @@ mod tests {
                 target("jpg", None, false),
             ],
             more: true,
+            helper: None,
         }
     }
+
+    /// How wide "More formats…" is at 13 px, near enough.
+    const MORE_W: f32 = 88.0;
 
     /// The inspector at the right of a window `size` holding `rows` files,
     /// laid out for `shape`.
@@ -2310,7 +2307,8 @@ mod tests {
             what_h: 18.0,
             facts: 3,
             targets: 3,
-            more: true,
+            more: Some(MORE_W),
+            buttons: 0,
         };
         let (rect, il) = inspector_at(size, es.len(), shape);
         let mut i = input(&lines, rows(&es));
@@ -2344,7 +2342,9 @@ mod tests {
             .find(&Id::InspectorControl(InspectorControl::More))
             .unwrap();
         assert_eq!(more.name, "More formats for harbour.png");
+        // As wide as its words and a link's room past them, as drawn.
         assert_eq!(more.rect, il.more.unwrap());
+        assert_eq!(more.rect.w, MORE_W + layout::LINK_PAD);
         // The texts are text: the file, what its format is and each fact.
         named(&t, Role::Text, "harbour.png");
         named(&t, Role::Text, "a lossless image with transparency");
@@ -2382,7 +2382,7 @@ mod tests {
         let converting = Inspector::Converting {
             row: 0,
             percent: Some(38),
-            left: None,
+            time: "Converting to WEBP".to_owned(),
         };
         let done = |kept| Inspector::Done {
             row: 0,
@@ -2406,6 +2406,7 @@ mod tests {
         let failed = Inspector::Failed {
             row: 0,
             sentence: "The conversion stopped before it finished. Try again.".to_owned(),
+            tone: crate::model::Tone::Crack,
             retry: true,
             details: true,
         };
@@ -2442,6 +2443,72 @@ mod tests {
             inspector_name(C::Kind(1), &several, ""),
             "Select only the DOCX file"
         );
+        // Get is named for the helper app it gets, as the row's link is.
+        let needs = Inspector::Waiting {
+            row: 0,
+            what: None,
+            facts: vec![],
+            targets: vec![],
+            more: false,
+            helper: Some("Get FFmpeg"),
+        };
+        assert_eq!(
+            inspector_name(C::GetHelper, &needs, "clip.mkv"),
+            "Get FFmpeg"
+        );
+    }
+
+    #[test]
+    fn a_file_waiting_on_its_helper_app_has_get_where_its_formats_would_be() {
+        use InspectorControl as C;
+        let lines = empty_lines(&Settings::default());
+        let es = [entry("clip.mkv", JobState::Idle)];
+        let model = Inspector::Waiting {
+            row: 0,
+            what: None,
+            facts: vec![
+                ("Size", "40 MB".to_owned()),
+                ("Folder", "videos".to_owned()),
+            ],
+            targets: vec![],
+            more: false,
+            helper: Some("Get FFmpeg"),
+        };
+        let size = (1300.0, 760.0);
+        let shape = InspectorShape::Waiting {
+            what_h: 0.0,
+            facts: 2,
+            targets: 0,
+            more: None,
+            buttons: 1,
+        };
+        let (rect, il) = inspector_at(size, es.len(), shape);
+        // It takes the button slot, after the facts.
+        assert_eq!(
+            inspector_controls(&model, &il),
+            [(C::GetHelper, il.buttons[0])]
+        );
+        let mut i = input(&lines, rows(&es));
+        i.size = size;
+        i.row_links = false;
+        i.inspector = Some(InspectorIn {
+            rect,
+            model: &model,
+            layout: &il,
+            file: "clip.mkv",
+        });
+        let t = tree(&i);
+        sound(&t);
+        let get = named(&t, Role::Button, "Get FFmpeg");
+        assert_eq!(get.id, Id::InspectorControl(C::GetHelper));
+        assert_eq!(get.rect, il.buttons[0]);
+        assert!(get.states.focusable && get.patterns().invoke);
+        // The row has no link while the inspector shows, so this is the way.
+        assert!(t.find(&Id::RowLink(es[0].path.clone())).is_none());
+        // Tab onto it: it has the focus.
+        i.focus_button = Some(FocusButton::Inspector(C::GetHelper));
+        let t = tree(&i);
+        assert_eq!(t.focused().unwrap().id, Id::InspectorControl(C::GetHelper));
     }
 
     #[test]
@@ -2469,7 +2536,8 @@ mod tests {
                 what_h: 40.0,
                 facts: 3,
                 targets: 3,
-                more: true,
+                more: Some(MORE_W),
+                buttons: 0,
             },
         );
         assert!(il.targets.len() < 3 && il.more.is_none());
@@ -2482,6 +2550,7 @@ mod tests {
         let failed = Inspector::Failed {
             row: 0,
             sentence: "x".to_owned(),
+            tone: crate::model::Tone::Crack,
             retry: true,
             details: true,
         };
@@ -2542,14 +2611,12 @@ mod tests {
         };
         // Nothing selected: the title, the key hint and the privacy line.
         // The mark is no picture of anything.
-        let nothing = read(
-            &Inspector::Nothing,
-            InspectorShape::Nothing {
-                title_h: 40.0,
-                body_h: 70.0,
-            },
-            "",
-        );
+        let nothing_shape = InspectorShape::Nothing {
+            title_h: 40.0,
+            hint_h: 50.0,
+            privacy_h: 20.0,
+        };
+        let nothing = read(&Inspector::Nothing, nothing_shape, "");
         assert_eq!(
             texts(&nothing),
             [
@@ -2558,6 +2625,11 @@ mod tests {
                 lines.privacy
             ]
         );
+        // The key hint and the privacy line each where it is drawn.
+        let (_, il) = inspector_at(size, es.len(), nothing_shape);
+        let rect_of = |pane: &Node, name: &str| named(pane, Role::Text, name).rect;
+        assert_eq!(rect_of(&nothing, &lines.keys), il.line(0).unwrap());
+        assert_eq!(rect_of(&nothing, lines.privacy), il.line(1).unwrap());
         assert!(nothing
             .children
             .iter()
@@ -2566,15 +2638,24 @@ mod tests {
         let converting = Inspector::Converting {
             row: 0,
             percent: Some(38),
-            left: Some("about 2 min".to_owned()),
+            time: "about 2 min".to_owned(),
         };
-        let pane = read(
-            &converting,
-            InspectorShape::Converting { buttons: 1 },
-            "harbour.png",
-        );
+        let shape = InspectorShape::Converting { buttons: 1 };
+        let pane = read(&converting, shape, "harbour.png");
         assert_eq!(texts(&pane), ["harbour.png", "38%", "about 2 min"]);
         named(&pane, Role::Button, "Cancel harbour.png");
+        let (_, il) = inspector_at(size, es.len(), shape);
+        assert_eq!(rect_of(&pane, "38%"), il.line(0).unwrap());
+        assert_eq!(rect_of(&pane, "about 2 min"), il.line(1).unwrap());
+        // An engine that can't say how far along: no figure, and what it
+        // is doing.
+        let unknown = Inspector::Converting {
+            row: 0,
+            percent: None,
+            time: "Converting to WEBP".to_owned(),
+        };
+        let pane = read(&unknown, shape, "harbour.png");
+        assert_eq!(texts(&pane), ["harbour.png", "Converting to WEBP"]);
         // Done: the result, the change, the drag-out hint and Save.
         let done = Inspector::Done {
             row: 0,
@@ -2582,15 +2663,12 @@ mod tests {
             change: Some("2.4 MB → 410 KB, 83% smaller".to_owned()),
             kept: Kept::Held,
         };
-        let pane = read(
-            &done,
-            InspectorShape::Done {
-                change: true,
-                drag_h: 34.0,
-                buttons: 1,
-            },
-            "harbour.png",
-        );
+        let done_shape = InspectorShape::Done {
+            change: true,
+            drag_h: 34.0,
+            buttons: 1,
+        };
+        let pane = read(&done, done_shape, "harbour.png");
         assert_eq!(
             texts(&pane),
             [
@@ -2600,6 +2678,17 @@ mod tests {
                 crate::model::DRAG_HINT
             ]
         );
+        let (_, il) = inspector_at(size, es.len(), done_shape);
+        for (k, said) in [
+            "harbour.webp",
+            "2.4 MB → 410 KB, 83% smaller",
+            crate::model::DRAG_HINT,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(rect_of(&pane, said), il.line(k).unwrap(), "{said}");
+        }
         assert_eq!(
             named(&pane, Role::Button, "Save harbour.webp").id,
             Id::InspectorControl(C::Save)
@@ -2630,6 +2719,79 @@ mod tests {
         named(&pane, Role::Button, "Select only the 2 MP4 files");
         named(&pane, Role::Button, "Select only the DOCX file");
         assert!(pane.children.iter().all(|c| c.id != Id::InspectorPreview));
+    }
+
+    #[test]
+    fn a_text_the_inspector_has_no_room_for_is_not_read() {
+        let lines = empty_lines(&Settings::default());
+        let es = [entry("harbour.png", JobState::Idle)];
+        // An inspector `h` tall, as short windows and the fold leave it.
+        let read = |model: &Inspector, shape: InspectorShape, h: f32| {
+            let rect = Rect::new(900.0, 72.0, layout::INSPECTOR_WIDTH, h);
+            let il = layout::inspector_layout(&rect, &shape);
+            let mut i = input(&lines, rows(&es));
+            i.inspector = Some(InspectorIn {
+                rect,
+                model,
+                layout: &il,
+                file: "harbour.png",
+            });
+            let t = tree(&i);
+            sound(&t);
+            let pane = t.find(&Id::Inspector).unwrap();
+            let texts: Vec<String> = pane
+                .children
+                .iter()
+                .filter(|c| c.role == Role::Text)
+                .map(|c| c.name.clone())
+                .collect();
+            // Every text node is where something is drawn: no 0-tall rect.
+            assert!(pane.children.iter().all(|c| c.rect.h > 0.0), "{pane:?}");
+            (texts, il)
+        };
+        let converting = Inspector::Converting {
+            row: 0,
+            percent: Some(38),
+            time: "about 2 min".to_owned(),
+        };
+        let running = InspectorShape::Converting { buttons: 1 };
+        // Room for the title and the percentage, but not the time under it:
+        // the time is cut to nothing, so it isn't read, and nor is Cancel.
+        let (said, il) = read(&converting, running, 110.0);
+        assert_eq!(said, ["harbour.png", "38%"]);
+        assert_eq!(il.lines[1].h, 0.0);
+        assert!(il.buttons.is_empty());
+        // Room for the title alone: neither line is read.
+        let (said, il) = read(&converting, running, 62.0);
+        assert_eq!(said, ["harbour.png"]);
+        assert!(il.lines.iter().all(|r| r.h == 0.0));
+        // A finished file with room for its result but not the change.
+        let done = Inspector::Done {
+            row: 0,
+            result: "harbour.webp".to_owned(),
+            change: Some("2.4 MB → 410 KB, 83% smaller".to_owned()),
+            kept: Kept::Held,
+        };
+        let finished = InspectorShape::Done {
+            change: true,
+            drag_h: 34.0,
+            buttons: 1,
+        };
+        let (said, _) = read(&done, finished, 92.0);
+        assert_eq!(said, ["harbour.png", "harbour.webp"]);
+        // Nothing selected, with room for the key hint but not the
+        // privacy line under it.
+        let nothing = InspectorShape::Nothing {
+            title_h: 40.0,
+            hint_h: 50.0,
+            privacy_h: 20.0,
+        };
+        let (said, _) = read(
+            &Inspector::Nothing,
+            nothing,
+            32.0 + 40.0 + 8.0 + 50.0 + 10.0,
+        );
+        assert_eq!(said, [crate::inspector::NOTHING_TITLE, lines.keys.as_str()]);
     }
 
     #[test]

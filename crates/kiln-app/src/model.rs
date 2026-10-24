@@ -869,11 +869,25 @@ impl Entry {
             // or Get the helper it can't be converted without. A file
             // ruled out on adding has nothing to offer.
             JobState::Idle if self.check != FileCheck::Ok => None,
-            JobState::Idle => match &self.missing {
-                Some((b, _)) if self.targets.is_empty() => Some(get_label(b)),
-                _ if self.targets.is_empty() => None,
-                _ => Some("Convert"),
+            JobState::Idle => match self.needs_helper() {
+                Some(b) => Some(get_label(b)),
+                None if self.targets.is_empty() => None,
+                None => Some("Convert"),
             },
+            _ => None,
+        }
+    }
+
+    /// The helper app ("ffmpeg") a file nothing has been done to can't be
+    /// converted without: it has no formats at all until that is
+    /// installed. Its link, and the inspector's button, get it.
+    pub fn needs_helper(&self) -> Option<&str> {
+        match (&self.job, &self.missing) {
+            (JobState::Idle, Some((backend, _)))
+                if self.check == FileCheck::Ok && self.targets.is_empty() =>
+            {
+                Some(backend)
+            }
             _ => None,
         }
     }
@@ -1146,11 +1160,27 @@ pub struct FileList {
     focus: Option<usize>,
     /// Whether the focus shows its ring: after a key, not after a click.
     focus_visible: bool,
+    /// Counts the changes to the rows and the selection: see `revision`.
+    rev: u64,
 }
 
 impl FileList {
     pub fn entries(&self) -> &[Entry] {
         &self.entries
+    }
+
+    /// A number that moves whenever the rows or the selection may have
+    /// changed: a row added, removed or moved, its job, facts, results or
+    /// formats, or which rows are selected. The focus and its ring don't
+    /// move it. What is built from the list alone, the inspector, is built
+    /// again only when it moves.
+    pub fn revision(&self) -> u64 {
+        self.rev
+    }
+
+    /// Note a change `revision` follows.
+    fn touch(&mut self) {
+        self.rev = self.rev.wrapping_add(1);
     }
 
     pub fn len(&self) -> usize {
@@ -1228,6 +1258,7 @@ impl FileList {
         if i >= self.entries.len() {
             return;
         }
+        self.touch();
         self.selected = BTreeSet::from([i]);
         self.anchor = Some(i);
         self.focus = Some(i);
@@ -1270,6 +1301,7 @@ impl FileList {
         if i >= self.entries.len() {
             return;
         }
+        self.touch();
         if !self.selected.remove(&i) {
             self.selected.insert(i);
         }
@@ -1285,6 +1317,7 @@ impl FileList {
         let Some(anchor) = self.anchor else {
             return self.click(i);
         };
+        self.touch();
         self.selected = (anchor.min(i)..=anchor.max(i)).collect();
         self.focus = Some(i);
     }
@@ -1294,6 +1327,7 @@ impl FileList {
         if self.entries.is_empty() {
             return;
         }
+        self.touch();
         self.selected = (0..self.entries.len()).collect();
         self.focus = self.focus.or(Some(0));
         self.anchor = self.anchor.or(self.focus);
@@ -1301,6 +1335,9 @@ impl FileList {
 
     /// Escape: nothing is selected, but the focus stays.
     pub fn clear_selection(&mut self) {
+        if !self.selected.is_empty() {
+            self.touch();
+        }
         self.selected.clear();
     }
 
@@ -1356,6 +1393,7 @@ impl FileList {
         if i >= self.entries.len() {
             return None;
         }
+        self.touch();
         let removed = self.entries.remove(i);
         let was_selected = self.selected.remove(&i);
         let len = self.entries.len();
@@ -1389,6 +1427,7 @@ impl FileList {
         available: &Availability,
         paths: impl IntoIterator<Item = PathBuf>,
     ) -> Added {
+        self.touch();
         let mut result = Added::default();
         for path in paths {
             let Ok(meta) = std::fs::metadata(&path) else {
@@ -1486,6 +1525,7 @@ impl FileList {
     /// to where it went, all into `folder`. A row whose results all went
     /// out is saved there; a row with some left keeps holding those.
     pub fn exported(&mut self, moved: &[(PathBuf, PathBuf)], folder: &Path) {
+        self.touch();
         let moved_to = |p: &PathBuf| moved.iter().find(|(from, _)| from == p).map(|(_, to)| to);
         for e in &mut self.entries {
             let Some(held) = e.held() else {
@@ -1516,6 +1556,7 @@ impl FileList {
     /// Note that saving `failed` held files didn't work: their rows offer
     /// to choose another folder.
     pub fn export_failed(&mut self, failed: &[PathBuf]) {
+        self.touch();
         for e in &mut self.entries {
             if e.held()
                 .is_some_and(|h| h.iter().any(|p| failed.contains(p)))
@@ -1539,6 +1580,7 @@ impl FileList {
     /// [`FileList::exported`]. A row whose results all went is saved where
     /// they were dropped; a row with some left keeps holding those.
     pub fn dragged_out(&mut self, moved: &[PathBuf]) {
+        self.touch();
         for e in &mut self.entries {
             let Some(held) = e.held() else {
                 continue;
@@ -1582,7 +1624,10 @@ impl FileList {
         true
     }
 
+    /// The rows to change in place. Whatever is changed through it counts
+    /// as a change to `revision`.
     pub fn entries_mut(&mut self) -> &mut [Entry] {
+        self.touch();
         &mut self.entries
     }
 
@@ -1590,10 +1635,27 @@ impl FileList {
         self.entries.iter().position(|e| same_path(&e.path, path))
     }
 
+    /// Why converting the files at `paths` can't start: one of them is
+    /// converting already. `None` when nothing stands in the way. The
+    /// format choice and the inspector's formats both ask this, so a row
+    /// that is converting is never offered another conversion.
+    pub fn convert_busy(&self, paths: &[PathBuf]) -> Option<&'static str> {
+        let running = paths
+            .iter()
+            .filter_map(|p| self.index_of(p))
+            .filter(|&i| matches!(self.entries[i].job, JobState::Running { .. }))
+            .count();
+        if running == 0 {
+            return None;
+        }
+        convert_block(paths.len(), running)
+    }
+
     /// Point the entry for `old` at `new` after the file moved. Returns
     /// its index.
     pub fn relocate(&mut self, kiln: &Kiln, old: &Path, new: PathBuf) -> Option<usize> {
         let i = self.index_of(old)?;
+        self.touch();
         let e = &mut self.entries[i];
         // A move keeps the file's time, as it keeps its size.
         let fresh = entry_for(kiln, &Availability::all(), new, e.size, e.modified);
@@ -1606,6 +1668,7 @@ impl FileList {
     /// Work out every row's formats again, after the helper apps found
     /// changed. Rows the add-time check ruled out stay as they are.
     pub fn refresh_offers(&mut self, kiln: &Kiln, available: &Availability) {
+        self.touch();
         for e in &mut self.entries {
             if e.check == FileCheck::Ok {
                 (e.targets, e.missing) = offers(kiln, available, &e.path);
@@ -1616,6 +1679,7 @@ impl FileList {
     /// Put `entry` back as row `i` (or last, if the list is shorter now),
     /// after an undo. Rows from there on move down one.
     pub fn insert(&mut self, i: usize, entry: Entry) {
+        self.touch();
         let i = i.min(self.entries.len());
         self.entries.insert(i, entry);
         let shift = |k: usize| if k >= i { k + 1 } else { k };
@@ -1627,6 +1691,7 @@ impl FileList {
     /// Select exactly `rows`, the focus on the last and the anchor on the
     /// first.
     pub fn select_only(&mut self, rows: &[usize]) {
+        self.touch();
         self.selected = rows
             .iter()
             .copied()
@@ -1637,6 +1702,7 @@ impl FileList {
     }
 
     pub fn clear(&mut self) {
+        self.touch();
         self.entries.clear();
         self.selected.clear();
         self.anchor = None;
@@ -1651,6 +1717,7 @@ impl FileList {
         let Some(i) = self.index_of(path) else {
             return false;
         };
+        self.touch();
         let e = &mut self.entries[i];
         if e.facts.is_none() {
             e.facts_at = Some(Instant::now());
@@ -1683,6 +1750,7 @@ impl FileList {
     /// Drop every row's facts and suggestion, as when Suggestions is
     /// turned off.
     pub fn forget_facts(&mut self) {
+        self.touch();
         for e in &mut self.entries {
             e.facts = None;
             e.suggestion = None;
@@ -3978,6 +4046,98 @@ mod tests {
         assert!(convert_block(3, 1).is_some());
         assert_eq!(convert_block(1, 0), None);
         assert_eq!(convert_block(500, 0), None);
+    }
+
+    #[test]
+    fn the_revision_moves_with_the_rows_and_the_selection_but_not_the_focus() {
+        let mut list = list_of(3);
+        let mut seen = list.revision();
+        let mut moved = |list: &FileList| {
+            let now = list.revision();
+            let moved = now != seen;
+            seen = now;
+            moved
+        };
+        // The selection.
+        list.click(1);
+        assert!(moved(&list));
+        list.ctrl_click(2);
+        assert!(moved(&list));
+        list.shift_click(0);
+        assert!(moved(&list));
+        list.select_all();
+        assert!(moved(&list));
+        list.clear_selection();
+        assert!(moved(&list));
+        list.select_only(&[2]);
+        assert!(moved(&list));
+        // The focus and its ring are no change to what is selected.
+        list.set_focus(0);
+        list.keyboard_used();
+        list.pointer_used();
+        assert!(!moved(&list));
+        // Nor is clearing a selection that is already empty.
+        list.clear_selection();
+        list.clear_selection();
+        assert!(moved(&list));
+        list.clear_selection();
+        assert!(!moved(&list));
+        // A row's job, its facts, its results.
+        list.entries_mut()[0].job = JobState::Cancelled;
+        assert!(moved(&list));
+        let path = list.entries()[0].path.clone();
+        let facts = kiln_core::Facts {
+            ext: "png".into(),
+            kind: kiln_core::Kind::Image,
+            bytes: 1,
+            picture: None,
+            media: None,
+            pdf: None,
+            bars: None,
+            estimates: Default::default(),
+            compressed: None,
+        };
+        assert!(list.set_facts(&path, facts, None));
+        assert!(moved(&list));
+        list.forget_facts();
+        assert!(moved(&list));
+        list.exported(&[], Path::new("out"));
+        assert!(moved(&list));
+        // A preview is no change to what the list says.
+        assert_eq!(list.preview_arrived(&path, None), Some(0));
+        assert!(!moved(&list));
+        // Rows coming and going.
+        let gone = list.remove(2).unwrap();
+        assert!(moved(&list));
+        list.insert(2, gone);
+        assert!(moved(&list));
+        list.clear();
+        assert!(moved(&list));
+    }
+
+    #[test]
+    fn a_file_that_is_converting_is_not_converted_again() {
+        let mut list = list_of(3);
+        let paths: Vec<PathBuf> = list.entries().iter().map(|e| e.path.clone()).collect();
+        assert_eq!(list.convert_busy(&paths), None);
+        assert_eq!(list.convert_busy(&paths[..1]), None);
+        list.entries_mut()[1].job = JobState::Running {
+            action: Action::Convert("jpg".into()),
+            fraction: None,
+            started: None,
+        };
+        // Alone or among others, the converting file stops it, with the
+        // footer's own words.
+        let busy = Some("A selected file is still converting. Wait for it, or cancel it.");
+        assert_eq!(list.convert_busy(&paths), busy);
+        assert_eq!(list.convert_busy(&paths[1..2]), busy);
+        assert_eq!(list.convert_busy(&paths[..1]), None);
+        // Finished, it can be converted again.
+        list.entries_mut()[1].job = JobState::Cancelled;
+        assert_eq!(list.convert_busy(&paths), None);
+        // Nothing asked for, and a file no longer listed, stop nothing.
+        assert_eq!(list.convert_busy(&[]), None);
+        assert_eq!(list.convert_busy(&[PathBuf::from("gone.png")]), None);
     }
 
     #[test]

@@ -1,10 +1,17 @@
 //! DirectWrite: the bundled display serif, system UI and mono faces, and
 //! the text formats the app draws with.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use windows::core::{Interface, Result, BOOL, HSTRING};
 use windows::Win32::Graphics::DirectWrite::*;
 
 use crate::theme::{fonts, type_scale};
+
+/// The most format codes whose widths are kept before starting over: far
+/// more than a list shows.
+const CODE_WIDTHS: usize = 256;
 
 pub struct Text {
     pub factory: IDWriteFactory,
@@ -47,6 +54,8 @@ pub struct Text {
     pub tabular: IDWriteTypography,
     /// True if the bundled serif loaded; false means the fallback is used.
     pub display_bundled: bool,
+    /// Format codes' widths as `code_layout` sets them: see `code_width`.
+    code_widths: RefCell<HashMap<String, f32>>,
 }
 
 impl Text {
@@ -154,6 +163,7 @@ impl Text {
             )?,
             figure: make(ui, None, semibold, type_scale::DISPLAY, false)?,
             tabular,
+            code_widths: RefCell::new(HashMap::new()),
             display: make(
                 &display_family,
                 display_collection.as_ref(),
@@ -268,6 +278,22 @@ impl Text {
         let mut m = DWRITE_TEXT_METRICS::default();
         unsafe { layout.GetMetrics(&mut m)? };
         Ok((layout, m.widthIncludingTrailingWhitespace))
+    }
+
+    /// How wide `code_layout` sets `code`, as a chip has it: in a box
+    /// 120 DIPs wide. Each is measured once: the code's font never
+    /// changes, and DirectWrite measures in DIPs whatever the scale.
+    pub fn code_width(&self, code: &str) -> Result<f32> {
+        if let Some(&w) = self.code_widths.borrow().get(code) {
+            return Ok(w);
+        }
+        let (_, w) = self.code_layout(code, 120.0, crate::layout::CHIP_HEIGHT)?;
+        let mut widths = self.code_widths.borrow_mut();
+        if widths.len() >= CODE_WIDTHS {
+            widths.clear();
+        }
+        widths.insert(code.to_owned(), w);
+        Ok(w)
     }
 }
 

@@ -326,7 +326,7 @@ pub fn offer_sentence(kind: WheelKind, offer: &Offer) -> Option<String> {
         Offer::NeedsHelper(backend, code) => {
             let name = crate::model::helper_name(backend);
             Some(format!(
-                "{code} files need {name}, which isn't installed. Use Get {name} on the file's row."
+                "{code} files need {name}, which isn't installed. Use Get {name} to download it."
             ))
         }
         Offer::Mixed(kinds) => {
@@ -1075,6 +1075,17 @@ mod tests {
             "Select a file first."
         );
         assert_eq!(offer_sentence(WheelKind::Convert, &Offer::Choices), None);
+        // Waiting on a helper app: Get it, which the row's link offers in
+        // a narrow window and the inspector's button in a wide one, where
+        // the row has no link.
+        assert_eq!(
+            offer_sentence(
+                WheelKind::Convert,
+                &Offer::NeedsHelper("ffmpeg".into(), "MP4".into())
+            )
+            .unwrap(),
+            "MP4 files need FFmpeg, which isn't installed. Use Get FFmpeg to download it."
+        );
     }
 
     #[test]

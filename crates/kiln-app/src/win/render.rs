@@ -109,6 +109,9 @@ const INSPECTOR_WASH_REACH: f32 = 0.4;
 /// The suggested format's celadon edge and wash.
 const SUGGESTED_EDGE: f32 = 0.55;
 const SUGGESTED_WASH: f32 = 0.09;
+/// Under a contrast theme, how far inside the suggested format's outline
+/// the hover ring is.
+const SUGGESTED_HOVER_INSET: f32 = 3.0;
 /// A format's row: its chip starts this far in, leaving the suggestion's
 /// dot room before it, and its estimate ends this far from its right.
 const TARGET_INSET: f32 = 16.0;
@@ -140,8 +143,9 @@ pub struct InspectorView<'a> {
     pub glazes: &'a [Glaze],
     pub hover: Option<InspectorControl>,
     pub pressed: Option<InspectorControl>,
-    /// Nothing's body: the key hint, then the privacy line.
-    pub nothing: &'a str,
+    /// What Nothing says under its title: the key hint, then the privacy
+    /// line.
+    pub nothing: [&'a str; 2],
 }
 
 /// A row the inspector offers: a format, or a kind of file to narrow the
@@ -338,6 +342,8 @@ pub struct Renderer {
     frame: u64,
     /// The narrowest chip (`chip_floor`), measured once.
     chip_floor: f32,
+    /// How wide "More formats…" is, measured once as the chip floor is.
+    more_w: f32,
     /// The inspector's wrapped texts' heights, by text, how it wraps and
     /// width, so the same words are measured once. DirectWrite measures in
     /// DIPs, which the Text size's zoom doesn't change.
@@ -347,9 +353,9 @@ pub struct Renderer {
     tabulars: Tabulars,
 }
 
-/// Laid-out numbers by their text, whether they are the large figure, and
-/// their box's width and height.
-type Tabulars = RefCell<HashMap<(String, bool, u32, u32), (IDWriteTextLayout, f32)>>;
+/// Laid-out numbers by whether they are the large figure and their box's
+/// width and height, then by their text: looked up without making a key.
+type Tabulars = RefCell<HashMap<(bool, u32, u32), HashMap<String, (IDWriteTextLayout, f32)>>>;
 
 /// The most measured or laid-out texts kept before starting over: far
 /// more than one frame uses.
@@ -528,9 +534,10 @@ fn chip_width(text: &Text, e: &Entry, floor: f32) -> Result<f32> {
     code_chip_width(text, chip_code(e), floor)
 }
 
-/// How wide the chip for `code` is, as `chip_width` has it.
+/// How wide the chip for `code` is, as `chip_width` has it. Each code's
+/// width is measured once.
 fn code_chip_width(text: &Text, code: &str, floor: f32) -> Result<f32> {
-    let (_, text_w) = text.code_layout(code, 120.0, CHIP_HEIGHT)?;
+    let text_w = text.code_width(code)?;
     Ok((text_w + 16.0).ceil().max(floor))
 }
 
@@ -625,6 +632,7 @@ impl Renderer {
             .collect::<Result<Vec<_>>>()?;
         let text = Text::new()?;
         let chip_floor = chip_floor(&text);
+        let more_w = text.measure(insp::MORE_FORMATS, &text.caption);
         Ok(Self {
             factory,
             text,
@@ -636,6 +644,7 @@ impl Renderer {
             shadow: depth::shadow_layers(),
             frame: 0,
             chip_floor,
+            more_w,
             measured: RefCell::new(HashMap::new()),
             tabulars: RefCell::new(HashMap::new()),
         })
@@ -659,6 +668,12 @@ impl Renderer {
         }
         measured.insert(key, h);
         h
+    }
+
+    /// How wide the inspector's "More formats…" link is, in the caption
+    /// size it is drawn in.
+    pub fn more_width(&self) -> f32 {
+        self.more_w
     }
 
     /// How tall the details dialog's text runs when wrapped to `width`.
@@ -1788,8 +1803,13 @@ impl Draw<'_> {
     /// percentage. Each text is laid out once for its box. Returns its
     /// width.
     fn tabular(&self, s: &str, figure: bool, r: &Rect, c: Rgb) -> Result<f32> {
-        let key = (s.to_owned(), figure, r.w.to_bits(), r.h.to_bits());
-        let cached = self.tabulars.borrow().get(&key).cloned();
+        let boxed = (figure, r.w.to_bits(), r.h.to_bits());
+        let cached = self
+            .tabulars
+            .borrow()
+            .get(&boxed)
+            .and_then(|texts| texts.get(s))
+            .cloned();
         let (layout, w) = match cached {
             Some(laid) => laid,
             None => {
@@ -1803,10 +1823,12 @@ impl Draw<'_> {
                 unsafe { layout.GetMetrics(&mut m)? };
                 let laid = (layout, m.widthIncludingTrailingWhitespace);
                 let mut all = self.tabulars.borrow_mut();
-                if all.len() >= TEXT_CACHE {
+                if all.values().map(HashMap::len).sum::<usize>() >= TEXT_CACHE {
                     all.clear();
                 }
-                all.insert(key, laid.clone());
+                all.entry(boxed)
+                    .or_default()
+                    .insert(s.to_owned(), laid.clone());
                 laid
             }
         };
@@ -1863,8 +1885,13 @@ impl Draw<'_> {
                 self.label(text, &self.text.small, &h, muted, 1.0);
             }
         };
-        // The body's 20 DIP lines, from the top.
-        let line = |k: f32| Rect::new(l.body.x, l.body.y + 20.0 * k, l.body.w, 20.0);
+        // Each text under the title where the layout put it, while it has
+        // room: see `InspectorLayout::lines`. The tree reads the same.
+        let say = |k: usize, text: &str, format: &IDWriteTextFormat, c: Rgb| {
+            if let Some(at) = l.line(k) {
+                self.label(text, format, &at, c, 1.0);
+            }
+        };
         match iv.model {
             Inspector::Nothing => {
                 if l.hero.h > 0.0 {
@@ -1880,15 +1907,16 @@ impl Draw<'_> {
                 }
                 let title = &self.text.inspector_title_block;
                 self.label(insp::NOTHING_TITLE, title, &l.title, p.text, 1.0);
-                let body = &self.text.caption_block_center;
-                self.label(iv.nothing, body, &l.body, muted, 1.0);
+                let [hint, privacy] = iv.nothing;
+                say(0, hint, &self.text.caption_block_center, muted);
+                say(1, privacy, &self.text.caption_block_center, muted);
             }
             Inspector::Waiting {
                 row, what, facts, ..
             } => {
                 self.one_file(*row, l, v)?;
                 if let Some(what) = what {
-                    self.label(what, &self.text.caption_block, &l.body, muted, 1.0);
+                    say(0, what, &self.text.caption_block, muted);
                 }
                 for ((label, value), f) in facts.iter().zip(&l.facts) {
                     self.label(label, &self.text.caption, f, muted, 1.0);
@@ -1897,27 +1925,17 @@ impl Draw<'_> {
                 }
                 heading(insp::TURN_INTO);
             }
-            Inspector::Converting { row, percent, left } => {
+            Inspector::Converting { row, percent, time } => {
                 self.one_file(*row, l, v)?;
                 if l.hero.h > 0.0 {
                     let fraction = percent.map(|pc| pc as f32 / 100.0);
                     self.hero_heat(&l.hero, fraction, (v.glaze)(*row), v.heat, p)?;
                 }
-                if l.body.h > 0.0 {
-                    if let Some(pc) = percent {
-                        let figure = Rect::new(l.body.x, l.body.y, l.body.w, 40.0);
-                        self.tabular(&format!("{pc}%"), true, &figure, p.text)?;
-                    }
-                    // How long is left or, until that's known, what it does.
-                    let doing = v.entries.get(*row).and_then(|e| match &e.job {
-                        JobState::Running { action, .. } => Some(model::doing(action)),
-                        _ => None,
-                    });
-                    if let Some(time) = left.clone().or(doing) {
-                        let at = Rect::new(l.body.x, l.body.y + 40.0, l.body.w, 20.0);
-                        self.label(&time, &self.text.caption, &at, muted, 1.0);
-                    }
+                if let (Some(pc), Some(figure)) = (percent, l.line(0)) {
+                    self.tabular(&format!("{pc}%"), true, &figure, p.text)?;
                 }
+                // How long is left or, until that's known, what it does.
+                say(1, time, &self.text.caption, muted);
             }
             Inspector::Done {
                 row,
@@ -1931,30 +1949,29 @@ impl Draw<'_> {
                     let settle = (v.row_anim)(*row).settle;
                     self.check(&l.hero, settle, p);
                 }
-                if l.body.h > 0.0 {
-                    self.label(result, &self.text.body, &line(0.0), p.text, 1.0);
-                    let mut k = 1.0;
-                    if let Some(change) = change {
-                        self.label(change, &self.text.caption, &line(k), muted, 1.0);
-                        k += 1.0;
-                    }
-                    if *kept == Kept::Held {
-                        let y = l.body.y + 20.0 * k;
-                        let at = Rect::new(l.body.x, y, l.body.w, (l.body.bottom() - y).max(0.0));
-                        let hint = model::DRAG_HINT;
-                        self.label(hint, &self.text.caption_block, &at, muted, 1.0);
-                    }
+                // The result in the caption size, in full text colour.
+                say(0, result, &self.text.caption, p.text);
+                if let Some(change) = change {
+                    say(1, change, &self.text.caption, muted);
+                }
+                if *kept == Kept::Held {
+                    say(2, model::DRAG_HINT, &self.text.caption_block, muted);
                 }
             }
-            Inspector::Failed { row, sentence, .. } => {
+            Inspector::Failed {
+                row,
+                sentence,
+                tone,
+                ..
+            } => {
                 self.one_file(*row, l, v)?;
                 // In the tone the row says it in.
-                let c = match v.entries.get(*row).map(|e| e.line().1) {
-                    Some(Tone::Crack) => p.crack,
-                    Some(Tone::Result) => p.text,
-                    _ => muted,
+                let c = match tone {
+                    Tone::Crack => p.crack,
+                    Tone::Result => p.text,
+                    Tone::Muted => muted,
                 };
-                self.label(sentence, &self.text.caption_block, &l.body, c, 1.0);
+                say(0, sentence, &self.text.caption_block, c);
             }
             Inspector::Several {
                 rows,
@@ -1966,7 +1983,7 @@ impl Draw<'_> {
                 self.stack(&l.hero, rows, v);
                 self.label(kinds, &self.text.inspector_title, &l.title, p.text, 1.0);
                 if let Some(none) = none_shared {
-                    self.label(none, &self.text.caption_block, &l.body, muted, 1.0);
+                    say(0, none, &self.text.caption_block, muted);
                 }
                 heading(if targets.is_empty() {
                     insp::ONE_KIND
@@ -2152,7 +2169,7 @@ impl Draw<'_> {
                 }
                 C::More => self.more_link(&b, hot, p),
                 _ => {
-                    if let Some(label) = c.label() {
+                    if let Some(label) = iv.model.label(c) {
                         self.button(label, &b, hot, pressed, p);
                     }
                 }
@@ -2180,6 +2197,13 @@ impl Draw<'_> {
             self.wash(b, radius, p.accent, SUGGESTED_WASH, p);
             if !p.high_contrast {
                 self.border(b, radius, p.accent, SUGGESTED_EDGE, shape::BORDER);
+            } else if hot {
+                // A contrast theme's suggestion is already outlined in its
+                // highlight colour: hover adds a ring in the text colour
+                // inside it.
+                let inner = b.inset(SUGGESTED_HOVER_INSET);
+                let r = (radius - SUGGESTED_HOVER_INSET).max(0.0);
+                self.border(&inner, r, p.text, 1.0, shape::BORDER);
             }
         } else {
             let edge = if hot && p.high_contrast {
@@ -2224,13 +2248,11 @@ impl Draw<'_> {
     }
 
     /// "More formats…": an underlined link at the left of its line, full
-    /// text colour while hot.
+    /// text colour while hot. The layout made `r` as wide as its words and
+    /// a link's room past them, so they are not measured again here.
     fn more_link(&self, r: &Rect, hot: bool, p: &Palette) {
         let c = if hot { p.text } else { p.link };
-        let tw = self
-            .text
-            .measure(insp::MORE_FORMATS, &self.text.caption)
-            .min(r.w);
+        let tw = (r.w - layout::LINK_PAD).max(0.0);
         let at = Rect::new(r.x, r.y, tw + 1.0, r.h);
         self.label(insp::MORE_FORMATS, &self.text.caption, &at, c, 1.0);
         let under = r.y + r.h / 2.0 + 5.0;

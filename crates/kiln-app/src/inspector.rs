@@ -3,12 +3,15 @@
 //! words for each selection, its controls in reading order, and nothing
 //! about where any of it is drawn.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use kiln_core::{about, describe_format, Facts, Habits, Kind, Suggested};
 
 use crate::a11y::percent;
-use crate::model::{human_size, left_text, time_left, Entry, FileList, JobState};
+use crate::model::{
+    doing, get_label, human_size, left_text, time_left, Entry, FileList, JobState, Tone,
+};
 use crate::wheel::{offer_sentence, Action, Offer, WheelKind};
 
 /// A control in the inspector, by what it is. The same names stand for
@@ -27,6 +30,9 @@ pub enum InspectorControl {
     /// The nth kind of file offered when the selection shares no format:
     /// choosing it selects just those files.
     Kind(usize),
+    /// "Get FFmpeg": the download page of the helper app a file can't be
+    /// converted without, where its formats would be.
+    GetHelper,
 }
 
 /// A format the inspector offers to convert the selection to.
@@ -58,13 +64,18 @@ pub enum Inspector {
         targets: Vec<Target>,
         /// Whether there are more formats than `targets` shows.
         more: bool,
+        /// When the file has no formats because the helper app it needs
+        /// isn't installed: the button that opens its download page, as
+        /// the row's link says it ("Get FFmpeg").
+        helper: Option<&'static str>,
     },
     Converting {
         row: usize,
         /// Whole percent, once the engine can say how far along it is.
         percent: Option<u32>,
-        /// "about 2 min", once there is enough to go on.
-        left: Option<String>,
+        /// How long is left, "about 2 min", once there is enough to go on;
+        /// until then what it is doing, "Converting to WEBP".
+        time: String,
     },
     Done {
         row: usize,
@@ -78,8 +89,9 @@ pub enum Inspector {
     /// A job that failed or was cancelled.
     Failed {
         row: usize,
-        /// The row's whole sentence.
+        /// The row's whole sentence, and the tone the row says it in.
         sentence: String,
+        tone: Tone,
         /// Whether trying again may help.
         retry: bool,
         /// Whether there is more to show than the sentence.
@@ -139,7 +151,8 @@ pub fn files_count(n: usize) -> String {
 
 impl InspectorControl {
     /// What a button says on it. A format, a kind and More say what they
-    /// are in their own way, so they have none.
+    /// are in their own way, so they have none; Get names its helper app,
+    /// which [`Inspector::label`] knows.
     pub fn label(self) -> Option<&'static str> {
         match self {
             InspectorControl::Cancel => Some("Cancel"),
@@ -147,10 +160,22 @@ impl InspectorControl {
             InspectorControl::ShowInFolder => Some("Show in folder"),
             InspectorControl::Retry => Some("Retry"),
             InspectorControl::ShowDetails => Some("Show details"),
-            InspectorControl::Target(_) | InspectorControl::More | InspectorControl::Kind(_) => {
-                None
-            }
+            InspectorControl::Target(_)
+            | InspectorControl::More
+            | InspectorControl::Kind(_)
+            | InspectorControl::GetHelper => None,
         }
+    }
+}
+
+/// A file's type code as the inspector counts kinds by it: "MP4", or
+/// "Other" for a file of no type Kiln knows. Narrowing the selection to a
+/// kind goes by the same.
+pub fn type_code(e: &Entry) -> &str {
+    if e.code.is_empty() {
+        "Other"
+    } else {
+        &e.code
     }
 }
 
@@ -182,14 +207,16 @@ fn one(row: usize, e: &Entry, look: &Lookups, habits: &Habits) -> Inspector {
     match &e.job {
         JobState::Idle => waiting(row, e, habits),
         JobState::Running {
-            fraction, started, ..
+            action,
+            fraction,
+            started,
         } => Inspector::Converting {
             row,
             percent: fraction.map(percent),
-            left: started
+            time: started
                 .zip(*fraction)
                 .and_then(|(t, f)| time_left(t.elapsed(), f))
-                .map(left_text),
+                .map_or_else(|| doing(action), left_text),
         },
         JobState::Done {
             action,
@@ -228,12 +255,16 @@ fn one(row: usize, e: &Entry, look: &Lookups, habits: &Habits) -> Inspector {
             }
         }
         // A cancelled file has the same way forward as a failed one.
-        JobState::Failed { .. } | JobState::Cancelled => Inspector::Failed {
-            row,
-            sentence: e.line().0,
-            retry: e.retryable(),
-            details: e.details(false).is_some(),
-        },
+        JobState::Failed { .. } | JobState::Cancelled => {
+            let (sentence, tone) = e.line();
+            Inspector::Failed {
+                row,
+                sentence,
+                tone,
+                retry: e.retryable(),
+                details: e.details(false).is_some(),
+            }
+        }
     }
 }
 
@@ -311,6 +342,7 @@ fn waiting(row: usize, e: &Entry, habits: &Habits) -> Inspector {
         facts: lines,
         targets,
         more,
+        helper: e.needs_helper().map(get_label),
     }
 }
 
@@ -318,17 +350,23 @@ fn several(rows: &[usize], entries: &[Entry], look: &Lookups) -> Inspector {
     let picked: Vec<&Entry> = rows.iter().map(|&i| &entries[i]).collect();
     let kinds: Vec<Option<Kind>> = picked.iter().map(|e| (look.kind_of)(e)).collect();
 
-    // What every file can become, in the first file's order.
-    let lower =
-        |e: &Entry| -> Vec<String> { e.targets.iter().map(|t| t.to_ascii_lowercase()).collect() };
+    // What every file can become, in the first file's order. Each file's
+    // codes are lowercased once, into a set the shared ones are checked
+    // against, and once nothing is shared the rest aren't looked at.
     let mut shared: Vec<String> = vec![];
-    for ext in lower(picked[0]) {
+    for t in &picked[0].targets {
+        let ext = t.to_ascii_lowercase();
         if !shared.contains(&ext) {
             shared.push(ext);
         }
     }
+    let mut theirs: HashSet<String> = HashSet::new();
     for e in &picked[1..] {
-        let theirs = lower(e);
+        if shared.is_empty() {
+            break;
+        }
+        theirs.clear();
+        theirs.extend(e.targets.iter().map(|t| t.to_ascii_lowercase()));
         shared.retain(|ext| theirs.contains(ext));
     }
 
@@ -338,7 +376,7 @@ fn several(rows: &[usize], entries: &[Entry], look: &Lookups) -> Inspector {
     let (none_shared, offered) = if shared.is_empty() {
         let mut codes: Vec<(String, usize)> = vec![];
         for e in &picked {
-            let code = if e.code.is_empty() { "Other" } else { &e.code };
+            let code = type_code(e);
             match codes.iter_mut().find(|(c, _)| c == code) {
                 Some((_, n)) => *n += 1,
                 None => codes.push((code.to_owned(), 1)),
@@ -384,9 +422,16 @@ impl Inspector {
         use InspectorControl as C;
         match self {
             Inspector::Nothing => vec![],
-            Inspector::Waiting { targets, more, .. } => (0..targets.len())
+            // A file waiting on its helper app has no formats, only Get.
+            Inspector::Waiting {
+                targets,
+                more,
+                helper,
+                ..
+            } => (0..targets.len())
                 .map(C::Target)
                 .chain((*more).then_some(C::More))
+                .chain(helper.map(|_| C::GetHelper))
                 .collect(),
             // The shared formats, or with none, each kind to narrow to.
             Inspector::Several {
@@ -406,6 +451,15 @@ impl Inspector {
                 .into_iter()
                 .chain((*details).then_some(C::ShowDetails))
                 .collect(),
+        }
+    }
+
+    /// What button `c` says on it: as [`InspectorControl::label`] has it,
+    /// and Get as the row's link says it, "Get FFmpeg".
+    pub fn label(&self, c: InspectorControl) -> Option<&'static str> {
+        match (c, self) {
+            (InspectorControl::GetHelper, Inspector::Waiting { helper, .. }) => *helper,
+            _ => c.label(),
         }
     }
 }
@@ -611,11 +665,13 @@ mod tests {
             facts,
             targets,
             more,
+            helper,
         } = i
         else {
             panic!("{i:?}")
         };
         assert_eq!(row, 0);
+        assert_eq!(helper, None);
         assert_eq!(what, Some("a lossless image with transparency"));
         assert_eq!(facts[0], ("Size", "2.4 MB".to_owned()));
         assert_eq!(facts[1], ("Pixels", "1600 × 1200".to_owned()));
@@ -785,12 +841,13 @@ mod tests {
             e.job = job;
             inspect_plain(&selecting(vec![e], &[0]), &Habits::default())
         };
+        // Until there is enough to go on, what it is doing.
         assert_eq!(
             inspect_job(running(Some(0.38), None)),
             Inspector::Converting {
                 row: 0,
                 percent: Some(38),
-                left: None
+                time: "Converting to WEBP".to_owned()
             }
         );
         // Ten seconds in and 38% done: about 16 s to go.
@@ -800,7 +857,7 @@ mod tests {
             Inspector::Converting {
                 row: 0,
                 percent: Some(38),
-                left: Some("about 15 sec".to_owned())
+                time: "about 15 sec".to_owned()
             }
         );
         // An engine that can't say how far along it is.
@@ -809,7 +866,7 @@ mod tests {
             Inspector::Converting {
                 row: 0,
                 percent: None,
-                left: None
+                time: "Converting to WEBP".to_owned()
             }
         );
     }
@@ -954,28 +1011,31 @@ mod tests {
                 engine: Some("FFmpeg"),
             };
             e.last = last;
-            let want = (e.line().0, e.retryable());
+            let want = (e.line(), e.retryable());
             let list = selecting(vec![e], &[0]);
             (inspect_plain(&list, &Habits::default()), want)
         };
         let again = Some(Action::Convert("webp".to_owned()));
-        let (i, (sentence, retry)) = failed(
+        let (i, ((sentence, tone), retry)) = failed(
             "The conversion stopped before it finished. Try again.",
             again.clone(),
             "",
         );
         assert!(retry);
+        // Said in the row's own words and tone.
+        assert_eq!(tone, Tone::Crack);
         assert_eq!(
             i,
             Inspector::Failed {
                 row: 0,
                 sentence,
+                tone,
                 retry: true,
                 details: false
             }
         );
         // A damaged file would fail the same way: no Retry.
-        let (i, (sentence, retry)) = failed(
+        let (i, ((sentence, tone), retry)) = failed(
             "This file looks damaged. Try opening it in another app.",
             again.clone(),
             "",
@@ -986,6 +1046,7 @@ mod tests {
             Inspector::Failed {
                 row: 0,
                 sentence,
+                tone,
                 retry: false,
                 details: false
             }
@@ -1013,6 +1074,7 @@ mod tests {
         let mut e = harbour();
         e.job = JobState::Cancelled;
         e.last = again;
+        let tone = e.line().1;
         let list = selecting(vec![e], &[0]);
         let i = inspect_plain(&list, &Habits::default());
         assert_eq!(
@@ -1020,6 +1082,7 @@ mod tests {
             Inspector::Failed {
                 row: 0,
                 sentence: "Cancelled.".to_owned(),
+                tone,
                 retry: true,
                 details: false
             }
@@ -1190,6 +1253,7 @@ mod tests {
             facts: vec![],
             targets: (0..n).map(|i| target(&format!("f{i}"))).collect(),
             more,
+            helper: None,
         };
         assert_eq!(
             waiting(3, true).controls(),
@@ -1197,11 +1261,17 @@ mod tests {
         );
         assert_eq!(waiting(2, false).controls(), [C::Target(0), C::Target(1)]);
         assert_eq!(waiting(0, false).controls(), []);
+        // A file waiting on its helper app has Get in their place.
+        let mut needs = waiting(0, false);
+        if let Inspector::Waiting { helper, .. } = &mut needs {
+            *helper = Some("Get FFmpeg");
+        }
+        assert_eq!(needs.controls(), [C::GetHelper]);
         assert_eq!(
             Inspector::Converting {
                 row: 0,
                 percent: Some(38),
-                left: None
+                time: String::new()
             }
             .controls(),
             [C::Cancel]
@@ -1219,6 +1289,7 @@ mod tests {
         let failed = |retry, details| Inspector::Failed {
             row: 0,
             sentence: String::new(),
+            tone: Tone::Crack,
             retry,
             details,
         };
@@ -1267,5 +1338,115 @@ mod tests {
             .all(|c| c.label().is_none()));
         assert_eq!(files_count(1), "1 file");
         assert_eq!(files_count(2), "2 files");
+        // The inspector says them the same, and Get names its helper app.
+        let mut e = entry("clip.mkv", "MKV", 1_000, &[]);
+        e.missing = Some(("ffmpeg".to_owned(), 12));
+        let i = inspect_plain(&selecting(vec![e], &[0]), &Habits::default());
+        assert_eq!(i.label(C::GetHelper), Some("Get FFmpeg"));
+        assert_eq!(i.label(C::Cancel), Some("Cancel"));
+        assert_eq!(Inspector::Nothing.label(C::GetHelper), None);
+    }
+
+    #[test]
+    fn a_file_waiting_on_its_helper_app_offers_to_get_it_where_its_formats_would_be() {
+        use InspectorControl as C;
+        let mut e = entry("clip.mkv", "MKV", 1_000, &[]);
+        e.missing = Some(("ffmpeg".to_owned(), 12));
+        // Named as the row's link names it, from the same words.
+        assert_eq!(e.link(false), Some("Get FFmpeg"));
+        assert_eq!(e.needs_helper(), Some("ffmpeg"));
+        let i = inspect_plain(&selecting(vec![e.clone()], &[0]), &Habits::default());
+        let Inspector::Waiting {
+            targets,
+            more,
+            helper,
+            ..
+        } = &i
+        else {
+            panic!("{i:?}")
+        };
+        assert!(targets.is_empty() && !more);
+        assert_eq!(*helper, Some("Get FFmpeg"));
+        assert_eq!(i.controls(), [C::GetHelper]);
+
+        // A file with formats of its own converts to them: no Get, even
+        // when some more would need the helper.
+        let mut some = entry("clip.mp4", "MP4", 1_000, &["mkv"]);
+        some.missing = Some(("ffmpeg".to_owned(), 2));
+        let i = inspect_plain(&selecting(vec![some], &[0]), &Habits::default());
+        assert!(matches!(i, Inspector::Waiting { helper: None, .. }));
+        assert_eq!(i.controls(), [C::Target(0)]);
+        // A file Kiln can't convert at all, with no helper to get, has
+        // nothing to offer.
+        let none = entry("notes.xyz", "XYZ", 1_000, &[]);
+        let i = inspect_plain(&selecting(vec![none], &[0]), &Habits::default());
+        assert_eq!(i.controls(), []);
+        // Nor does one ruled out on adding.
+        let mut ruled_out = e;
+        ruled_out.check = kiln_core::FileCheck::Empty;
+        assert_eq!(ruled_out.needs_helper(), None);
+        let i = inspect_plain(&selecting(vec![ruled_out], &[0]), &Habits::default());
+        assert_eq!(i.controls(), []);
+    }
+
+    #[test]
+    fn kinds_are_counted_and_narrowed_by_one_type_code() {
+        let mut odd = entry("README", "", 1_000, &[]);
+        assert_eq!(type_code(&odd), "Other");
+        odd.code = "MP4".to_owned();
+        assert_eq!(type_code(&odd), "MP4");
+    }
+
+    /// 500 selected rows, as Ctrl+A on a big folder makes, each with the
+    /// dozen formats an image has, spelt as the list spells them.
+    fn five_hundred(shared: bool) -> FileList {
+        let codes = [
+            "JPG", "WEBP", "AVIF", "GIF", "PNG", "BMP", "TIFF", "ICO", "PDF", "HEIC", "JXL", "TGA",
+        ];
+        let entries = (0..500)
+            .map(|i| {
+                // Every other file a video, which shares none of them.
+                if !shared && i % 2 == 1 {
+                    return entry(&format!("{i}.mp4"), "MP4", 1_000, &["MKV", "WEBM", "MOV"]);
+                }
+                let mut targets: Vec<&str> = codes.to_vec();
+                // Rotated, so no two neighbours list them in one order.
+                targets.rotate_left(i % codes.len());
+                entry(&format!("{i}.png"), "PNG", 1_000, &targets)
+            })
+            .collect();
+        let rows: Vec<usize> = (0..500).collect();
+        selecting(entries, &rows)
+    }
+
+    #[test]
+    fn inspecting_five_hundred_selected_files_is_quick() {
+        let habits = Habits::default();
+        for shared in [true, false] {
+            let list = five_hundred(shared);
+            let i = inspect_plain(&list, &habits);
+            let Inspector::Several {
+                targets, offered, ..
+            } = &i
+            else {
+                panic!("{i:?}")
+            };
+            assert_eq!(targets.is_empty(), !shared);
+            assert_eq!(offered.len(), if shared { 0 } else { 2 });
+            // The mean of a few runs, to keep a slow first one from
+            // deciding it. The bound is generous, for a debug build on a
+            // busy machine; the time it took is printed.
+            let runs: u32 = 20;
+            let start = Instant::now();
+            for _ in 0..runs {
+                std::hint::black_box(inspect_plain(std::hint::black_box(&list), &habits));
+            }
+            let each = start.elapsed() / runs;
+            println!(
+                "inspect() for 500 selected files, {}: {each:?}",
+                if shared { "all sharing" } else { "half video" }
+            );
+            assert!(each < Duration::from_millis(50), "{each:?}");
+        }
     }
 }
