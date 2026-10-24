@@ -17,22 +17,29 @@ A native Windows file converter. Drop a file, hold a key, pick a format. Nothing
 Kiln turns one kind of file into another. Drag files onto its window, hold a
 key, and a radial menu called the **glaze wheel** opens under the pointer with
 only the formats those files can become. Pick one and Kiln does the rest in the
-background, right on your PC.
+background, right on your PC. Or select a file and press **Convert**.
 
 - **One gesture.** Hold Shift to convert, Ctrl for file tools and Alt for file actions. Every key can be reassigned.
+- **Convert in sight.** With files listed, the footer has a **Convert** button, with its key, <kbd>Enter</kbd>, beside the word. It opens the format choice for the selected files.
+- **A panel for the selected file.** In a wide window, a panel beside the list shows the selected file: a large preview, what the format is, its size, pixels or length, and up to three formats it can become, the suggestion first. Narrower, the panel folds away and the rows carry their own links, such as **Convert**.
+- **Previews and glazes.** Each row shows the file's picture, from the same thumbnails File Explorer uses, and each kind of file has its own glaze colour: celadon for images, blue for video, yellow for audio and lavender for documents. A file with no picture shows its kind's icon on a tile of its glaze.
 - **85 formats, 1,245 pairs.** Images, camera RAW, audio, video, subtitles, documents, e-books, PDF, office files, spreadsheets and slides.
 - **Suggestions.** Kiln looks inside the files you add and, when one choice clearly helps, points at it with a reason.
 - **Quality you can set.** Resolution, frame rate, bitrate and page DPI, offered only where they fit the file, with an estimate of the result.
+- **Progress you can read.** A converting row says how far it has got and about how long is left, as in `Converting to WEBM · 38% · about 2 min`. **Cancel** is on the row, or in the panel for the selected file. A failed row says what went wrong in one plain line, and offers **Retry** when trying again can help. While Kiln works, its taskbar button shows the progress. When the last job ends while Kiln is behind other windows, the button flashes and a notification names the result.
 - **Offline.** Converting never touches the network. Nothing is uploaded, ever.
-- **Nothing is saved until you export it**, and Kiln never overwrites a file without asking. Results wait inside Kiln until you export them, one at a time or all at once, to a folder you pick. Exporting into a folder never replaces a file there: a taken name becomes `name (1).jpg`.
-- **Small and quick.** A single native executable of about 7.5 MB, drawn with Direct2D. No web view. The window is up in about 215 ms.
+- **Results wait for you.** A finished file waits in Kiln until you export it to a folder you pick, one at a time or all at once, or drag it out. With **Save results next to the original** on, each result is saved beside its file as soon as it's ready. Kiln asks about this once, the first time a result is ready, and Settings changes it. Kiln never overwrites a file: a taken name becomes `name (1).jpg`.
+- **Files are checked when added.** An empty file, a file that isn't what its name says, or one Windows won't let Kiln read says so on its row, and isn't offered for converting. Kiln offers only what it can make with the helper apps it finds, and a file that needs a missing one says which, with a link to its download page.
+- **Folders too.** Drop or add a folder and Kiln adds its files, and those of the folders directly inside it, and says how many: `Added 12 files from Holiday.`
+- **Undo.** Removing several rows can be undone with **Undo** in the footer, or <kbd>Ctrl</kbd>+<kbd>Z</kbd>.
+- **Small and quick.** A single native executable of about 8.6 MB, drawn with Direct2D. No web view. The window is up in under 100 ms.
 - **Other ways in.** **Add files** or <kbd>Ctrl</kbd>+<kbd>O</kbd> opens the Windows Open dialog, <kbd>Ctrl</kbd>+<kbd>V</kbd> adds files copied in File Explorer, and right-clicking a row opens a menu with every wheel.
-- **Keyboard first.** Arrow keys pick a row, Enter opens the wheel, Escape closes it. <kbd>F1</kbd>, or the **?** in the header, lists every shortcut.
-- **Light and dark.** Follows the Windows app mode and every monitor's DPI.
+- **Keyboard first.** Arrow keys pick a row, Enter opens the wheel, Escape closes it. Tab reaches every button, the panel's formats included. <kbd>F1</kbd>, or the **?** in the header, lists every shortcut.
+- **Light and dark.** Follows the Windows app mode and every monitor's DPI, and Windows' Text size, contrast themes and Animation effects too.
 - **A command line too.** `kiln convert photo.png jpg` does the same work from a terminal.
 
 <div align="center">
-<img src="docs/screenshots/m7/empty-100.png" alt="Kiln's empty window, ready for files" width="736">
+<img src="docs/screenshots/m10/empty-125.png" alt="Kiln's empty window, ready for files" width="736">
 </div>
 
 ## The glaze wheel
@@ -41,9 +48,9 @@ Three wheels, one per modifier key. Each shows only what fits the files you drop
 
 <table>
   <tr>
-    <td align="center"><img src="docs/screenshots/m5/wheel-convert-100.png" alt="The convert wheel" width="270"><br><b>CONVERT</b><br><sub>Hold <kbd>Shift</kbd>. Every format the files can become</sub></td>
-    <td align="center"><img src="docs/screenshots/m5/wheel-tools-100.png" alt="The tools wheel" width="270"><br><b>TOOLS</b><br><sub>Hold <kbd>Ctrl</kbd>. Compress, crop, trim, split, merge</sub></td>
-    <td align="center"><img src="docs/screenshots/m6/wheel-actions-100.png" alt="The actions wheel" width="270"><br><b>ACTIONS</b><br><sub>Hold <kbd>Alt</kbd>. Copy path, move, open in Terminal</sub></td>
+    <td align="center"><img src="docs/screenshots/m10/wheel-convert-125.png" alt="The convert wheel" width="270"><br><b>CONVERT</b><br><sub>Hold <kbd>Shift</kbd>. Every format the files can become</sub></td>
+    <td align="center"><img src="docs/screenshots/m10/wheel-tools-125.png" alt="The tools wheel" width="270"><br><b>TOOLS</b><br><sub>Hold <kbd>Ctrl</kbd>. Compress, crop, trim, split, merge</sub></td>
+    <td align="center"><img src="docs/screenshots/m10/wheel-actions-125.png" alt="The actions wheel" width="270"><br><b>ACTIONS</b><br><sub>Hold <kbd>Alt</kbd>. Copy path, move, open in Terminal</sub></td>
   </tr>
 </table>
 
@@ -51,13 +58,20 @@ From the keyboard, select a row and press <kbd>Enter</kbd> for Convert,
 <kbd>Ctrl</kbd>+<kbd>Enter</kbd> for Tools or <kbd>Alt</kbd>+<kbd>Enter</kbd>
 for Actions. Inside a wheel, the arrows move, Enter applies and Escape closes.
 Tab, or **Options… (Tab)** in the centre, opens the lit format's options.
+The footer's **Convert** button, and a row's **Convert** link, open the same
+choice.
+
+When the selected files have no format in common, no wheel opens. The footer
+says why, as in
+`These files have no format in common: MP4 (3), DOCX (2). Select one kind at a time.`,
+and the panel offers each kind on its own.
 
 The convert wheel keeps the eight most useful targets close. When a file can
 become more than that, a **More** segment pours a second ring around the
 first with every other format, grouped by kind.
 
 <div align="center">
-<img src="docs/screenshots/m8/wheel-more-dark-100.png" alt="The convert wheel with its More ring open" width="560">
+<img src="docs/screenshots/m10/wheel-more-dark-125.png" alt="The convert wheel with its More ring open" width="560">
 </div>
 
 ## Suggestions
@@ -67,20 +81,21 @@ clearly helps, says what it would do and why. A photo saved as PNG suggests
 JPG, a MOV suggests MP4, and a large video suggests Compress. When nothing
 clearly helps, Kiln says nothing.
 
-- **In the list.** Each row's second line says what Kiln found and what it suggests, as in `4032 × 3024 photo · 3.1 MB · Suggested: JPG, about 2 MB`.
+- **In the list.** Each row's second line says what Kiln found and, last and in the file's glaze colour, what it suggests, as in `4032 × 3024 photo · 3.1 MB · as JPG about 2 MB`.
+- **In the panel.** Under **Turn it into**, the suggested format comes first, with a dot and its estimate. After it come the formats you pick most for that type of file.
 - **In the wheel.** A small celadon dot marks the suggested format or tool. Formats keep their places. Opened from the keyboard, the wheel starts on the suggestion, and the footer gives the reason.
 - **Your picks.** When you have picked the same format for a type of file at least three times, and it is the one you pick most, Kiln suggests it from then on.
 - **What it looks at.** The size and look of a picture, whether it has transparency or motion, the length and bitrate of audio and video, black bars, and whether a PDF has text. Images are read by Kiln itself, except HEIC, AVIF and JXL, which FFmpeg reads like audio and video.
 
 Nothing is uploaded, and picks are counted only in `settings.toml`. Turn
-suggestions off with **Suggestions** in **Settings > General**. **Forget
-picks**, beside it, clears the picks Kiln has counted.
+suggestions off with **Suggestions** in **Settings > General**. **Reset
+suggestions**, beside it, clears the picks Kiln has counted.
 
 <table>
   <tr>
-    <td align="center"><img src="docs/screenshots/m9/row-hint-dark-100.png" alt="Two rows, each with what Kiln found and its suggestion" width="270"><br><b>IN THE LIST</b><br><sub>What Kiln found, and what it suggests</sub></td>
-    <td align="center"><img src="docs/screenshots/m9/wheel-dot-dark-100.png" alt="The convert wheel with a dot on JPG" width="270"><br><b>THE DOT</b><br><sub>On the suggestion, with the reason below</sub></td>
-    <td align="center"><img src="docs/screenshots/m9/wheel-more-dot-light-100.png" alt="The More ring with a dot on QOI and on More" width="270"><br><b>IN MORE</b><br><sub>On More and on its place in the ring</sub></td>
+    <td align="center"><img src="docs/screenshots/m10/row-hint-dark-125.png" alt="Three rows, each with what Kiln found and its suggestion" width="270"><br><b>IN THE LIST</b><br><sub>What Kiln found, and what it suggests</sub></td>
+    <td align="center"><img src="docs/screenshots/m10/wheel-dot-dark-125.png" alt="The convert wheel with a dot on JPG" width="270"><br><b>THE DOT</b><br><sub>On the suggestion, with the reason below</sub></td>
+    <td align="center"><img src="docs/screenshots/m10/wheel-more-dot-light-125.png" alt="The More ring with a dot on QOI and on More" width="270"><br><b>IN MORE</b><br><sub>On More and on its place in the ring</sub></td>
   </tr>
 </table>
 
@@ -88,12 +103,16 @@ picks**, beside it, clears the picks Kiln has counted.
 
 <table>
   <tr>
-    <td align="center"><img src="docs/screenshots/m7/jobs-light-100.png" alt="A running job, a finished one and a failed one" width="400"><br><b>JOBS</b><br><sub>Run in the background, each with its own progress line and cancel</sub></td>
-    <td align="center"><img src="docs/screenshots/m7/settings-update-100.png" alt="The settings panel" width="400"><br><b>SETTINGS</b><br><sub>Where exports start, theme, keys to hold while dropping, suggestions, quality defaults and helper apps</sub></td>
+    <td align="center"><img src="docs/screenshots/m10/inspector-dark-125.png" alt="A photo selected, with the panel beside the list" width="400"><br><b>THE PANEL</b><br><sub>What the selected file is, and what it can become</sub></td>
+    <td align="center"><img src="docs/screenshots/m10/several-light-125.png" alt="A video and a document selected, with the panel offering each kind" width="400"><br><b>MIXED FILES</b><br><sub>No format in common, so the panel says why and offers each kind</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/screenshots/m5/details-100.png" alt="The details dialog with a helper app's output" width="400"><br><b>DETAILS</b><br><sub>A failed job shows one plain line, with the helper app's full output a click away</sub></td>
-    <td align="center"><img src="docs/screenshots/m6/wheel-convert-light-100.png" alt="The convert wheel in light mode" width="400"><br><b>LIGHT MODE</b><br><sub>Same stoneware, lighter glaze</sub></td>
+    <td align="center"><img src="docs/screenshots/m10/jobs-light-125.png" alt="A running job, a finished one and a failed one" width="400"><br><b>JOBS</b><br><sub>Run in the background, each with how far it has got, the time left and Cancel</sub></td>
+    <td align="center"><img src="docs/screenshots/m10/settings-update-125.png" alt="The settings panel" width="400"><br><b>SETTINGS</b><br><sub>The folder shown first when saving, theme, keys to hold while dropping, suggestions, saving next to the original, quality defaults and helper apps</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/m10/details-125.png" alt="The details dialog with a helper app's output" width="400"><br><b>DETAILS</b><br><sub>A failed job shows one plain line, with the helper app's full output a click away</sub></td>
+    <td align="center"><img src="docs/screenshots/m10/wheel-convert-light-125.png" alt="The convert wheel in light mode" width="400"><br><b>LIGHT MODE</b><br><sub>Same stoneware, lighter glaze</sub></td>
   </tr>
 </table>
 
@@ -102,9 +121,10 @@ picks**, beside it, clears the picks Kiln has counted.
 Kiln knows 85 formats and converts between 1,245 pairs. When no single helper
 app does a pair, Kiln chains two steps through a shared format, such as HEIC to
 JPG through PNG, or MOBI to PDF through DOCX. The steps run in one temporary
-folder, and only the finished file is kept, held inside Kiln until you
-export it. You can also drag a finished file out of Kiln to save it where you
-drop it.
+folder, and only the finished file is kept: held inside Kiln until you export
+it, or saved next to the original when **Save results next to the original**
+is on. You can also drag a finished file out of Kiln to save it where you drop
+it.
 
 | Kind | Reads | Converts to | Helper app |
 |---|---|---|---|
@@ -167,14 +187,15 @@ up, so a 720p clip stays 720p when the cap is 1080p.
   what it is (`1280 × 720 · 25 fps · 1:30`), and estimates the result as you
   change things.
 - **As defaults.** **Settings > Quality** holds one set for video, images,
-  sound quality and page sharpness (DPI). A plain click in the wheel uses them.
+  sound quality and page sharpness (DPI). A plain click in the wheel, or on a
+  format in the panel, uses them.
 - **From the command line.** `--preset`, `--size`, `--fps`, `--audio-kbps`,
   `--dpi` and `--quality` (JPG, 1 to 100).
 
 <table>
   <tr>
-    <td align="center"><img src="docs/screenshots/m8/sheet-mov-dark-100.png" alt="The options sheet for an MP4 going to MOV" width="400"><br><b>OPTIONS SHEET</b><br><sub>Only the settings that fit, and an estimate</sub></td>
-    <td align="center"><img src="docs/screenshots/m8/settings-quality-light-100.png" alt="The quality defaults in Settings" width="400"><br><b>QUALITY DEFAULTS</b><br><sub>One set for each kind of result</sub></td>
+    <td align="center"><img src="docs/screenshots/m10/sheet-mov-dark-125.png" alt="The options sheet for an MP4 going to MOV" width="400"><br><b>OPTIONS SHEET</b><br><sub>Only the settings that fit, and an estimate</sub></td>
+    <td align="center"><img src="docs/screenshots/m10/settings-quality-light-125.png" alt="The quality defaults in Settings" width="400"><br><b>QUALITY DEFAULTS</b><br><sub>One set for each kind of result</sub></td>
   </tr>
 </table>
 
@@ -184,7 +205,9 @@ up, so a 720p clip stays 720p when the cap is 1080p.
 - **Portable.** Unzip `Kiln-<version>-x64-portable.zip` anywhere and run `kiln-app.exe`.
 
 Images convert out of the box. The other kinds use free helper apps that Kiln
-finds on your PC. It never bundles or downloads them.
+finds on your PC. It never bundles or downloads them. A file that needs a
+missing one says so on its row, with a link such as **Get FFmpeg** to the app's
+own download page.
 
 | Helper app | Needed for |
 |---|---|
@@ -213,10 +236,13 @@ Every change is saved straight away to `%APPDATA%\Kiln\settings.toml`, which
 you can also edit by hand:
 
 ```toml
-output_folder = 'D:\Converted'   # where export dialogs start; leave out
-                                 # for the last folder you exported to
+output_folder = 'D:\Converted'   # the folder shown first when saving; leave
+                                 # out for the last folder you exported to,
+                                 # or the file's own
 theme = "system"                 # system, dark or light
 suggestions = true               # false turns suggestions off
+save_next_to_original = false    # true saves each result beside its file
+save_asked = true                # Kiln has asked about that; false asks again
 
 [keys]                           # shift, ctrl or alt; one per wheel
 convert = "shift"
@@ -243,7 +269,7 @@ png = { jpg = 4, webp = 1 }
 heic = { png = 3 }
 ```
 
-**Forget picks** in **Settings > General** clears `[habits]`.
+**Reset suggestions** in **Settings > General** clears `[habits]`.
 
 A file Kiln can't read is left alone. The app starts with the defaults and
 says why in the footer.
@@ -259,7 +285,8 @@ kiln suggest FILE...
 ```
 
 `kiln convert` and `kiln tool` write next to the input, or into `-o DIR`,
-as soon as they finish. Only the app holds results until you export them.
+as soon as they finish. Only the app holds results until you export them,
+unless **Save results next to the original** is on.
 
 `kiln` exits with 0 on success, 2 when the request can't be done (an unknown
 format, or an unsupported pair or tool), and 1 when a conversion fails.
@@ -288,7 +315,8 @@ cargo test --workspace         # backend tests need ffmpeg, ffprobe, pandoc, Lib
 
 `kiln-core` and `kiln-cli` also build and test on Linux and macOS, which is
 handy for working on converters. `kiln-app` is Windows only. Its layout, theme,
-icon and settings logic are plain Rust and are tested on every platform.
+icon, inspector, motion and settings logic are plain Rust and are tested on
+every platform.
 
 Signing is optional. Set `KILN_SIGN_CERT` (a .pfx path) and
 `KILN_SIGN_PASSWORD` before running `package.ps1`, and the executables and
@@ -348,6 +376,7 @@ programs are always run with separate arguments, never through a shell.
 - Compress works on PNG and JPG images, MP4, MOV, MKV and WebM video, MP3, OGG, Opus, M4A and FLAC audio, and PDF. Other types have no tighter encoding to re-save with.
 - Trim on video cuts only stretches that are both black and silent, and the kept part is re-encoded.
 - Office files and documents other than PDF have no tools other than Merge for documents.
+- Previews come from Windows' own thumbnails, so a PDF or Office file shows a picture only where a thumbnail handler is installed. Without one, it shows its kind's tile.
 - The update check returns "No releases are published yet" until a release exists on GitHub.
 
 </details>
@@ -358,11 +387,12 @@ programs are always run with separate arguments, never through a shell.
 <br>
 
 On the development PC (release build, Windows 11, NVIDIA GPU), the window
-appears about 215 ms after launch. Idle, Kiln uses about 13 MB of private
-memory, which is the figure Task Manager shows. Its working set is about
-53 MB, but most of that is graphics driver code shared with other apps.
-`kiln-app.exe` is about 7.5 MB and `kiln.exe` about 2.8 MB. Most of the app's
-size is the in-process PDF, SVG and image code that needs no engine.
+is visible 46 to 97 ms after launch, with no white first frame. With 500 files
+listed and their previews loading, the UI thread answers in 1.74 ms (95th
+percentile), and the working set is 75.8 MB. With four conversions running, a
+key reaches the screen in 20.6 ms (median). `kiln-app.exe` is about 8.6 MB
+and `kiln.exe` about 7.4 MB. Most of the app's size is the in-process PDF, SVG
+and image code that needs no engine.
 
 </details>
 

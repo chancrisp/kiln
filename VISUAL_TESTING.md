@@ -11,7 +11,7 @@ window between them as well.
 
 ## Window
 
-- [ ] Opens in under half a second, with no white flash before the first frame.
+- [ ] Opens at once (the window is up within 100 ms), with no white flash before the first frame.
 - [ ] Title bar is dark (Windows 10 20H1+). On Windows 11 the caption is soot with bone text.
 - [ ] The background shows a faint, still grain. It never shimmers or moves.
 - [ ] No pure black or pure white anywhere. No orange anywhere.
@@ -32,9 +32,9 @@ window between them as well.
 
 ## File list
 
-- [ ] Dropping files adds one row each, fading in over about 180 ms. Nothing bounces.
+- [ ] Dropping files adds one row each, rising a little and fading in over about a quarter of a second, one after another. Adding 500 files doesn't crawl: every row is in place within about two thirds of a second. Nothing bounces.
 - [ ] Format chips are monospace, uppercase and slightly tracked (PNG, MP4, DOCX).
-- [ ] Rows show the name in bone, then in stone the number of conversions (or what the file is and the suggestion), the size, then the folder's last part.
+- [ ] Rows show the preview, the chip, the name in bone, then in stone the number of conversions (or what the file is), the size and the folder's last part. With a suggestion, it comes last in the file's glaze ink ("as JPG about 890 KB") and the folder gives way to it.
 - [ ] Hovering a row shows a native tooltip: the whole line when the row cuts it short, then the full folder path on its own line. A running row's Cancel says "Cancel" and a held row's Export link says "Export (Ctrl+S)".
 - [ ] A file with no conversions says "No formats for this type".
 - [ ] Dropping the same file twice reports it as already in the list. Dropping a folder reports it as skipped.
@@ -65,7 +65,7 @@ window between them as well.
 
 ## Glaze wheel
 
-- [ ] Holding Shift while dragging files over the window pours the convert wheel open at the cursor in about 160 ms. Ctrl opens the tools wheel instead.
+- [ ] Holding Shift while dragging files over the window opens the convert wheel at the cursor in about 200 ms: it grows and turns slightly into place as it fades in, and its segments follow one after another. Ctrl opens the tools wheel instead.
 - [ ] The wheel stays fully inside the window near every edge and corner.
 - [ ] The centre shows "Convert" or "Tools" in the serif, the key that opens it ("Shift", "Ctrl") muted below, then the source type (PNG, or MIXED). The key follows Settings.
 - [ ] Hovering a segment fills it with celadon at 18% and draws a fine celadon arc on its outer edge. Icons and labels keep their colour.
@@ -79,12 +79,12 @@ window between them as well.
 
 ## Jobs
 
-- [ ] A running row shows "Converting to WEBM" and a thin celadon line along its bottom that brightens at its leading edge. The glow breathes slowly; nothing flickers. No spinners anywhere.
+- [ ] A running row shows "Converting to WEBM" and a thin line in the file's glaze along its bottom that brightens at its leading edge. The glow breathes slowly; nothing flickers. No spinners anywhere.
 - [ ] A running row shows a **Cancel** button at the right of its second line without hovering; clicking it cancels the job and the row says "Cancelled." with a Retry link. There is no cross.
 - [ ] A running row reads "Converting to WEBM  ·  38%  ·  about 2 min" (the time appears after a few seconds), or "Converting to WEBM  ·  Working…" when no progress is known. The progress line is 4 px thick.
 - [ ] With a running file selected, the footer's button reads Cancel, can be reached with Tab and pressed with Enter or Space, and its tooltip says "Cancel the converting files (Space)". The footer reads "3 of 50 done. Space cancels the selected file."
 - [ ] While work runs, the taskbar button shows progress. With Kiln behind another window when the last job ends, the taskbar button flashes and a notification says "photo.jpg is ready."; clicking it brings Kiln forward on that row. With Windows animations off there is no flash.
-- [ ] When a job finishes, the output name appears in bone, fading in over about 200 ms.
+- [ ] When a job finishes, the row flashes in its glaze and cools over about a second as the output name settles in, in bone. A failed row shakes once, slightly, as its line turns brick.
 - [ ] A failed job shows one plain line in brick and, when the helper app said more, a "Show details" link. Clicking it, or pressing Space on the row, opens the details over a scrim. Escape, Enter or Close dismisses it.
 - [ ] A failed row never shows a file path or the helper's own words, and ends with a next step ("Try opening it in another app.", "Try again."). Where trying again can help, or after a cancel, a Retry link sits beside Show details (or alone) and runs the job again; a damaged file gets none. The right-click menu has Retry too.
 - [ ] The footer sums up each batch calmly: "Converted 3 files to JPG.", "Couldn't convert the file to FLAC. The row says why.". No exclamation marks.
@@ -101,6 +101,21 @@ window between them as well.
 - [ ] **Convert's key.** While the footer's button reads Convert it shows the word and, after it, "Enter" in a fine keycap, the two centred together. It reads plain "Cancel" while a selected file converts, and plain muted "Convert" while disabled. In the smallest window (480 x 360) the keycap is left out so the short idle hint still fits beside the buttons. Narrator reads the button as "Convert".
 - [ ] **One text column.** The file names and second lines of PNG, MP4, DOCX and XLSX rows all start at the same x; only a longer code (five letters or more) pushes its own row's text right.
 - [ ] **Audio keeps its tile.** An MP3 or WAV row always shows its yellow tile with the waveform, even when the file has album art.
+- [ ] **The fold at 760.** With files listed, narrow the window past 760 DIPs (950 pixels at 125%): the inspector slides out to the right over about a fifth of a second as the list widens, and the rows' links come back. Widening brings it back the same way. The header and footer never jump. At a larger Text size it folds in a wider window. Minimising and restoring the window leaves it where it was.
+- [ ] **The inspector, case by case.** One file waiting: its preview, chip and name, what the format is, Size, Pixels or Length, and Folder, then under "Turn it into" up to three formats, the suggestion first with its dot and "≈ 890 KB", then "More formats…". Converting: the glaze's heat rising over the preview, the percentage in large figures, the time left, and Cancel. Done: the result's name, its size before and after, a check on the preview, and Save, which becomes Show in folder once saved. Failed: the sentence in brick, Retry where it helps, and Show details. Several files: up to three stacked previews and "1 video, 1 document"; with no format in common, the footer's sentence and "Select one kind", each kind's button selecting only its files. Nothing selected: the mark, the hint and the privacy line.
+- [ ] **The inspector on the keyboard.** Tab goes from the list through the inspector's formats, More formats… and its buttons, then the footer. Narrator reads the panel as "Selected file", a format as "Convert to JPG, a photo that opens anywhere, about 890 KB", and the preview as "Preview of harbour.png".
+- [ ] **Previews keep up.** In a list of 500 files, previews fill in nearest first as you scroll, and the list never stutters while they load. The inspector's preview is 268 x 120, cropped to fill, never stretched; with no thumbnail it is the glaze tile with a larger icon.
+- [ ] **Glazes in both themes.** In dark and in light, the inspector's top wash, the heat over its preview and its formats' chips take the selected file's glaze, and all its text stays readable. A video, an image, an MP3 and a DOCX side by side are blue, celadon, yellow and lavender.
+- [ ] **Glazes under High Contrast.** Under a Windows contrast theme there are no tints, washes, glows or shadows: chips and preview tiles are outlined in the theme's colours, every kind is the same colour (the code tells them apart), the inspector has no wash, and a converting file's heat in the inspector is a line in the highlight colour.
+
+## Motion
+
+- [ ] Rows pour in: each rises a little and fades in, one after another. Up and Down glide the selection's wash and edge to the next row; a long jump doesn't glide.
+- [ ] Selecting another file cross-fades the inspector, the new content rising a little; a preview fades in when it arrives.
+- [ ] The wheel blooms open, its segments following, and fades out quickly when it closes; More's ring pours open and draws back. Settings, Help and the options sheet slide up and fade in over the scrim.
+- [ ] Buttons ease their hover and press: the header's, the footer's, the inspector's, Settings', Help's Close, the details dialog's and the options sheet's.
+- [ ] A finished row flashes in its glaze and cools; a failed one cracks, a small shake left then right, once. A converting row's heat breathes slowly.
+- [ ] **Animation effects off.** Turn off Settings > Accessibility > Visual effects > Animation effects while Kiln is open. Rows appear at once and in place, the selection moves without gliding, the inspector's content changes with no fade and it folds and unfolds at once, and previews appear without fading. The wheel, the More ring, Settings, Help and the options sheet open and close at once, with no pulse on a chosen item. Buttons change at once. A finished row doesn't flash and a failed one doesn't shake. Progress lines hold still but still show how far, and the taskbar button doesn't flash when the last job ends behind another window. Turning it back on brings the motion back without restarting Kiln.
 
 ## App icon
 
@@ -121,7 +136,7 @@ window between them as well.
 - [ ] Tab and Shift+Tab move a celadon focus ring through every control; Enter or Space presses.
 - [ ] Every button, key button, theme segment and the dialog's Close show a soft inner shadow while held, and act only when released over them.
 - [ ] Check for updates says "Checking for updates…", then the result in one calm line beside the button. With no network it says "Couldn't reach GitHub.". When a newer version exists, the button reads "Get the update" and opens the releases page.
-- [ ] Output folder: Choose picks a folder and results go there; Reset goes back to "Next to each file".
+- [ ] Folder shown first when saving: Choose picks a folder and save dialogs open there; Reset goes back to "Last export folder".
 - [ ] Labels read "Sound quality", "Sharpness (DPI)" and "Keys to hold while dropping" (the last two on two lines), and the tabs "General", "Quality" and "Helper apps". None is cut off at the smallest window size.
 - [ ] Keys to hold while dropping: pressing a key button moves that wheel to the next key and swaps with the wheel that had it. Dragging follows the new keys at once.
 - [ ] Helper apps shows "Found on PATH", "Not installed" or the chosen path for FFmpeg, Pandoc and LibreOffice. LibreOffice installed in Program Files shows its path without being chosen. Choose takes an .exe; jobs use it straight away.

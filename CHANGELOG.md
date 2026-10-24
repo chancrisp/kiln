@@ -48,6 +48,7 @@ The first version.
   - In the app, files are inspected on one low-priority thread as they are added. Each row's second line shows what Kiln found and its suggestion, then the size and folder, fading in over 160 ms.
   - The convert and Tools wheels mark the suggestion with a small celadon dot, on More and in the ring when it sits there. Opened from the keyboard, a wheel starts on the suggestion, and the footer gives the reason.
   - **Settings > General** gains **Suggestions**, On or Off, and **Forget picks**. `settings.toml` gains `suggestions = true`.
+- A new look: previews, a colour for each kind of file, a panel for the selected file, and smoother motion.
 - Packaging: an MSI installer, a portable ZIP and optional code signing.
 - The installer adds Kiln to Explorer's Open with and Send to.
 - CI on windows-latest.

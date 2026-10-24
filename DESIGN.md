@@ -30,10 +30,12 @@ them changes, so a palette change is always a deliberate one.
      at 45% in dark and `#3C2D1E` at 18% in light.
    - A raised surface also has a 1 px highlight along its top edge: bone at
      5% in dark, bone ground at 60% in light.
-4. **Motion with weight.** Animations last 120 to 180 ms and ease out.
-   Nothing bounces. With Windows' Animation effects off, every pour, slide
-   and fade is instant and progress lines stop breathing; progress still
-   shows.
+4. **Motion with weight.** Things move quickly and come to rest gently,
+   like something with weight: 120 to 300 ms, eased out, never past their
+   mark. Nothing bounces. Only the heat's slow breath and a finished file
+   cooling take longer. [Motion](#motion) lists every moment. With
+   Windows' Animation effects off, every value is at its end at once and
+   progress lines stop breathing; progress still shows.
 
 ## Colour
 
@@ -141,6 +143,8 @@ test enforces this.
   - Padding inside panels is always 16 px.
   - Rows are 56 px tall, controls 32 px, and the header 56 px.
   - Content runs in a column at most 880 px wide, centred in a wider window, so a row's link is never far from its name. Below that width it fills the window.
+  - With files listed and the inspector beside the list, the cap is 1180 px, so the list keeps about the 880 it had. The cap rises from 880 to 1180 as the inspector slides in, so the header and footer never jump.
+  - A row starts with its preview: a 34 px square with 6 px corners, 12 px before the chip. The inspector's preview is 268 × 120 px with 8 px corners.
 - Corners are 6 px on controls and 12 px on panels. The wheel is circular.
 - Borders are 1 px in kiln-flint (taupe in light) and drawn inside their shape, so neighbours never double up. A segmented control has one outer border and hairline dividers.
 - The keyboard focus ring is a 1.5 px strong-celadon line drawn 3 px outside the control. In the list it sits 2 px inside the focused row. It shows after keyboard input, stays when Escape clears the selection, and hides after a click in the list until the next key.
@@ -155,9 +159,46 @@ test enforces this.
 - They are built from simple geometric shapes and drawn as vector paths in [`icons.rs`](crates/kiln-app/src/icons.rs). There is no icon font.
 - Keep curves generous. A Bézier smaller than about 2 units strokes poorly in some Direct2D implementations, so draw tiny circles as short polygons.
 - Current set: mark, mark-solid, flame, cube, cross, image, audio, video, subtitle, document, sheet, slides, compress, crop, trim, split, merge, copy, move, terminal, dial, help, more.
-- The mark is the flame K, `MARK_PATH`: the header draws it solid in celadon, the empty window as line work. Inside the window it is flat, like every other icon.
+- The mark is the flame K, `MARK_PATH`: the header draws it solid in celadon, the empty window as line work at 72 px with a 2 px line, and the inspector, with nothing selected, as line work at 48 px. Inside the window it is flat, like every other icon.
+- The kinds' icons (image, video, audio, document, sheet, slides, subtitle) double as preview fallbacks: a file with no picture shows its kind's icon in its glaze tile, and the empty window's four tiles use them too. Audio's is five bars of a level meter. A file of no kind Kiln knows gets a plain tile.
 - The app icon is the same K pressed into a slab of dark stoneware with celadon glaze pooled in the impression, rendered from [`assets/kiln-seal.svg`](crates/kiln-app/assets/kiln-seal.svg) at 256 and 48 px (48 drops the grain and keeps the relief) and as a flat fill of `MARK_PATH` on an ash tile at 32 and 16 px. Regenerate it with `cargo run -p kiln-app --example gen_icon`.
 - The brand seal, [`docs/readme/kiln-seal.svg`](docs/readme/kiln-seal.svg), is the same mark tilted two degrees with an incised frame line, like a stamped chop. It is for the README and marketing, never the icon.
+
+## Previews
+
+- **From Windows.** Every file shows a preview from Windows' own thumbnail service (`IShellItemImageFactory`), the one File Explorer uses. It works offline and covers photos, video frames, and PDF and Office pages where a handler is installed. Kiln asks for thumbnails only (`SIIGBF_THUMBNAILONLY`), so it never waits on an icon.
+- **Never in the way.** One worker thread fetches them: the selection's first, then the visible rows from the top, then up to 12 rows below and 12 above, nearest first. It posts each picture to the window, where it fades in over 180 ms. The UI thread never calls the Shell or reads the disk for a preview, so a slow network folder can't hold it up.
+- **Cached, and capped.** Pictures are kept by path, modified time and size (a row's 34 px square, or the inspector's 268 × 120), in device pixels, so a window moved to a screen of another scale asks again. The cache holds at most 64 MB and lets the least recently used go first. A file that changes on disk gets a new preview, and a removed row's goes.
+- **Cropped, never stretched.** A picture is cropped to fill its box, centred. A thumbnail Windows hands back with every alpha at 0 is made opaque; one with transparency of its own keeps it.
+- **The glaze tile.** A file with no thumbnail (an MP3, an empty or broken file, a type with no handler) shows its glaze tile: the glaze's chip colour with the kind's icon drawn in the glaze, or a plain tile for a file of no kind Kiln knows. Audio always shows its tile, even when the file has album art. The tile is there from the start, and a picture fades in over it.
+- **Decoration only.** A row's name for assistive tools doesn't change. The inspector's preview is an image named "Preview of harbour.png".
+
+## Motion
+
+Everything moves the same way: fast at first, then settling gently, never past its mark. Easing is one cubic ease-out (`theme::motion::ease_out`), which stands in for cubic-bezier(.2, .8, .2, 1); the heat breathes on a cosine. The values live in [`anim.rs`](crates/kiln-app/src/anim.rs). Each is a pure function of when it began and the time now, so tests drive the clock. The window's frame timer runs at 16 ms only while something moves, at 50 ms while only heat breathes, and stops when nothing moves, so an idle Kiln uses no CPU.
+
+| Moment | Motion | Time |
+|---|---|---|
+| Rows added | Each row rises 10 DIPs and fades in. Each waits 45 ms longer than the row before it, up to 400 ms, so 500 rows don't crawl. | 260 ms |
+| Facts arrive | A row's second line crosses over to what Kiln found. | 160 ms |
+| Selection moves | The selected row's wash and edge glide to the new row, when it is near and no rows came or went. | 160 ms |
+| Inspector content changes | The old content fades out as the new fades in, rising 6 DIPs. The same file's content changing in place (its facts arriving, its percent ticking over) doesn't fade. | 180 ms |
+| Preview arrives | Fades in over the glaze tile. | 180 ms |
+| Converting | The heat line glows in the file's glaze and breathes, its opacity between 1 and 0.65. Its length follows progress. | 2.4 s a breath |
+| Finished | The row flashes in its glaze at 32% and cools to rest as the result's name settles in. A check fades in on the inspector's preview. | 900 ms |
+| Failed | The row shakes 2 DIPs, left then right, once (a crack), and its sentence turns to the error colour. | 120 ms |
+| Wheel opens | The disc scales from 0.86 and turns from −8° as it fades in. The segments follow, each 18 ms after the one before. | 200 ms |
+| Wheel closes | Fades out. A chosen item first pulses once, over 180 ms. | 120 ms |
+| More | The outer ring pours open from behind the dish, scaling from 66%, and draws back when another segment is lit. | 160 ms, back in 120 ms |
+| Suggestion dot | Fades in when facts arrive while the wheel is open. | 160 ms |
+| Sheets (Settings, Help, options) | Slide up 12 DIPs and fade in, with the scrim fading in behind. The options sheet fades out over 120 ms. | 180 ms |
+| Settings tabs | The chosen tab's fill slides to it, and the page cross-fades. | 160 ms, page 120 ms |
+| Buttons | Hover lifts the fill. Press sinks it with the inner shadow. | 120 ms |
+| Files dragged over | The celadon edge and the faint wash fade in, and out again. | 120 ms |
+| Inspector folds away at 760 DIPs | Slides out to the right as the list widens, and back in the same way. | 220 ms |
+
+- With Windows' Animation effects off (`theme::motion::animations()` false), every value is at its end at once: rows are simply there, the inspector is there or gone, and heat holds still. Progress still shows, and a finished row still says "Done".
+- Motion never carries meaning alone: a finished row says so in words, and a failed one says why.
 
 ## The glaze wheel
 
@@ -165,7 +206,7 @@ test enforces this.
   - By default Shift opens Convert, Ctrl opens Tools and Alt opens Actions. Settings can reassign them, one key per wheel.
   - From the keyboard, Enter (with the modifier) opens it in the middle of the list.
 - **Size.** The outer radius is 136 DIPs and the inner radius 56. The pointer still counts as on an item up to 48 DIPs past the edge. The wheel always stays 8 DIPs inside the window.
-- **Pour.** The wheel opens over 160 ms, scaling from 55% to full size with opacity, like glaze spreading from the pointer.
+- **Bloom.** The wheel opens over 200 ms, scaling from 86% and turning from −8° as it fades in, like glaze spreading from the pointer. Its segments follow, each 18 ms after the one before.
 - **Items.** Items are segments clockwise from the top. Each shows its icon, then its label. Format codes are in monospace and tool names in UI text.
 - **Centre.** It shows the wheel's name in the serif, the key that opens it below in muted UI text, then the source type in muted monospace (PNG, or MIXED). The title reads `Convert · Shift`, broken across the two lines, and follows the wheel keys.
 - **Other ways in.** Right-clicking a row, the Menu key or Shift+F10 opens a native Windows menu: the wheels that have anything for the row, then Export… and Open, Cancel or Retry as the row allows, Show in folder for one file (its saved result, or else the file itself) and Copy path for any number, then Remove. Items that don't apply are left out. A wheel chosen there pours over the row.
@@ -191,7 +232,7 @@ test enforces this.
 
 ## The options sheet
 
-- A panel centred over a scrim. It rises 8 px and fades in over 160 ms, and fades out over 120 ms.
+- A panel centred over a scrim. It rises 12 px and fades in over 180 ms, and fades out over 120 ms.
 - **Title** in the serif: "Convert to MOV", or "Convert 3 files to MOV".
 - **Format** below it in muted caption text: the target as the wheel's footer names it, as in `MOV: QuickTime video from Apple`.
 - **Context** below that in muted UI text: the file and what it is, as in `long take.mp4 · 1280 × 720 · 25 fps · 1:30`. While the file is read, it says "Reading the file…".
@@ -210,14 +251,28 @@ test enforces this.
 
 ## The file list
 
-- Each row shows the file's name, and below it a muted second line: `Converts to 12 formats · 3.1 MB · folder`. The folder is the last part of its path.
-- Once Kiln has looked inside the file, the second line says what it is, what Kiln suggests, the size and the folder, in that order, as in `4032 × 3024 photo · Suggested: JPG, about 2 MB · 3.1 MB · folder`. The new text fades in over 160 ms and stays muted.
+- Each row shows its preview, its format chip, the file's name, and below the name a muted second line: `Converts to 12 formats · 3.1 MB · folder`. The folder is the last part of its path.
+- Once Kiln has looked inside the file, the second line says what it is, the size, then what Kiln suggests, as in `4032 × 3024 photo · 3.1 MB · as JPG about 2 MB`. The suggestion is in the file's glaze ink; the rest stays muted. A suggested tool reads `Suggested: Compress, about 21 MB`. With a suggestion the folder gives way, since the suggestion is the part that mustn't be cut; it stays in the tooltip and the inspector. The new text fades in over 160 ms.
 - With no suggestion, the description takes the place of "Converts to N formats" and nothing else is added.
 - Hovering a row shows a tooltip: the whole line when the row cuts it short, then the file's full folder path on a line of its own.
 
+## The inspector
+
+- **Where it sits.** With files listed in a window at least 760 DIPs wide, a panel 300 DIPs wide sits right of the list, inside the list's panel, with a 1 px rule between them. The width is measured in zoomed DIPs, so at a large Text size it folds sooner. Narrower, it folds away: it slides out to the right over 220 ms as the list widens, and back in the same way. The empty window has none.
+- **It carries the actions.** While it shows, rows have no Convert, Cancel, Export, Show details or Show in folder link, and an exported row's "Saved to" line isn't a link. Retry, where a row has it, stays at the row's right edge. Folded away, rows have their links again.
+- **What it shows** is the selection. When the selection changes, the old content fades out as the new rises in; the same file changing in place (its facts arriving, its percent ticking over, its result being saved) is redrawn where it is. A wash of the file's glaze runs down from the top.
+  - **Nothing selected:** the mark in celadon line work (48 px), "Select a file to see what Kiln can do with it", the keys to hold while dropping, and "Everything converts on this PC. Nothing is uploaded."
+  - **One file, waiting:** its preview, cropped to fill; its chip and name in 15 px semibold; what the format is, from `describe_format`; then its facts, each labelled: Size, Pixels or Length when known, and Folder. Under **Turn it into**, up to three formats: the suggestion first, with the suggestion dot, then the formats most often picked for this type, then the rest in the row's order. Each is a button with its chip, what it's for and, where Kiln has one, its estimate, as in `≈ 410 KB` (a guess, so never a bare size). Clicking one converts the file with the quality defaults. **More formats…** opens the format choice. A file whose formats all need a missing helper app has a **Get FFmpeg** button in their place.
+  - **One file, converting:** its preview with the glaze's heat rising over it as far as the job has got, the percentage in large figures, the time left (until that's known, what it's doing: `Converting to WEBP`), and **Cancel**.
+  - **One file, done:** the result's name and, where both sizes are known, before and after: `2.4 MB → 410 KB, 83% smaller`. A check fades in on the preview. **Save**, or **Show in folder** once it's saved; a result dragged out somewhere Kiln can't follow has neither. A held result adds "Drag this row to a folder to save the result there."
+  - **One file, failed or cancelled:** the row's sentence in the row's colour, **Retry** where trying again can help, and **Show details** where there's more to see.
+  - **Several files:** up to three previews in a stack, the first selected file in front, and the kinds in words: "3 images, 1 video". The formats they all share are offered as targets, with no dot or estimate. When they share none, it says why, as the footer would (`These files have no format in common: MOV (1), DOCX (1). Select one kind at a time.`), and under **Select one kind** offers each kind as a button, its chip and "2 files", which selects only those files.
+- **A short window.** The preview gives way first, then the facts. Formats, More and buttons are cut from the bottom only after that, so the actions are the last thing to go. The title and sentences wrap instead of being cut; a format's description that runs out of room ends in "…".
+- **Keyboard and assistive tools.** The inspector's controls come after the list and before the footer in the Tab order, one stop each. To UI Automation it is a group named "Selected file"; a format is a button named "Convert to WEBP, a small image for the web, about 410 KB", More is "More formats for harbour.png", a kind is "Select only the 2 MP4 files", and Cancel, Save, Retry and Show details carry the file's name ("Cancel harbour.png", "Save harbour.webp"). Text the layout had no room for isn't drawn, so it isn't read either.
+
 ## Starting a conversion
 
-- **Convert is always in sight.** With files listed, the footer has a **Convert** button left of Add files, and a file nothing has been done to has a **Convert** link at the right end of its row. Both open the same format choice for the selection (the link selects its row first). The wheel stays the quick way: Enter, Shift/Ctrl/Alt+Enter, the held-key drags and the right-click menu all work as before.
+- **Convert is always in sight.** With files listed, the footer has a **Convert** button left of Add files, with its key, Enter, in a keycap after the word. While the inspector is folded away, a file nothing has been done to also has a **Convert** link at the right end of its row; beside the inspector, the inspector's formats take its place. The button and the link open the same format choice for the selection (the link selects its row first). The wheel stays the quick way: Enter, Shift/Ctrl/Alt+Enter, the held-key drags and the right-click menu all work as before.
 - **Where the choice opens.** From the button it pours from the button's top edge; from a row's link or from Enter it pours from the right end of the row, so the file's name stays readable. The drag route and the right-click menu are unchanged.
 - **Never an empty wheel.** Before a wheel opens, `wheel::offer` decides what it can offer. One kind of file, or several kinds with a format in common, opens the choice. Several kinds with nothing in common do not: the footer says `These files have no format in common: MP4 (3), DOCX (2). Select one kind at a time.` (the first four kinds, then "N more"). One kind Kiln has nothing for reads `Kiln can't convert XYZ files.`
 - **When Convert can't be used.** With nothing selected, or with a selected file that is still converting, the button is quiet (muted label, no hover), is left out of Tab, and says why in its tooltip and, if pressed, in the footer: `Select a file to convert.` / `A selected file is still converting. Wait for it, or cancel it.` A file that is converting can't be started a second time from the button, the link, Enter or the menu.
@@ -234,7 +289,7 @@ test enforces this.
 ## Keyboard and assistive tools
 
 - **Adding files puts the keyboard on them.** After Add files, Ctrl+V, a drop, Open with or Send to, the list shows the *first* new row, selected, with the keyboard on it, so Enter converts instead of reopening the dialog. (It used to jump to the last row.)
-- **Tab follows the reading order:** Help, Settings, the list, then the footer (Convert while it can be used, Add files, Export all, Clear), and round. The empty window goes Help, Settings, Add files. In Settings the page tabs are one Tab stop: Left and Right move between them, Tab leaves the strip, and Shift+Tab comes back to the page that is showing.
+- **Tab follows the reading order:** Help, Settings, the list, the inspector's controls (one stop each), then the footer (Convert while it can be used, Add files, Export all, Clear), and round. The empty window goes Help, Settings, Add files. In Settings the page tabs are one Tab stop: Left and Right move between them, Tab leaves the strip, and Shift+Tab comes back to the page that is showing.
 - **The list handles Page Up and Page Down** (a screenful less one row; with Shift they extend the selection), and Home and End (Ctrl+Home and Ctrl+End too).
 - **Remove can be undone.** Removing two or more rows says `500 files removed.` with an **Undo** link at the right of the footer line (Ctrl+Z does the same, and there is always room for it). Undo brings the rows back where they were, selected; a job that was stopped by the removal comes back as a file waiting to be converted, and a result that had been saved or moved stays so. The link goes when the footer says something else.
 - **A row is read as labelled parts**, each a sentence: `photo.png. 64 by 48 photo. Suggested JPG, about 4.2 KB. File size 9.3 KB. Folder files.` A running row reads what it is doing (its progress is a separate range value); a failed row reads its whole sentence. A row's Cancel, Retry, Export, Show details and Show in folder buttons carry its file name (`Cancel photo.png`).
@@ -242,12 +297,12 @@ test enforces this.
 
 ## Progress and results
 
-- **Progress** is a 4 px line along the bottom of the job row, filled with celadon. Its leading edge glows slightly brighter, like a glaze taking heat. This is the only gradient in Kiln. While a job runs, the glow breathes slowly over 2.4 s, like coals. When the helper app can't report progress, the whole line holds a low glow that breathes the same way. There are no spinners.
+- **Progress** is a 4 px line along the bottom of the job row, in the file's glaze, over a faint wash of the glaze at the row's left. Its leading edge glows slightly brighter, like a glaze taking heat. While a job runs, the glow breathes slowly over 2.4 s, like coals. When the helper app can't report progress, the whole line holds a low glow that breathes the same way. There are no spinners.
 - **A running row says how far.** Its second line reads `Converting to WEBM  ·  38%  ·  about 2 min`. The time left shows once the job has run 3 seconds and is at least 2% done, rounded as a person would say it ("a few seconds", "about 40 sec", "about 2 min", "about 1 h 20 min"). A helper that can't say how far reads `Converting to WEBM  ·  Working…`. The row's accessible name keeps to what it is doing; the percent is the progress bar's range value (0 to 100) and the row's status.
-- **Cancel is a word.** A running row has a **Cancel** button at the right end of its second line, always visible, where its other links sit; the hover cross is gone. While the selection holds a file that is converting, the footer's Convert button reads **Cancel** instead (tooltip `Cancel the converting files (Space)`), is in the Tab order, and stops those files; the footer adds `Space cancels the selected file.` Cancelling leaves the original untouched and the row offers Retry.
+- **Cancel is a word.** A running row has a **Cancel** button at the right end of its second line, always visible, where its other links sit; the hover cross is gone. Beside the inspector, rows have no links, and the inspector's own **Cancel** button stands in. While the selection holds a file that is converting, the footer's Convert button reads **Cancel** instead (tooltip `Cancel the converting files (Space)`), is in the Tab order, and stops those files; the footer adds `Space cancels the selected file.` Cancelling leaves the original untouched and the row offers Retry.
 - **A batch counts.** While jobs run, the footer reads `12 of 50 done.` Each job that finishes while others still run is said once, with the count: `photo.jpg is ready. 13 of 50 done.` The last one gives the batch summary.
 - **Finishing while away.** The taskbar button shows the work's progress (a pulse while no helper can say how far). When the last job ends and Kiln is not in front, the button flashes until Kiln is brought forward (not when Windows has animations off) and a notification names the result (`photo.jpg is ready.`, `12 files are ready.`, `3 ready, 2 couldn't be converted.`); clicking it brings Kiln forward with that row selected. Cancelling gives no notice.
-- **Success:** the row settles and `Done, not saved yet:` with the output name appears in bone, fading in over 200 ms, as in `Done, not saved yet: photo.jpg`. There's no sound or confetti. The result waits inside Kiln until it's exported.
+- **Success:** the row flashes in its glaze and cools to rest over 900 ms as `Done, not saved yet:` with the output name settles in, in bone, as in `Done, not saved yet: photo.jpg`. There's no sound or confetti. The result waits inside Kiln until it's exported.
 - **Export:** a held row has an "Export" link where a failed row has "Show details", and Ctrl+S does the same. One dialog serves one result or many: a folder picker titled `Save photo.jpg to` or `Save 3 files to`. A single result can still be saved under a name of its own with **Export as…** in the row menu. Once saved, the line reads `Saved next to the original: photo.jpg` or `Saved to <folder>.`, its link reads **Show in folder**, and hovering shows the full path (`Saved to C:\Users\me\Pictures`). Hovering a held row also says that it can be dragged to a folder. The footer's **Export all (3)** sits beside Clear while anything is held. A failed save is one line in brick that names the folder, not its path: `Couldn't save to Locked. Choose another folder.`; the result stays held and the link reads **Choose folder**.
 - **Save next to the original** (Settings > General, off by default). Results are held in Kiln until saved, as before. With the setting on, each result is saved beside its file as soon as it is ready, under a free name (`photo (1).jpg`; nothing is ever overwritten), so there is nothing unsaved and closing asks nothing. The first time a result is ready, Kiln asks once, `Save finished files next to the originals from now on?`, and remembers the answer (Settings changes it; closing the question without answering asks again at the next result). If saving fails, the result stays held. With it off the close prompt (`2 results aren't saved yet`: Export all, Discard, Cancel) stays as it was.
 - **Drag out:** dragging a held row into a folder moves its result there, and its line reads `Saved where you dropped it.` A drop that only copies leaves it held.
