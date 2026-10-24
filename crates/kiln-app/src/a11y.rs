@@ -473,7 +473,8 @@ pub struct RowIn<'a> {
     /// A line that stands in for the row's own: "Saving…", or a note
     /// such as an export that failed.
     pub instead: Option<&'a str>,
-    /// The link the row shows: "Show details" or "Export".
+    /// The link the row shows: "Show details" or "Export". `None` while
+    /// rows show no links (see `Input::row_links`).
     pub link: Option<&'static str>,
     /// How far a running row has got, in whole percent, as last told.
     pub progress: Option<u32>,
@@ -535,6 +536,10 @@ pub struct Input<'a> {
     /// The window's client area, in layout units.
     pub size: (f32, f32),
     pub rows: Vec<RowIn<'a>>,
+    /// Whether rows show their own action links: their link, Cancel and
+    /// an exported row's "Saved to" line. Not while the inspector shows,
+    /// which carries the actions.
+    pub row_links: bool,
     pub scroll: f32,
     /// The row the keyboard is on.
     pub focus_row: Option<usize>,
@@ -780,6 +785,7 @@ fn main(input: &Input) -> Vec<Node> {
                 r,
                 rect,
                 rect.bottom() <= panel.y || rect.y >= panel.bottom(),
+                input.row_links,
             )
         })
         .collect();
@@ -792,7 +798,7 @@ fn main(input: &Input) -> Vec<Node> {
         return out;
     };
     let add = layout::add_files_button(&clear, input.export_all.is_some());
-    let convert = layout::convert_button(&clear, input.export_all.is_some());
+    let convert = layout::convert_button(&footer, &clear, input.export_all.is_some());
     let mut status = text(
         Id::Status,
         input.status,
@@ -845,9 +851,11 @@ fn main(input: &Input) -> Vec<Node> {
     out
 }
 
-/// One file's row, with its buttons.
-fn row(r: &RowIn, rect: Rect, offscreen: bool) -> Node {
+/// One file's row, with its buttons. Without `links`, it has no link,
+/// Cancel or "Saved to" line of its own, as it draws none.
+fn row(r: &RowIn, rect: Rect, offscreen: bool, links: bool) -> Node {
     let e = r.entry;
+    let link = r.link.filter(|_| links);
     let path = &e.path;
     let mut n = Node::new(
         Id::Row(path.clone()),
@@ -865,12 +873,14 @@ fn row(r: &RowIn, rect: Rect, offscreen: bool) -> Node {
         n.status = r.progress.map(|p| format!("{p}%"));
         // Named with the file, as a list of buttons reads them out of their
         // rows: "Stop a.png", not "Stop, Stop, Stop".
-        children.push(Node::new(
-            Id::RowCancel(path.clone()),
-            Role::Button,
-            format!("{} {}", crate::help::STOP_TIP, e.name),
-            layout::row_cancel(&rect),
-        ));
+        if links {
+            children.push(Node::new(
+                Id::RowCancel(path.clone()),
+                Role::Button,
+                format!("{} {}", crate::help::STOP_TIP, e.name),
+                layout::row_cancel(&rect),
+            ));
+        }
         // How far along, as a value a screen reader can read and watch.
         if let Some(p) = r.progress {
             let line = Rect::new(
@@ -889,14 +899,14 @@ fn row(r: &RowIn, rect: Rect, offscreen: bool) -> Node {
             children.push(bar);
         }
     }
-    if let Some(link) = r.link {
+    if let Some(link) = link {
         children.push(Node::new(
             Id::RowLink(path.clone()),
             Role::Button,
             format!("{link} {}", e.name),
             layout::row_link(&rect),
         ));
-    } else if r.instead.is_none() && e.saved().is_some() {
+    } else if links && r.instead.is_none() && e.saved().is_some() {
         // "Saved to Downloads." opens that folder.
         children.push(Node::new(
             Id::RowLink(path.clone()),
@@ -906,11 +916,12 @@ fn row(r: &RowIn, rect: Rect, offscreen: bool) -> Node {
         ));
     }
     if e.retryable() && r.instead.is_none() {
+        // Beside the link when the row shows one, as it is drawn.
         children.push(Node::new(
             Id::RowRetry(path.clone()),
             Role::Button,
             format!("Retry {}", e.name),
-            layout::row_retry(&rect, r.link.is_some()),
+            layout::row_retry(&rect, link.is_some()),
         ));
     }
     for c in &mut children {
@@ -1290,6 +1301,7 @@ mod tests {
         Input {
             size: (800.0, 600.0),
             rows,
+            row_links: true,
             scroll: 0.0,
             focus_row: None,
             focus_button: None,
@@ -1593,6 +1605,74 @@ mod tests {
         assert_eq!(names(2), ["Show details c.png"]);
         let retry = t.find(&Id::RowRetry(es[1].path.clone())).unwrap();
         assert!(retry.patterns().invoke);
+    }
+
+    #[test]
+    fn while_the_inspector_shows_rows_have_no_links_and_retry_stays_where_drawn() {
+        let lines = empty_lines(&Settings::default());
+        let mut failed = entry(
+            "a.png",
+            JobState::Failed {
+                message: "The conversion stopped before it finished. Try again.".into(),
+                details: "ffmpeg output".into(),
+                engine: Some("FFmpeg"),
+            },
+        );
+        failed.last = Some(Action::Convert("jpg".into()));
+        let running = entry(
+            "b.png",
+            JobState::Running {
+                action: Action::Convert("jpg".into()),
+                fraction: Some(0.5),
+                started: None,
+            },
+        );
+        let saved = entry(
+            "c.png",
+            JobState::Done {
+                action: Action::Convert("jpg".into()),
+                outputs: vec![PathBuf::from(r"C:\out\c.jpg")],
+                saved: Some(Saved::Folder(PathBuf::from(r"C:\out"))),
+            },
+        );
+        let idle = entry("d.png", JobState::Idle);
+        let es = [failed, running, saved, idle];
+        let retry_rect = |t: &Node| {
+            let row = t.find(&Id::Row(es[0].path.clone())).unwrap();
+            let retry = t.find(&Id::RowRetry(es[0].path.clone())).unwrap();
+            (row.rect, retry.rect)
+        };
+
+        // With links: Show details, Cancel, the saved line and Convert, and
+        // Retry beside Show details.
+        let t = tree(&input(&lines, rows(&es)));
+        sound(&t);
+        let (row, retry) = retry_rect(&t);
+        assert_eq!(retry, layout::row_retry(&row, true));
+        assert!(t.find(&Id::RowCancel(es[1].path.clone())).is_some());
+
+        // Without: no row has a link, a Cancel or a "Saved to" line, and
+        // Retry takes the link's place at the right edge, as it is drawn
+        // and hit there.
+        let mut i = input(&lines, rows(&es));
+        i.row_links = false;
+        for r in &mut i.rows {
+            r.link = None;
+        }
+        let t = tree(&i);
+        sound(&t);
+        let mut links = vec![];
+        t.walk(&mut |n| {
+            if matches!(n.id, Id::RowLink(_) | Id::RowCancel(_)) {
+                links.push(n.name.clone());
+            }
+        });
+        assert!(links.is_empty(), "{links:?}");
+        let (row, retry) = retry_rect(&t);
+        assert_eq!(retry, layout::row_retry(&row, false));
+        // The progress bar and Retry are not links: they stay.
+        assert!(t.find(&Id::RowProgress(es[1].path.clone())).is_some());
+        assert!(t.find(&Id::RowRetry(es[0].path.clone())).is_some());
     }
 
     #[test]

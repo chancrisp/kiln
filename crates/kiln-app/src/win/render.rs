@@ -63,6 +63,18 @@ pub struct WheelView<'a> {
 const DOT_R: f32 = 2.0;
 const DOT_GAP: f32 = 6.0;
 
+/// The key the footer's Convert names after its word, as the idle hint
+/// does.
+const CONVERT_KEY: &str = "Enter";
+
+/// A keycap: the gap after the word, the padding either side of the key,
+/// its height and corners, and its outline's opacity.
+const KEYCAP_GAP: f32 = 6.0;
+const KEYCAP_PAD: f32 = 4.0;
+const KEYCAP_HEIGHT: f32 = 18.0;
+const KEYCAP_RADIUS: f32 = 3.0;
+const KEYCAP_OUTLINE: f32 = 0.45;
+
 /// A row's glaze tile draws its kind's icon at this scale.
 const ROW_ICON_SCALE: f32 = 0.75;
 
@@ -179,6 +191,9 @@ pub struct View<'a> {
     /// What the footer's button says: Convert, or Cancel while the
     /// selection holds a file that is converting.
     pub convert_label: &'a str,
+    /// Whether the footer's button shows its key, Enter, in a keycap after
+    /// its word: while it reads Convert, where the footer has room.
+    pub convert_key: bool,
     /// Rows were just removed: the footer offers Undo.
     pub undo: bool,
     pub clear_hover: bool,
@@ -259,6 +274,8 @@ pub struct Renderer {
     /// Frames drawn so far, to tell which previews' bitmaps have gone
     /// undrawn long enough to drop.
     frame: u64,
+    /// The narrowest chip (`chip_floor`), measured once.
+    chip_floor: f32,
 }
 
 /// Device-dependent resources, rebuilt if the device is lost.
@@ -414,10 +431,25 @@ fn chip_code(e: &Entry) -> &str {
     }
 }
 
-/// How wide a row's chip is: its code with padding, at least the minimum.
-fn chip_width(text: &Text, e: &Entry) -> Result<f32> {
+/// The code a chip is always at least as wide as: four letters.
+const CHIP_FLOOR_CODE: &str = "DOCX";
+
+/// How wide the narrowest chip is: a four-letter code with its padding, so
+/// the name and line after every chip of up to four letters start at one
+/// x. DirectWrite measures in DIPs whatever the scale, and the chip's font
+/// never changes, so this is measured once.
+fn chip_floor(text: &Text) -> f32 {
+    let w = text
+        .code_layout(CHIP_FLOOR_CODE, 120.0, CHIP_HEIGHT)
+        .map_or(0.0, |(_, w)| w);
+    (w + 16.0).max(CHIP_MIN_WIDTH).ceil()
+}
+
+/// How wide a row's chip is: its code with padding, and at least `floor`
+/// (`chip_floor`). A longer code widens only its own chip.
+fn chip_width(text: &Text, e: &Entry, floor: f32) -> Result<f32> {
     let (_, text_w) = text.code_layout(chip_code(e), 120.0, CHIP_HEIGHT)?;
-    Ok((text_w + 16.0).max(CHIP_MIN_WIDTH).ceil())
+    Ok((text_w + 16.0).ceil().max(floor))
 }
 
 /// Where a row's name and second line start: right of its chip, which
@@ -426,10 +458,11 @@ fn row_text_x(r: &Rect, chip_w: f32) -> f32 {
     layout::row_text_left(r) + CHIP_MIN_WIDTH.max(chip_w) + layout::PREVIEW_GAP
 }
 
-/// Where a row's name and line run, from `x` to `right`, short of the
-/// cancel cross or the link, and the link if there is one. `chip_w` is the
-/// chip's measured width, `saving` says the row is being exported, and
-/// `links` that rows show their links (not while the inspector does).
+/// Where a row's name and line run, from `x` to `right`, short of
+/// Cancel, Retry or the link, and the link if there is one. `chip_w` is
+/// the chip's measured width, `saving` says the row is being exported, and
+/// `links` that rows show their links and Cancel (not while the inspector
+/// does).
 fn row_text_span(
     text: &Text,
     r: &Rect,
@@ -442,7 +475,7 @@ fn row_text_span(
     let link = e
         .link(line_cut_with(text, r, e, chip_w))
         .filter(|_| links && !saving);
-    let right = if matches!(e.job, JobState::Running { .. }) {
+    let right = if links && matches!(e.job, JobState::Running { .. }) {
         layout::row_cancel(r).x - 8.0
     } else if e.retryable() && !saving {
         layout::row_retry(r, link.is_some()).x - 8.0
@@ -456,11 +489,11 @@ fn row_text_span(
 
 /// Whether a failed row's line runs past the room it has before the row's
 /// right padding, so the row cuts it short.
-fn line_cut(text: &Text, r: &Rect, e: &Entry) -> bool {
+fn line_cut(text: &Text, r: &Rect, e: &Entry, floor: f32) -> bool {
     if !matches!(e.job, JobState::Failed { .. }) {
         return false;
     }
-    let Ok(chip_w) = chip_width(text, e) else {
+    let Ok(chip_w) = chip_width(text, e, floor) else {
         return false;
     };
     line_cut_with(text, r, e, chip_w)
@@ -496,9 +529,11 @@ impl Renderer {
             .iter()
             .map(|i| Ok((i.name, geometry(&factory, i)?)))
             .collect::<Result<Vec<_>>>()?;
+        let text = Text::new()?;
+        let chip_floor = chip_floor(&text);
         Ok(Self {
             factory,
-            text: Text::new()?,
+            text,
             round,
             icons,
             target: None,
@@ -506,6 +541,7 @@ impl Renderer {
             dpi,
             shadow: depth::shadow_layers(),
             frame: 0,
+            chip_floor,
         })
     }
 
@@ -539,7 +575,7 @@ impl Renderer {
         saving: bool,
         links: bool,
     ) -> (Rect, bool) {
-        let chip_w = chip_width(&self.text, e).unwrap_or(CHIP_MIN_WIDTH);
+        let chip_w = chip_width(&self.text, e, self.chip_floor).unwrap_or(self.chip_floor);
         let (x, right, _) = row_text_span(&self.text, r, e, chip_w, saving, links);
         let cut = self.text.measure(line, &self.text.caption) > (right - x).max(0.0);
         (Rect::new(r.x, r.y, (right - r.x).max(0.0), r.h), cut)
@@ -548,7 +584,7 @@ impl Renderer {
     /// Whether a failed row's line is too long for row `r`, so it's cut
     /// short and Show details offers the whole sentence.
     pub fn line_cut(&self, r: &Rect, e: &Entry) -> bool {
-        line_cut(&self.text, r, e)
+        line_cut(&self.text, r, e, self.chip_floor)
     }
 
     pub fn display_font_bundled(&self) -> bool {
@@ -709,6 +745,7 @@ impl Renderer {
             text_ramp: &t.text_ramp,
             pictures: &t.pictures,
             frame: self.frame,
+            chip_floor: self.chip_floor,
         };
         let mut result = d.header(&l, v);
         if result.is_ok() {
@@ -777,6 +814,7 @@ struct Draw<'a> {
     pictures: &'a RefCell<HashMap<u64, Picture>>,
     /// This frame's number, stamped on each picture drawn.
     frame: u64,
+    chip_floor: f32,
 }
 
 impl Draw<'_> {
@@ -1397,7 +1435,7 @@ impl Draw<'_> {
         let preview = layout::row_preview(r);
         self.preview(&preview, layout::PREVIEW_RADIUS, picture, glaze, kind, a, p);
         let chip_y = r.y + (ROW_HEIGHT - CHIP_HEIGHT) / 2.0;
-        let chip_w = chip_width(self.text, e)?;
+        let chip_w = chip_width(self.text, e, self.chip_floor)?;
         let chip = Rect::new(layout::row_text_left(r), chip_y, chip_w, CHIP_HEIGHT);
         self.chip(chip_code(e), &chip, glaze, a, p)?;
 
@@ -1412,9 +1450,21 @@ impl Draw<'_> {
             a,
         );
 
+        // A waiting file's own line ends with its suggestion, which is
+        // drawn in the glaze's ink: its parts are built once, and the line
+        // is made from them. Only a file Kiln can read gets a suggestion,
+        // and its line is muted, as `Entry::line` has it.
         let note = v.notes.get(&e.path);
+        let own = matches!(e.job, JobState::Idle) && !saving && note.is_none();
+        let split = (own && e.suggestion.is_some())
+            .then(|| e.detail_parts())
+            .and_then(|(facts, suggestion)| {
+                suggestion.map(|s| (format!("{facts}{}", model::DETAIL_SEPARATOR), s))
+            });
         let (line, tone) = if saving {
             (model::SAVING.to_owned(), Tone::Muted)
+        } else if let Some((head, suggestion)) = &split {
+            (format!("{head}{suggestion}"), Tone::Muted)
         } else {
             note.cloned().unwrap_or_else(|| e.line())
         };
@@ -1441,16 +1491,10 @@ impl Draw<'_> {
                 la *= anim.facts;
             }
         }
-        // A waiting file's own line ends with its suggestion, which is in
-        // the glaze's ink.
-        let suggested = (matches!(e.job, JobState::Idle) && !saving && note.is_none())
-            .then(|| e.detail_parts())
-            .and_then(|(facts, suggestion)| suggestion.map(|s| (facts, s)));
-        match suggested {
-            Some((facts, suggestion)) => {
-                let head = format!("{facts}{}", model::DETAIL_SEPARATOR);
-                self.label(&head, &self.text.caption, &line_rect, c, la);
-                let head_w = self.text.measure(&head, &self.text.caption);
+        match &split {
+            Some((head, suggestion)) => {
+                self.label(head, &self.text.caption, &line_rect, c, la);
+                let head_w = self.text.measure(head, &self.text.caption);
                 if head_w < line_rect.w {
                     let rest = Rect::new(
                         line_rect.x + head_w,
@@ -1459,14 +1503,14 @@ impl Draw<'_> {
                         line_rect.h,
                     );
                     let ink = p.glaze_ink(glaze);
-                    self.label(&suggestion, &self.text.caption, &rest, ink, la);
+                    self.label(suggestion, &self.text.caption, &rest, ink, la);
                 }
             }
             None => self.label(&line, &self.text.caption, &line_rect, c, la),
         }
         // An exported row's "Saved to" opens its folder: underlined while
-        // the pointer is on it, like a link.
-        if hovered && v.hover_link && e.saved().is_some() {
+        // the pointer is on it, like a link, while rows have links.
+        if v.row_links && hovered && v.hover_link && e.saved().is_some() {
             let tw = self.text.measure(&line, &self.text.caption).min(w);
             self.hline(
                 x,
@@ -1480,16 +1524,19 @@ impl Draw<'_> {
         match &e.job {
             JobState::Running { fraction, .. } => {
                 self.progress(r, *fraction, v.heat, glaze, p, a);
-                // Cancel is always there to see, as a word.
-                let area = layout::row_cancel_text(r);
-                self.row_link_label(
-                    "Cancel",
-                    &area,
-                    hovered && v.hover_cancel,
-                    selected || hovered,
-                    p,
-                    a,
-                );
+                // Cancel is always there to see, as a word, unless the
+                // inspector carries it.
+                if v.row_links {
+                    let area = layout::row_cancel_text(r);
+                    self.row_link_label(
+                        "Cancel",
+                        &area,
+                        hovered && v.hover_cancel,
+                        selected || hovered,
+                        p,
+                        a,
+                    );
+                }
             }
             JobState::Done { .. } => {
                 // The finished line fades as the result settles.
@@ -1596,7 +1643,7 @@ impl Draw<'_> {
             .export_all
             .map(|label| (label, layout::export_all_button(&button)));
         let add = layout::add_files_button(&button, export.is_some());
-        let convert = layout::convert_button(&button, export.is_some());
+        let convert = layout::convert_button(&footer, &button, export.is_some());
         let status = layout::footer_status(&footer, &convert);
         // The idle hint comes in two lengths: the full one where it fits.
         let text = if v.status == ways_in::IDLE_HINT {
@@ -1613,14 +1660,15 @@ impl Draw<'_> {
             // The footer's one primary action stands raised: its shadow, and
             // the light along its top, which a press sinks out of sight.
             self.shadow(&convert, shape::RADIUS_CONTROL, p);
-            self.primary(
-                v.convert_label,
-                &convert,
-                v.convert_hover,
-                v.convert_pressed,
-                p,
-            );
-            if !v.convert_pressed {
+            let (hover, pressed) = (v.convert_hover, v.convert_pressed);
+            if v.convert_key && layout::convert_keycap(&convert) {
+                // Convert names its key after the word.
+                self.primary_face(&convert, hover, pressed, p);
+                self.keyed(v.convert_label, CONVERT_KEY, &convert, p.on_accent, p);
+            } else {
+                self.primary(v.convert_label, &convert, hover, pressed, p);
+            }
+            if !pressed {
                 self.highlight(&convert, shape::RADIUS_CONTROL, 0.0, p);
             }
         } else {
@@ -1686,6 +1734,33 @@ impl Draw<'_> {
 
     /// The emphasised button: celadon, for the one action a panel is for.
     fn primary(&self, text: &str, b: &Rect, hover: bool, pressed: bool, p: &Palette) {
+        self.primary_face(b, hover, pressed, p);
+        self.label(text, &self.text.body_center, b, p.on_accent, 1.0);
+    }
+
+    /// A button's word and, after it, the key that presses it in a keycap
+    /// (a fine outline of the text colour `c`), centred in `b` together.
+    fn keyed(&self, word: &str, key: &str, b: &Rect, c: Rgb, p: &Palette) {
+        let word_w = self.text.measure(word, &self.text.body);
+        let key_w = self.text.measure(key, &self.text.caption);
+        let cap_w = (key_w + 2.0 * KEYCAP_PAD).ceil();
+        let x = (b.x + (b.w - (word_w + KEYCAP_GAP + cap_w)) / 2.0).round();
+        let words = Rect::new(x, b.y, word_w + 1.0, b.h);
+        self.label(word, &self.text.body, &words, c, 1.0);
+        let cap = Rect::new(
+            x + word_w + KEYCAP_GAP,
+            b.y + (b.h - KEYCAP_HEIGHT) / 2.0,
+            cap_w,
+            KEYCAP_HEIGHT,
+        );
+        // Solid under a contrast theme, which has no in-between alphas.
+        let outline = solid(p, KEYCAP_OUTLINE);
+        self.border(&cap, KEYCAP_RADIUS, c, outline, shape::BORDER);
+        self.label(key, &self.text.caption_center, &cap, c, 1.0);
+    }
+
+    /// The primary button's fill, its hover and its press.
+    fn primary_face(&self, b: &Rect, hover: bool, pressed: bool, p: &Palette) {
         let fill = if hover {
             blend(p, p.accent, p.text, effects::PRIMARY_HOVER)
         } else {
@@ -1701,7 +1776,6 @@ impl Draw<'_> {
         if pressed {
             self.press_shadow(b, p);
         }
-        self.label(text, &self.text.body_center, b, p.on_accent, 1.0);
     }
 
     /// A control that steps through values: the value between two small

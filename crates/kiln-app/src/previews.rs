@@ -280,6 +280,13 @@ pub fn fix_alpha(bgra: &mut [u8]) {
     }
 }
 
+/// Whether a file of `kind` shows a picture from Windows. Audio never
+/// does: it always shows its glaze tile with the waveform, so album art
+/// isn't asked for or drawn.
+pub fn wants_preview(kind: Option<kiln_core::Kind>) -> bool {
+    kind != Some(kiln_core::Kind::Audio)
+}
+
 /// Windows hands thumbnails back with straight alpha: a pixel's colour is
 /// its full colour whatever its alpha. Direct2D draws premultiplied
 /// pixels, so each colour is scaled by its alpha here, once, as the
@@ -679,6 +686,24 @@ mod tests {
         let mut none: Vec<u8> = Vec::new();
         fix_alpha(&mut none);
         assert!(none.is_empty());
+    }
+
+    #[test]
+    fn audio_keeps_its_tile_and_every_other_kind_asks_for_a_picture() {
+        use kiln_core::Kind;
+        assert!(!wants_preview(Some(Kind::Audio)));
+        for kind in [
+            Kind::Image,
+            Kind::Video,
+            Kind::Document,
+            Kind::Spreadsheet,
+            Kind::Presentation,
+            Kind::Subtitle,
+        ] {
+            assert!(wants_preview(Some(kind)), "{kind:?}");
+        }
+        // A type Kiln has no kind for may still have a Windows thumbnail.
+        assert!(wants_preview(None));
     }
 
     #[test]

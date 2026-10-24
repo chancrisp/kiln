@@ -485,19 +485,37 @@ pub fn undo_link(status: &Rect) -> Option<Rect> {
     })
 }
 
-/// Width of the footer's Convert button.
-pub const FOOTER_CONVERT_WIDTH: f32 = 80.0;
+/// Width of the footer's Convert button: the word and, after it, its key
+/// ("Enter") in a keycap.
+pub const FOOTER_CONVERT_WIDTH: f32 = 124.0;
 
-/// The footer's Convert button: left of Add files, so it is the first
-/// control after the list in reading and Tab order.
-pub fn convert_button(clear: &Rect, export_all: bool) -> Rect {
+/// Width of the footer's Convert button without its keycap, where the
+/// footer has no room for it.
+pub const FOOTER_CONVERT_NARROW: f32 = 80.0;
+
+/// The status line keeps at least this much beside the footer's buttons
+/// before Convert gives up its keycap: room for the short idle hint
+/// (155 DIPs at 13 px).
+const STATUS_BEFORE_KEYCAP: f32 = 160.0;
+
+/// The footer's Convert button in `footer`: left of Add files, so it is
+/// the first control after the list in reading and Tab order. It is wide
+/// enough for its keycap unless that would squeeze the status line below
+/// the short idle hint, as in the smallest window.
+pub fn convert_button(footer: &Rect, clear: &Rect, export_all: bool) -> Rect {
     let add = add_files_button(clear, export_all);
-    Rect::new(
-        add.x - 8.0 - FOOTER_CONVERT_WIDTH,
-        clear.y,
-        FOOTER_CONVERT_WIDTH,
-        clear.h,
-    )
+    let wide = add.x - 8.0 - FOOTER_CONVERT_WIDTH;
+    let w = if wide - 12.0 - footer.x >= STATUS_BEFORE_KEYCAP {
+        FOOTER_CONVERT_WIDTH
+    } else {
+        FOOTER_CONVERT_NARROW
+    };
+    Rect::new(add.x - 8.0 - w, clear.y, w, clear.h)
+}
+
+/// Whether the footer's Convert button, `convert`, has room for its keycap.
+pub fn convert_keycap(convert: &Rect) -> bool {
+    convert.w >= FOOTER_CONVERT_WIDTH
 }
 
 /// The footer's status line: from the footer's left edge to 12 DIPs short
@@ -1843,7 +1861,7 @@ mod tests {
         let clear = l.clear_button.unwrap();
         let footer = l.footer.unwrap();
         let add = add_files_button(&clear, true);
-        let convert = convert_button(&clear, true);
+        let convert = convert_button(&footer, &clear, true);
         let mut rects: Vec<(String, Rect)> = vec![
             ("help".into(), l.help_button),
             ("settings".into(), l.settings_button),
@@ -2289,7 +2307,7 @@ mod tests {
             assert_grid(&beside, "add files");
             assert_eq!(export_all_button(&clear).x - beside.right(), 8.0);
             // Convert sits left of it, with the same gap.
-            let convert = convert_button(&clear, true);
+            let convert = convert_button(&footer, &clear, true);
             assert_grid(&convert, "convert");
             assert_eq!(beside.x - convert.right(), 8.0);
             assert_eq!((convert.y, convert.h), (clear.y, clear.h));
@@ -2306,7 +2324,7 @@ mod tests {
         let status = |w: f32, export: bool| {
             let l = layout(w, 480.0, 2);
             let (footer, clear) = (l.footer.unwrap(), l.clear_button.unwrap());
-            let convert = convert_button(&clear, export);
+            let convert = convert_button(&footer, &clear, export);
             let s = footer_status(&footer, &convert);
             assert_eq!(convert.x - s.right(), 8.0);
             s.w
@@ -2320,6 +2338,31 @@ mod tests {
         assert!(status(480.0, false) >= SHORT);
         assert!(status(480.0, false) < FULL);
         assert!(status(480.0, true) >= 0.0);
+    }
+
+    #[test]
+    fn converts_keycap_gives_way_before_the_short_hint() {
+        // The short idle hint's caption width, as DirectWrite measures it.
+        const SHORT: f32 = 155.0;
+        let at = |w: f32, export: bool| {
+            let l = layout(w, 480.0, 2);
+            let (footer, clear) = (l.footer.unwrap(), l.clear_button.unwrap());
+            let convert = convert_button(&footer, &clear, export);
+            (convert, footer_status(&footer, &convert))
+        };
+        // Wide enough: Convert carries its keycap, the status keeps the
+        // short hint (the full one where there's room for it).
+        for (w, export) in [(720.0, false), (720.0, true), (640.0, false), (640.0, true)] {
+            let (convert, status) = at(w, export);
+            assert_eq!(convert.w, FOOTER_CONVERT_WIDTH, "at {w}, export {export}");
+            assert!(convert_keycap(&convert));
+            assert!(status.w >= SHORT, "{status:?} at {w}, export {export}");
+        }
+        // The smallest window: the keycap goes, so the short hint still fits.
+        let (convert, status) = at(480.0, false);
+        assert_eq!(convert.w, FOOTER_CONVERT_NARROW);
+        assert!(!convert_keycap(&convert));
+        assert!(status.w >= SHORT, "{status:?}");
     }
 
     #[test]

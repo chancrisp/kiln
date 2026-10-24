@@ -572,6 +572,12 @@ impl Engines {
 /// id and how far it has faded in.
 type Painted = (usize, PreviewSize, Arc<previews::Pixels>, u64, f32);
 
+/// The kind of file `e` is, by its type; `None` for a type Kiln has no
+/// kind for.
+fn kind_of(kiln: &Kiln, e: &model::Entry) -> Option<kiln_core::Kind> {
+    kiln.registry().format(&e.code).map(|f| f.kind)
+}
+
 /// What the previews asked for depend on: see `App::ask_previews`.
 #[derive(Debug, Clone, PartialEq)]
 struct PreviewAsk {
@@ -861,14 +867,19 @@ impl App {
         self.undo_offer()?;
         let l = self.layout();
         let (footer, clear) = (l.footer?, l.clear_button?);
-        let convert = layout::convert_button(&clear, self.export_all_count() > 0);
+        let convert = layout::convert_button(&footer, &clear, self.export_all_count() > 0);
         layout::undo_link(&layout::footer_status(&footer, &convert))
     }
 
     /// The footer's Convert button, while files are listed.
     fn convert_rect(&self) -> Option<layout::Rect> {
-        let clear = self.layout().clear_button?;
-        Some(layout::convert_button(&clear, self.export_all_count() > 0))
+        let l = self.layout();
+        let (footer, clear) = (l.footer?, l.clear_button?);
+        Some(layout::convert_button(
+            &footer,
+            &clear,
+            self.export_all_count() > 0,
+        ))
     }
 
     /// The selected rows that are converting now.
@@ -4272,13 +4283,14 @@ impl App {
         let mut r = l.rows[i];
         r.y -= self.scroll;
         let e = &self.files.entries()[i];
-        let running = matches!(e.job, JobState::Running { .. });
-        // A row being exported has no link until it's done, and no row has
-        // one while the inspector shows.
+        // No row has a link, a Cancel or a "Saved to" line to click while
+        // the inspector carries the actions, and a row being exported has
+        // no link until it's done.
+        let links = self.row_links();
+        let running = links && matches!(e.job, JobState::Running { .. });
         let saving = self.row_saving(i);
-        let link =
-            l.inspector.is_none() && !saving && e.link(self.renderer.line_cut(&r, e)).is_some();
-        let saved = !saving && e.saved().is_some();
+        let link = links && !saving && e.link(self.renderer.line_cut(&r, e)).is_some();
+        let saved = links && !saving && e.saved().is_some();
         let retry = !saving && e.retryable();
         let part = layout::row_part_with_retry(&r, x, y, running, link, saved, retry);
         (
@@ -4795,12 +4807,13 @@ impl App {
                 }
             }
             // Space follows the selected row's link, with one row selected,
-            // or stops it while it runs.
+            // while rows show their links; it stops a running row as the
+            // footer's Cancel does, whose key it is.
             VK_SPACE => {
                 if let [i] = self.files.selection()[..] {
                     if self.row_state(i) == RowState::Running {
                         self.cancel_row(i);
-                    } else {
+                    } else if self.row_links() {
                         self.follow_link(i, true);
                     }
                 }
@@ -4933,6 +4946,7 @@ impl App {
         let size = self.renderer.size_dips();
         let l = self.layout();
         let saving = self.saving_rows();
+        let row_links = self.row_links();
         let rows: Vec<a11y::RowIn> = self
             .files
             .entries()
@@ -4948,7 +4962,7 @@ impl App {
                 let link = l.rows.get(i).and_then(|r| {
                     let mut r = *r;
                     r.y -= self.scroll;
-                    (!busy)
+                    (row_links && !busy)
                         .then(|| e.link(self.renderer.line_cut(&r, e)))
                         .flatten()
                 });
@@ -4974,6 +4988,7 @@ impl App {
         let input = a11y::Input {
             size,
             rows,
+            row_links,
             scroll: self.scroll,
             focus_row: self.files.focus(),
             focus_button: self.focused_button(),
@@ -5371,13 +5386,8 @@ impl App {
                 .map(|(_, _, px, id, fade)| (px.clone(), *id, *fade))
         };
         let entries = self.files.entries();
-        let registry = self.kiln.registry();
-        let kind = |i: usize| {
-            entries
-                .get(i)
-                .and_then(|e| registry.format(&e.code))
-                .map(|f| f.kind)
-        };
+        let kiln = &self.kiln;
+        let kind = |i: usize| entries.get(i).and_then(|e| kind_of(kiln, e));
         let glaze = |i: usize| theme::glaze_of(kind(i));
         let view = View {
             palette: &self.palette,
@@ -5421,6 +5431,7 @@ impl App {
             } else {
                 "Convert"
             },
+            convert_key: !self.footer_cancel(),
             undo: self.undo_offer().is_some(),
             clear_hover: self.clear_hover,
             clear_pressed: self.clear_pressed,
@@ -5547,9 +5558,11 @@ impl App {
         if self.previews_asked.as_ref() == Some(&ask) {
             return;
         }
+        // Audio keeps its glaze tile, so its files are never asked for.
         let keys: Vec<PreviewKey> =
             previews::request_order(ask.selected, ask.visible.clone(), ask.total)
                 .into_iter()
+                .filter(|&(i, _)| previews::wants_preview(self.row_kind(i)))
                 .filter_map(|(i, size)| self.preview_key(i, size))
                 .collect();
         // The worker's queue is replaced, so what it dropped will never
@@ -5606,26 +5619,49 @@ impl App {
         }
     }
 
-    /// The pictures to paint this frame: each row in view whose picture
-    /// has arrived, with its key's id and how far it has faded in. Looking
-    /// one up counts as using it, which keeps it in the cache.
+    /// The pictures to paint this frame: each row in view that wants a
+    /// picture (`previews::wants_preview`) and whose picture has arrived,
+    /// with its key's id and how far it has faded in. Looking one up
+    /// counts as using it, which keeps it in the cache. A picture still
+    /// fading in, such as one asked for ahead of the scroll that has just
+    /// come into view, keeps frames coming until it has.
     fn paint_previews(&mut self, now: Instant, animations: bool) -> Vec<Painted> {
         let mut painted = std::mem::take(&mut self.painted_previews);
         painted.clear();
+        let mut fading: Option<Instant> = None;
         for i in self.visible_rows() {
+            if !previews::wants_preview(self.row_kind(i)) {
+                continue;
+            }
             let Some(key) = self.preview_key(i, PreviewSize::Row) else {
                 continue;
             };
             if let Some((Preview::Ready(px), arrived)) = self.previews.get(&key, now) {
                 let fade = anim::eased(arrived, anim::PREVIEW_MS, now, animations);
+                if fade < 1.0 {
+                    fading = fading.max(Some(arrived));
+                }
                 painted.push((i, PreviewSize::Row, px.clone(), key.id(), fade));
+            }
+        }
+        if let Some(arrived) = fading {
+            self.preview_shown = self.preview_shown.max(Some(arrived));
+            unsafe {
+                SetTimer(Some(self.hwnd), ANIM_TIMER, anim::FRAME_MS, None);
             }
         }
         painted
     }
 
-    /// Whether rows show their own links: not while the inspector shows,
-    /// as it carries the actions.
+    /// Row `i`'s kind of file, from its type.
+    fn row_kind(&self, i: usize) -> Option<kiln_core::Kind> {
+        kind_of(&self.kiln, self.files.entries().get(i)?)
+    }
+
+    /// Whether rows show their own action links (their link, Cancel and a
+    /// "Saved to" line): not while the inspector shows, as it carries the
+    /// actions. Drawing, hit-testing, tooltips, the UI Automation tree and
+    /// Space all go by it.
     fn row_links(&self) -> bool {
         self.layout().inspector.is_none()
     }
@@ -5699,7 +5735,7 @@ impl App {
             let bottom = r.bottom().min(panel.bottom());
             layout::Rect::new(r.x, top, r.w, (bottom - top).max(0.0))
         };
-        let links = l.inspector.is_none();
+        let links = self.row_links();
         for i in self.visible_rows() {
             let (Some(r), Some(line)) = (self.row_rect(i), self.shown_line(i)) else {
                 continue;
@@ -5709,7 +5745,7 @@ impl App {
             let (area, _) = self.renderer.row_tip(&r, e, &line, saving, links);
             let id = TIP_ROWS + 3 * i;
             tools.push((id, clip(area)));
-            if matches!(e.job, JobState::Running { .. }) {
+            if links && matches!(e.job, JobState::Running { .. }) {
                 tools.push((id + 1, clip(layout::row_cancel(&r))));
             }
             // Only a failed row's link depends on its line being cut.
