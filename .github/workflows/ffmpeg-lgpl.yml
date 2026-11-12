@@ -1,0 +1,356 @@
+name: FFmpeg LGPL build
+
+# Builds the FFmpeg that comes with Kiln, once, and keeps it: FFmpeg 7.1 for
+# 64-bit Windows, as shared libraries, LGPL only (no GPL or nonfree parts, so
+# no x264 or x265), with BtbN's FFmpeg-Builds scripts at a pinned commit.
+#
+# The build is kept on the release ffmpeg-lgpl of this repository, a
+# prerelease that is never marked latest, so the update check never sees it.
+# It has four files:
+#
+#   ffmpeg-lgpl-win64.zip  bin\ (ffmpeg.exe, ffprobe.exe and the DLLs),
+#                          licenses\ (each built-in library's notices),
+#                          LICENSE.txt and BUILD.txt
+#   ffmpeg-source.zip      FFmpeg's source at the commit built, the source of
+#                          every library the scripts fetched, the scripts
+#                          themselves and this workflow
+#   SHA256SUMS             the SHA-256 of the two zips
+#   builds-commit.txt      the FFmpeg-Builds commit it was built with
+#
+# release.yml calls this workflow on every release build. When the release
+# ffmpeg-lgpl is there, nothing is built: the release build downloads it and
+# packaging/ffmpeg/unpack-stored.ps1 checks it against SHA256SUMS. It can also
+# be run by hand (Actions > FFmpeg LGPL build > Run workflow). Building takes
+# hours.
+#
+# The pin: the first build, with BUILDS_COMMIT empty and no release, takes the
+# latest commit of FFmpeg-Builds and records it in builds-commit.txt. Every
+# later run keeps that pin. To change it on purpose, set BUILDS_COMMIT below
+# to another full commit hash, delete the release ffmpeg-lgpl (keep a copy of
+# its files first), and run this again. A run never replaces a stored build:
+# with the release there and a different BUILDS_COMMIT set, it stops.
+#
+# Only the run's own GITHUB_TOKEN is used, to read and create the release.
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: write
+
+env:
+  # Empty: keep the pin recorded on the release ffmpeg-lgpl (the first build
+  # takes FFmpeg-Builds' latest commit). A full 40-character hash: build with
+  # that commit, once the release is deleted.
+  BUILDS_COMMIT: ""
+  STORE_TAG: ffmpeg-lgpl
+  BUILDS_REPO: https://github.com/BtbN/FFmpeg-Builds.git
+  TARGET: win64
+  VARIANT: lgpl-shared
+  ADDIN: "7.1"
+  # The branch the 7.1 add-in builds. Its head is noted before the build and
+  # checked against the built version afterwards.
+  FFMPEG_REPO: https://github.com/FFmpeg/FFmpeg.git
+  FFMPEG_BRANCH: release/7.1
+
+jobs:
+  look:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      stored: ${{ steps.look.outputs.stored }}
+      builds_commit: ${{ steps.look.outputs.builds_commit }}
+    steps:
+      - name: Look for the stored build and its pin
+        id: look
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$STORE_TAG" > /dev/null 2> look-error.txt; then
+            gh release download "$STORE_TAG" -R "$GITHUB_REPOSITORY" -p builds-commit.txt -D record
+            pin=$(tr -d '[:space:]' < record/builds-commit.txt)
+            if [ -n "$BUILDS_COMMIT" ] && [ "$BUILDS_COMMIT" != "$pin" ]; then
+              echo "::error::BUILDS_COMMIT is $BUILDS_COMMIT, but the stored FFmpeg was built with $pin. To build with $BUILDS_COMMIT, keep a copy of the files of the release $STORE_TAG, delete that release, and run this again."
+              exit 1
+            fi
+            echo "stored=true" >> "$GITHUB_OUTPUT"
+            echo "Kept: the FFmpeg on the release $STORE_TAG, built with FFmpeg-Builds $pin." >> "$GITHUB_STEP_SUMMARY"
+          elif grep -q "HTTP 404" look-error.txt; then
+            pin="$BUILDS_COMMIT"
+            if [ -z "$pin" ]; then
+              # The first build: pin FFmpeg-Builds' latest commit.
+              pin=$(git ls-remote "$BUILDS_REPO" refs/heads/master | cut -f1)
+            fi
+            echo "stored=false" >> "$GITHUB_OUTPUT"
+            echo "To build: FFmpeg with FFmpeg-Builds $pin, to keep on the release $STORE_TAG." >> "$GITHUB_STEP_SUMMARY"
+          else
+            cat look-error.txt
+            echo "::error::Couldn't look for the release $STORE_TAG."
+            exit 1
+          fi
+          if ! [[ "$pin" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The FFmpeg-Builds pin '$pin' isn't a full commit hash."
+            exit 1
+          fi
+          echo "builds_commit=$pin" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: look
+    if: needs.look.outputs.stored != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    env:
+      BUILDS_COMMIT: ${{ needs.look.outputs.builds_commit }}
+    steps:
+      - name: Check the pinned commit
+        run: |
+          if ! [[ "$BUILDS_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The FFmpeg-Builds pin '$BUILDS_COMMIT' isn't a full commit hash."
+            exit 1
+          fi
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: kiln
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            .github/workflows/ffmpeg-lgpl.yml
+            packaging/ffmpeg/
+
+      - name: Fetch FFmpeg-Builds at the pinned commit
+        run: |
+          set -euo pipefail
+          git init -q FFmpeg-Builds
+          git -C FFmpeg-Builds fetch -q --depth 1 "$BUILDS_REPO" "$BUILDS_COMMIT"
+          git -C FFmpeg-Builds checkout -q --detach FETCH_HEAD
+
+      - name: Fetch FFmpeg's source
+        run: |
+          set -euo pipefail
+          commit=$(git ls-remote "$FFMPEG_REPO" "refs/heads/$FFMPEG_BRANCH" | cut -f1)
+          test -n "$commit"
+          git init -q ffmpeg-src
+          git -C ffmpeg-src fetch -q --depth 1 "$FFMPEG_REPO" "$commit"
+          git -C ffmpeg-src checkout -q --detach FETCH_HEAD
+          echo "$commit" > ffmpeg-commit.txt
+
+      - name: Build the images
+        # This fetches the source of every library into .cache/downloads.
+        working-directory: FFmpeg-Builds
+        run: ./makeimage.sh "$TARGET" "$VARIANT" "$ADDIN"
+
+      - name: Build FFmpeg
+        working-directory: FFmpeg-Builds
+        run: ./build.sh "$TARGET" "$VARIANT" "$ADDIN"
+
+      - name: Lay out the ffmpeg folder
+        run: |
+          set -euo pipefail
+          zips=(FFmpeg-Builds/artifacts/*.zip)
+          test "${#zips[@]}" -eq 1
+          mkdir -p unpacked out/ffmpeg
+          unzip -q "${zips[0]}" -d unpacked
+          top=$(find unpacked -mindepth 1 -maxdepth 1 -type d | head -n 1)
+          cp -r "$top/bin" out/ffmpeg/bin
+          # The LGPL texts, version 2.1 and version 3, from FFmpeg's source.
+          cat ffmpeg-src/COPYING.LGPLv2.1 > out/ffmpeg/LICENSE.txt
+          printf '\n\n' >> out/ffmpeg/LICENSE.txt
+          cat ffmpeg-src/COPYING.LGPLv3 >> out/ffmpeg/LICENSE.txt
+          cp ffmpeg-commit.txt out/ffmpeg-commit.txt
+          ls -R out
+
+      - name: Gather the source
+        run: |
+          set -euo pipefail
+          downloads=FFmpeg-Builds/.cache/downloads
+          if [ ! -d "$downloads" ] || [ -z "$(ls -A "$downloads")" ]; then
+            echo "::error::$downloads is missing or empty. Check where this FFmpeg-Builds commit keeps the sources it fetches."
+            exit 1
+          fi
+          # Each library's copyright and licence notices go beside FFmpeg, as
+          # their licences ask of a binary copy: out/ffmpeg/licenses/<lib>.txt,
+          # made from the COPYING, LICENSE (or LICENCE), PATENTS, COPYRIGHT and
+          # NOTICE files at the top of its source. A library with none stops
+          # the build, so no notice can go missing.
+          mkdir -p out/ffmpeg/licenses unpacked-sources
+          missing=()
+          for item in "$downloads"/*; do
+            lib=$(basename "$item" | sed -E 's/\.(tar\.(gz|xz|bz2|zst)|tgz|tar|zip)$//')
+            src="unpacked-sources/$lib"
+            mkdir -p "$src"
+            if [ -d "$item" ]; then
+              cp -r "$item"/. "$src"
+            else
+              case "$item" in
+                *.zip) unzip -q "$item" -d "$src" ;;
+                *) tar -xf "$item" -C "$src" ;;
+              esac
+            fi
+            notices=$(find "$src" -maxdepth 3 -type f \( -iname 'COPYING*' -o -iname 'LICENSE*' -o -iname 'LICENCE*' -o -iname 'PATENTS*' -o -iname 'COPYRIGHT*' -o -iname 'NOTICE*' \) | sort)
+            if [ -z "$notices" ]; then
+              missing+=("$lib")
+              continue
+            fi
+            out="out/ffmpeg/licenses/$lib.txt"
+            : > "$out"
+            while IFS= read -r file; do
+              printf '==== %s ====\n\n' "${file#"$src"/}" >> "$out"
+              cat "$file" >> "$out"
+              printf '\n\n' >> "$out"
+            done <<< "$notices"
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::No licence files found in the source of: ${missing[*]}. Add their notices to out/ffmpeg/licenses by hand in this step."
+            exit 1
+          fi
+          ls -l out/ffmpeg/licenses
+
+          mkdir -p source/kiln
+          git -C ffmpeg-src archive --format=tar --prefix=FFmpeg/ HEAD | tar -x -C source
+          git -C FFmpeg-Builds archive --format=tar --prefix=FFmpeg-Builds/ HEAD | tar -x -C source
+          cp -r "$downloads" source/downloads
+          cp kiln/.github/workflows/ffmpeg-lgpl.yml source/kiln/
+          cp ffmpeg-commit.txt source/kiln/
+          printf '%s\n' "$BUILDS_COMMIT" > source/kiln/builds-commit.txt
+          (cd source && zip -q -r -9 ../out/ffmpeg-source.zip .)
+          ls -l out/ffmpeg-source.zip
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ffmpeg-lgpl-unchecked
+          path: |
+            out/ffmpeg
+            out/ffmpeg-commit.txt
+          retention-days: 1
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ffmpeg-lgpl-source
+          path: out/ffmpeg-source.zip
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+
+  check:
+    needs: [look, build]
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    env:
+      BUILDS_COMMIT: ${{ needs.look.outputs.builds_commit }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: kiln
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            packaging/ffmpeg/
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ffmpeg-lgpl-unchecked
+          path: staged
+
+      - name: Check the build and write BUILD.txt
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = 'staged\ffmpeg\bin\ffmpeg.exe'
+          foreach ($name in 'staged\ffmpeg\bin\ffmpeg.exe', 'staged\ffmpeg\bin\ffprobe.exe', 'staged\ffmpeg\LICENSE.txt') {
+            if (-not (Test-Path $name)) { throw "The build has no $name." }
+          }
+          if (-not (Get-ChildItem 'staged\ffmpeg\licenses' -Filter *.txt -ErrorAction SilentlyContinue)) {
+            throw 'The build has no library notices in licenses.'
+          }
+
+          # No GPL or nonfree parts.
+          $conf = (& $exe -hide_banner -buildconf) -join "`n"
+          if ($LASTEXITCODE -ne 0) { throw 'ffmpeg -buildconf failed.' }
+          if ($conf -match '--enable-(gpl|nonfree)\b') { throw "The build has $($Matches[0])." }
+
+          # The encoders and decoders Kiln uses, and no x264 or x265.
+          $has = {
+            param([string]$list, [string]$name)
+            $list -match "(?m)^\s*[A-Z.]{6}\s+$([regex]::Escape($name))\s"
+          }
+          $encoders = (& $exe -hide_banner -encoders) -join "`n"
+          $want = 'h264_mf', 'hevc_mf', 'libvpx-vp9', 'libopus', 'libvorbis', 'libmp3lame',
+            'libwebp_anim', 'libjxl', 'libtheora', 'gif', 'apng', 'mpeg4', 'mpeg2video', 'wmv2'
+          foreach ($e in $want) {
+            if (-not (& $has $encoders $e)) { throw "The build has no $e encoder." }
+          }
+          if (-not ((& $has $encoders 'libaom-av1') -or (& $has $encoders 'libsvtav1'))) {
+            throw 'The build has no AV1 encoder.'
+          }
+          foreach ($e in 'libx264', 'libx265') {
+            if (& $has $encoders $e) { throw "The build has $e." }
+          }
+          $decoders = (& $exe -hide_banner -decoders) -join "`n"
+          foreach ($d in 'hevc', 'libdav1d', 'vp9') {
+            if (-not (& $has $decoders $d)) { throw "The build has no $d decoder." }
+          }
+
+          # The FFmpeg built is the commit noted before the build.
+          $commit = (Get-Content 'staged\ffmpeg-commit.txt' -Raw).Trim()
+          $version = ((& $exe -hide_banner -version) | Select-Object -First 1) -replace '^ffmpeg version (\S+).*$', '$1'
+          if ($version -match '-g([0-9a-f]{7,40})') {
+            if (-not $commit.StartsWith($Matches[1])) { throw "Built $version, but the source fetched is $commit." }
+          } else {
+            Write-Warning "The version $version names no commit; the source zip is from $commit."
+          }
+
+          $build = Get-Content 'kiln\packaging\ffmpeg\BUILD.txt' -Raw
+          $build = $build.Replace('{{FFMPEG_VERSION}}', $version).Replace('{{FFMPEG_COMMIT}}', $commit)
+          $build = $build.Replace('{{BUILDS_COMMIT}}', $env:BUILDS_COMMIT).Replace('{{CONFIGURATION}}', $conf.Trim())
+          [IO.File]::WriteAllText((Join-Path $PWD 'staged\ffmpeg\BUILD.txt'), $build)
+          Get-Content 'staged\ffmpeg\BUILD.txt'
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ffmpeg-lgpl-win64
+          path: staged/ffmpeg/
+          retention-days: 7
+          if-no-files-found: error
+
+  store:
+    needs: [look, check]
+    if: needs.look.outputs.stored != 'true'
+    runs-on: ubuntu-latest
+    # Two runs can't both store a build.
+    concurrency: ffmpeg-lgpl-store
+    permissions:
+      contents: write
+    env:
+      BUILDS_COMMIT: ${{ needs.look.outputs.builds_commit }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ffmpeg-lgpl-win64
+          path: win64
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ffmpeg-lgpl-source
+          path: stored
+
+      - name: Keep the build on the release ffmpeg-lgpl
+        run: |
+          set -euo pipefail
+          (cd win64 && zip -q -r -9 ../stored/ffmpeg-lgpl-win64.zip .)
+          cd stored
+          sha256sum ffmpeg-lgpl-win64.zip ffmpeg-source.zip > SHA256SUMS
+          printf '%s\n' "$BUILDS_COMMIT" > builds-commit.txt
+          cat SHA256SUMS builds-commit.txt
+          gh release create "$STORE_TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "FFmpeg LGPL build for packaging" \
+            --notes "The LGPL FFmpeg that release builds package, built with FFmpeg-Builds $BUILDS_COMMIT. Not a Kiln release. release.yml downloads these files and packaging/ffmpeg/unpack-stored.ps1 checks them against SHA256SUMS." \
+            --prerelease --latest=false \
+            ffmpeg-lgpl-win64.zip ffmpeg-source.zip SHA256SUMS builds-commit.txt
+          echo "Stored: FFmpeg built with FFmpeg-Builds $BUILDS_COMMIT, on the release $STORE_TAG." >> "$GITHUB_STEP_SUMMARY"

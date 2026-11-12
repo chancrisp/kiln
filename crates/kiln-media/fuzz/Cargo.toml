@@ -1,0 +1,102 @@
+[package]
+name = "kiln-media-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+kiln-media = { path = ".." }
+
+# Its own workspace, the usual cargo-fuzz way: the main workspace (and its
+# `cargo test --workspace` and MSRV check) never builds this crate.
+[workspace]
+
+# The Symphonia crates Kiln patches (see ../vendor/README.md), as the main workspace has them.
+[patch.crates-io]
+symphonia-core = { path = "../vendor/symphonia-core" }
+symphonia-codec-aac = { path = "../vendor/symphonia-codec-aac" }
+symphonia-codec-alac = { path = "../vendor/symphonia-codec-alac" }
+symphonia-codec-vorbis = { path = "../vendor/symphonia-codec-vorbis" }
+symphonia-format-isomp4 = { path = "../vendor/symphonia-format-isomp4" }
+symphonia-format-mkv = { path = "../vendor/symphonia-format-mkv" }
+symphonia-format-ogg = { path = "../vendor/symphonia-format-ogg" }
+symphonia-format-riff = { path = "../vendor/symphonia-format-riff" }
+symphonia-metadata = { path = "../vendor/symphonia-metadata" }
+
+[profile.release]
+debug = 1
+
+
+[[bin]]
+name = "wav"
+path = "fuzz_targets/wav.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "aiff"
+path = "fuzz_targets/aiff.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "wavpack"
+path = "fuzz_targets/wavpack.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "opus"
+path = "fuzz_targets/opus.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "id3"
+path = "fuzz_targets/id3.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ape"
+path = "fuzz_targets/ape.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mp4read"
+path = "fuzz_targets/mp4read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sym"
+path = "fuzz_targets/sym.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "video_info_mp4"
+path = "fuzz_targets/video_info_mp4.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "video_info_mkv"
+path = "fuzz_targets/video_info_mkv.rs"
+test = false
+doc = false
+bench = false

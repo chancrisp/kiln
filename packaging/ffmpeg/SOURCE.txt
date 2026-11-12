@@ -1,0 +1,8 @@
+FFmpeg is included under the LGPL. The source code of this exact build is on
+the release page this download came from:
+https://github.com/chancrisp/kiln/releases/download/v{{KILN_VERSION}}/Kiln-{{KILN_VERSION}}-ffmpeg-source.zip
+
+The source zip holds the source of FFmpeg and of every library built into it,
+as the build fetched them, and the scripts that built it. This copy of FFmpeg
+is in the bin folder next to this file. Its licence is in LICENSE.txt and how
+it was built is in BUILD.txt, both in this folder.

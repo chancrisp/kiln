@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: A security problem
+    url: https://github.com/chancrisp/kiln/security/advisories/new
+    about: Report it privately, not as an issue. SECURITY.md says how.
+  - name: A question about using Kiln
+    url: https://github.com/chancrisp/kiln/blob/main/SUPPORT.md
+    about: Where to look first, and what to include.

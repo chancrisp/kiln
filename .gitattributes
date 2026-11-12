@@ -1,0 +1,10 @@
+# The hostile PDFs keep the bytes they were written with. Git takes them for
+# text, and a checkout that turns their line ends into CRLF breaks them at
+# the trailer, before the nesting they exist to test is read.
+tests/fixtures/hostile/*.pdf binary
+
+# The hostile Office files keep the bytes they were written with too. Git
+# takes an RTF for text and would give it CRLF line ends in a checkout. A
+# DOCX is a zip, which it already takes for binary; the line makes sure.
+tests/fixtures/hostile/*.rtf -text
+tests/fixtures/hostile/*.docx binary

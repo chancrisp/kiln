@@ -1,0 +1,267 @@
+<!--
+  Kiln's MSI, for WiX Toolset 5, installed as a dotnet global tool.
+  Built by packaging/package.ps1, which passes Version and StageDir.
+
+  A per-machine install into Program Files\Kiln, with a Start menu
+  shortcut and the folder added to PATH so `kiln` works in a terminal.
+  The shortcut carries Kiln's AppUserModelID, so Windows shows Kiln's
+  notifications, and the kiln: link their buttons open is registered.
+  It also offers Kiln in Explorer's Open with, for every account on the PC,
+  and adds a Send to shortcut for the installing account. Nothing claims a
+  file type: no extension's default value is touched.
+  The UpgradeCode never changes: it is how newer versions find and
+  replace older ones.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package Name="Kiln"
+           Manufacturer="Chandler Crisp"
+           Version="$(Version)"
+           UpgradeCode="b09becc6-3b59-4cbb-aa13-8b59ea7e77f6"
+           Scope="perMachine"
+           Compressed="yes">
+    <SummaryInformation Description="Kiln, a local file converter" />
+
+    <!--
+      A release candidate and its release carry the same numbers (0.1.0 for
+      0.1.0-rc.1), so a same-version MSI replaces the one installed instead
+      of adding a second entry.
+    -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of Kiln is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- The Id ends in .exe for ICE50; Windows reads the icon from the file's contents, not its extension. -->
+    <Icon Id="KilnIcon.exe" SourceFile="$(StageDir)\kiln.ico" />
+    <Property Id="ARPPRODUCTICON" Value="KilnIcon.exe" />
+    <!-- Apps > Installed apps links to the public pages. -->
+    <Property Id="ARPHELPLINK" Value="https://github.com/chancrisp/kiln/blob/main/SUPPORT.md" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/chancrisp/kiln" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/chancrisp/kiln/releases" />
+
+    <!--
+      The pages: WixUI_Minimal shows the licence, the GPL made
+      into License.rtf by package.ps1 from LICENSE, then installs. Its finish
+      page offers to open Kiln, ticked; WixShellExec runs from the
+      installer's own, not elevated, process, so Kiln opens as the user.
+      Needs the WixToolset.UI and WixToolset.Util extensions. The action
+      that opens Kiln is after InstallExecuteSequence, below.
+    -->
+    <ui:WixUI Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(StageDir)\License.rtf" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Open Kiln" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+    <Property Id="WixShellExecTarget" Value="[#KilnAppExe]" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Kiln">
+        <Directory Id="FFMPEGFOLDER" Name="ffmpeg">
+          <Directory Id="FFMPEGBINFOLDER" Name="bin" />
+          <Directory Id="FFMPEGLICENSESFOLDER" Name="licenses" />
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <ComponentGroup Id="KilnFiles" Directory="INSTALLFOLDER">
+      <Component>
+        <File Id="KilnAppExe" Source="$(StageDir)\kiln-app.exe" KeyPath="yes">
+          <Shortcut Name="Kiln"
+                    Description="Convert files on this PC"
+                    Directory="ProgramMenuFolder"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Icon="KilnIcon.exe"
+                    Advertise="yes">
+            <!-- The same as AUMID in crates/kiln-app/src/win/toast.rs. -->
+            <ShortcutProperty Key="System.AppUserModel.ID" Value="Kiln.App" />
+          </Shortcut>
+        </File>
+      </Component>
+      <Component>
+        <File Source="$(StageDir)\kiln.exe" KeyPath="yes" />
+        <Environment Id="KilnPath" Name="PATH" Value="[INSTALLFOLDER]"
+                     Part="last" Action="set" System="yes" Permanent="no" />
+      </Component>
+      <!--
+        The MP3 encoder: LAME, built as its own DLL. Kiln loads it from this
+        folder, beside the programs, and from nowhere else.
+      -->
+      <Component>
+        <File Source="$(StageDir)\lame_enc.dll" KeyPath="yes" />
+      </Component>
+      <Component>
+        <File Source="$(StageDir)\LAME-COPYING.txt" KeyPath="yes" />
+      </Component>
+      <Component>
+        <File Source="$(StageDir)\LICENSE" KeyPath="yes" />
+      </Component>
+      <Component>
+        <File Source="$(StageDir)\THIRD_PARTY_LICENSES" KeyPath="yes" />
+      </Component>
+      <Component>
+        <File Source="$(StageDir)\THIRD_PARTY_NOTICES.md" KeyPath="yes" />
+      </Component>
+      <Component>
+        <File Source="$(StageDir)\PRIVACY.md" KeyPath="yes" />
+      </Component>
+      <Component>
+        <!-- A short plain-text guide in place of the developer README. -->
+        <File Id="ReadMe" Source="$(StageDir)\Read me.txt" KeyPath="yes" />
+      </Component>
+
+      <!--
+        Open with. The file types that list Kiln.Convert under
+        OpenWithProgids are in open-with-types.wxs (OpenWithTypes).
+        MultiSelectModel stays unset, so Explorer starts one Kiln per file
+        and the running window gathers them.
+      -->
+      <Component Id="OpenWith">
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\kiln-app.exe"
+                       Name="FriendlyAppName" Type="string" Value="Kiln" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\kiln-app.exe\shell\open\command"
+                       Type="string" Value='"[INSTALLFOLDER]kiln-app.exe" "%1"' />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Kiln.Convert"
+                       Type="string" Value="Kiln" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Kiln.Convert\DefaultIcon"
+                       Type="string" Value='"[INSTALLFOLDER]kiln-app.exe",0' />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Kiln.Convert\shell\open\command"
+                       Type="string" Value='"[INSTALLFOLDER]kiln-app.exe" "%1"' />
+      </Component>
+
+      <!--
+        The kiln: link that a notification's Show in folder opens, as
+        kiln:show?n=<id>. Windows starts kiln-app.exe with the link, which
+        hands the id to the running Kiln; Kiln acts only on its own
+        notices from the same run, and on nothing else a link says.
+      -->
+      <Component Id="KilnLink">
+        <RegistryValue Root="HKLM" Key="Software\Classes\kiln" Type="string" Value="URL:Kiln" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\kiln" Name="URL Protocol" Type="string" Value="" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\kiln\DefaultIcon"
+                       Type="string" Value='"[INSTALLFOLDER]kiln-app.exe",0' />
+        <RegistryValue Root="HKLM" Key="Software\Classes\kiln\shell\open\command" Type="string" Value='"[INSTALLFOLDER]kiln-app.exe" "%1"' />
+      </Component>
+
+      <!--
+        Windows Error Reporting keeps a small dump (DumpType 1, a minidump)
+        when kiln-app.exe crashes in a way its own crash file can't catch,
+        in the user's %LOCALAPPDATA%\Kiln\CrashDumps, five at most.
+        They stay on the PC; Kiln never sends them anywhere.
+      -->
+      <Component Id="CrashDumps">
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\Windows Error Reporting\LocalDumps\kiln-app.exe" Name="DumpFolder" Type="expandable" Value="%LOCALAPPDATA%\Kiln\CrashDumps" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\Windows Error Reporting\LocalDumps\kiln-app.exe" Name="DumpCount" Type="integer" Value="5" />
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\Windows Error Reporting\LocalDumps\kiln-app.exe" Name="DumpType" Type="integer" Value="1" />
+      </Component>
+    </ComponentGroup>
+
+    <!--
+      FFmpeg: an LGPL build of its own (no GPL or nonfree parts), shipped as
+      a separate program in ffmpeg\bin, with its licence, where its source
+      is and how it was built in ffmpeg beside that folder, and
+      the notices of the libraries built into it in ffmpeg\licenses. Kiln
+      starts it as a program and links none of it. package.ps1 stages it;
+      with its WithoutFfmpeg switch it defines NoFfmpeg and the MSI leaves
+      it out.
+    -->
+<?ifndef NoFfmpeg?>
+    <ComponentGroup Id="FfmpegFiles" Directory="FFMPEGFOLDER">
+      <Component>
+        <File Source="$(StageDir)\ffmpeg\LICENSE.txt" KeyPath="yes" />
+      </Component>
+      <Component>
+        <File Source="$(StageDir)\ffmpeg\SOURCE.txt" KeyPath="yes" />
+      </Component>
+      <Component>
+        <File Source="$(StageDir)\ffmpeg\BUILD.txt" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+    <ComponentGroup Id="FfmpegProgram" Directory="FFMPEGBINFOLDER">
+      <Files Include="$(StageDir)\ffmpeg\bin\**" />
+    </ComponentGroup>
+    <!-- The copyright and licence notices of the libraries built into FFmpeg. -->
+    <ComponentGroup Id="FfmpegLicenses" Directory="FFMPEGLICENSESFOLDER">
+      <Files Include="$(StageDir)\ffmpeg\licenses\**" />
+    </ComponentGroup>
+<?endif?>
+
+    <!--
+      Send to, for the account that installs Kiln. A per-user item in a
+      per-machine package needs an HKCU key path (ICE38, ICE43, ICE57).
+      Being per user, it is removed only by an uninstall run from the
+      installing account. One run from a different admin account can't
+      reach that account's profile, so the shortcut stays behind there.
+      A repair or major upgrade run from a different admin account
+      likewise installs Send to into that account as well, leaving the
+      first account's shortcut behind.
+      That comes with any per-user item.
+      The shortcut has no Icon: one that points to kiln-app.exe shows the
+      exe's own icon.
+    -->
+    <StandardDirectory Id="SendToFolder">
+      <Component Id="SendTo">
+        <Shortcut Id="SendToShortcut"
+                  Name="Kiln"
+                  Description="Convert files on this PC"
+                  Target="[INSTALLFOLDER]kiln-app.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\Kiln" Name="SendTo"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <!--
+      Start with Windows. While the drag-wheel is on, Kiln itself writes
+      the value Kiln under HKCU\Software\Microsoft\Windows\CurrentVersion\Run,
+      for the account that turned it on; the package never writes it. The
+      uninstall asks Kiln to remove it (kiln-app.exe with its forget-startup
+      flag; an XML comment can't hold the flag's two dashes), and Kiln
+      removes it only when it names this kiln-app.exe, so another copy of
+      Kiln, or another program's value, is left alone. It runs as the
+      account that runs the uninstall, before the files go, and never for
+      the uninstall a major upgrade makes of the version it replaces. Like
+      Send to's, the value is per user: an uninstall from a different
+      account can't reach the first account's, which stays behind there
+      and starts nothing once kiln-app.exe is gone. A failure never stops
+      the uninstall.
+    -->
+    <CustomAction Id="ForgetStartup"
+                  Directory="INSTALLFOLDER"
+                  ExeCommand='"[INSTALLFOLDER]kiln-app.exe" --forget-startup'
+                  Execute="deferred"
+                  Impersonate="yes"
+                  Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="ForgetStartup" Before="RemoveFiles"
+              Condition='REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE' />
+    </InstallExecuteSequence>
+
+    <!-- The finish page's Open Kiln (see WixUI_Minimal above). -->
+    <CustomAction Id="OpenKiln" BinaryRef="Wix4UtilCA_X64" DllEntry="WixShellExec" Impersonate="yes" />
+    <UI>
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="OpenKiln"
+               Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed" />
+    </UI>
+
+    <Feature Id="Main">
+      <ComponentGroupRef Id="KilnFiles" />
+      <ComponentGroupRef Id="OpenWithTypes" />
+<?ifndef NoFfmpeg?>
+      <ComponentGroupRef Id="FfmpegFiles" />
+      <ComponentGroupRef Id="FfmpegProgram" />
+      <ComponentGroupRef Id="FfmpegLicenses" />
+<?endif?>
+    </Feature>
+
+    <!--
+      Send to has a feature of its own. The Start menu shortcut is
+      advertised, and launching it checks the key paths of its feature and
+      that feature's parents. In Main, another account's launch would find
+      this HKCU key path missing, repair the feature and copy Send to into
+      that account, where uninstall would leave it behind. As a separate
+      top-level feature it is never checked by that shortcut. It keeps the
+      default level, so it still installs.
+    -->
+    <Feature Id="SendTo">
+      <ComponentRef Id="SendTo" />
+    </Feature>
+  </Package>
+</Wix>

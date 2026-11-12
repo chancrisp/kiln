@@ -1,0 +1,21 @@
+name: Format or tool request
+description: Ask for a file type, conversion or tool Kiln doesn't have yet.
+labels: [enhancement]
+body:
+  - type: input
+    id: format
+    attributes:
+      label: Format or tool
+      placeholder: "AIFF to MP3, or Rotate for images"
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: What it's for
+      description: What you'd use it for, and any settings that matter, such as quality or size.
+  - type: textarea
+    id: engine
+    attributes:
+      label: Engine
+      description: If you know a local, offline tool that can do it, name it and its license.

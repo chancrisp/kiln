@@ -1,0 +1,24 @@
+[package]
+name = "kiln-lame"
+description = "LAME 3.100 as its own DLL (lame_enc.dll), so the LGPL code stays separate from Kiln."
+version.workspace = true
+edition.workspace = true
+license = "LGPL-2.0-or-later"
+publish.workspace = true
+rust-version.workspace = true
+build = "build.rs"
+
+[lib]
+name = "lame_enc"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Bundles the LAME 3.100 source and builds it with cc on Windows. Only this
+# crate depends on it: kiln-media loads the finished DLL at run time.
+mp3lame-sys = "=0.1.11"
+
+[build-dependencies]
+embed-resource = "3"
+
+[lints]
+workspace = true

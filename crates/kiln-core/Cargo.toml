@@ -1,0 +1,68 @@
+[package]
+name = "kiln-core"
+description = "Conversion logic for Kiln. No UI dependencies."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[features]
+# Test switches a Kiln started by a test may use (a slowed copy), which are
+# otherwise only in debug builds. The shipped build is made without it.
+test-hooks = []
+
+[dependencies]
+image.workspace = true
+kiln-media.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+toml.workspace = true
+flate2 = "1"
+# Only to read a GIF's loop extension, which image folds into "for ever".
+gif = "0.14"
+roxmltree = "0.20"
+lopdf.workspace = true
+pdf-extract = "0.12.1"
+resvg = { version = "0.45", default-features = false, features = ["text", "system-fonts", "memmap-fonts", "raster-images"] }
+# libwebp, built from its C source and linked in, writes WebP.
+libwebp-sys = "0.14"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+] }
+windows = { version = "0.62", features = [
+    "Data_Pdf",
+    "Foundation",
+    "Storage",
+    "Storage_Streams",
+    "UI",
+    "Win32_Foundation",
+    "Win32_Graphics_Imaging",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+    "Win32_System_WinRT",
+] }
+
+[dev-dependencies]
+tempfile.workspace = true
+# A real Display P3 profile for the colour-profile tests; already locked
+# through the image crate.
+moxcms = "0.8.1"
+# Only so cargo builds lame_enc.dll next to the test binaries, where
+# kiln-media looks for it. Kiln never links LAME itself.
+kiln-lame = { path = "../kiln-lame" }
+
+[lints]
+workspace = true

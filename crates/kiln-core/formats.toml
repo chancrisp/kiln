@@ -1,0 +1,679 @@
+# Kiln format registry.
+#
+# [formats.<ext>] describes one file type. Extensions are lowercase, without
+# the dot. `aliases` are other extensions that mean the same type; they are
+# accepted on input and never used for output names.
+#
+# Backend-specific keys:
+#   ffmpeg = [...]  arguments added before the output when FFmpeg writes this
+#                   type. Each item is one argument; nothing goes through a shell.
+#                   Quality settings retune the -crf, -q:v, -b:a and -q:a values.
+#   pandoc = "..."  the name Pandoc uses for this type.
+#   standalone      Pandoc writes a complete document, not a fragment.
+#   libreoffice = "..."           LibreOffice's --convert-to value for writing
+#                                 this type: an extension, optionally with
+#                                 ":filter name:filter options".
+#   libreoffice_infilter = "..."  LibreOffice's --infilter value for reading it.
+#
+# [[route]] says which backend converts `from` types to `to` types. Every
+# from/to combination is a pair; identical types are skipped. Declaring the
+# same pair twice, in one route or across routes, is an error at load time.
+# A route may name a `fallback` backend: Kiln uses it for the pair when the
+# first backend's engine isn't installed or can't take the file now.
+#
+# [[chain]] reaches a pair no single engine can do by passing the file
+# through the `via` types in order, one engine after another. Every leg must
+# already be a route or an earlier chain, and a chain may not repeat a pair
+# that is already declared.
+
+# --- Images -----------------------------------------------------------------
+# Written and read in process by the image backend.
+
+[formats.png]
+kind = "image"
+
+[formats.jpg]
+kind = "image"
+aliases = ["jpeg", "jfif"]
+
+# The arguments are only used when FFmpeg writes an animated WebP from video.
+[formats.webp]
+kind = "image"
+ffmpeg = ["-c:v", "libwebp_anim", "-lossless", "0", "-q:v", "80", "-loop", "0"]
+
+[formats.bmp]
+kind = "image"
+
+[formats.gif]
+kind = "image"
+
+[formats.tiff]
+kind = "image"
+aliases = ["tif"]
+
+[formats.ico]
+kind = "image"
+
+[formats.tga]
+kind = "image"
+
+[formats.qoi]
+kind = "image"
+
+[formats.ppm]
+kind = "image"
+aliases = ["pnm", "pgm", "pbm", "pam"]
+
+# Drawn by resvg; read only.
+[formats.svg]
+kind = "image"
+
+# Camera RAW, decoded by Windows (the Raw Image Extension); read only.
+[formats.dng]
+kind = "image"
+
+[formats.cr2]
+kind = "image"
+
+[formats.cr3]
+kind = "image"
+
+[formats.nef]
+kind = "image"
+aliases = ["nrw"]
+
+[formats.arw]
+kind = "image"
+aliases = ["srf", "sr2"]
+
+[formats.orf]
+kind = "image"
+
+[formats.rw2]
+kind = "image"
+
+[formats.raf]
+kind = "image"
+
+[formats.pef]
+kind = "image"
+
+[formats.srw]
+kind = "image"
+
+# HEIC and AVIF are read by Windows (WIC, with Microsoft's HEIF Image
+# Extensions and AV1 Video Extension), or by FFmpeg where Windows can't.
+# AVIF and JPEG XL are written by FFmpeg, keeping transparency; JPEG XL is
+# read by it too. HEIC is read only.
+[formats.avif]
+kind = "image"
+ffmpeg = ["-c:v", "libaom-av1", "-still-picture", "1", "-crf", "24", "-cpu-used", "6"]
+
+[formats.jxl]
+kind = "image"
+ffmpeg = ["-c:v", "libjxl", "-distance", "1", "-effort", "7"]
+
+[formats.heic]
+kind = "image"
+aliases = ["heif", "hif"]
+
+# Animated PNG, written from video.
+[formats.apng]
+kind = "image"
+ffmpeg = ["-c:v", "apng", "-pred", "mixed", "-plays", "0"]
+
+# --- Audio ------------------------------------------------------------------
+
+[formats.wav]
+kind = "audio"
+ffmpeg = ["-c:a", "pcm_s16le"]
+
+[formats.mp3]
+kind = "audio"
+ffmpeg = ["-c:a", "libmp3lame", "-q:a", "2"]
+
+[formats.flac]
+kind = "audio"
+ffmpeg = ["-c:a", "flac"]
+
+[formats.ogg]
+kind = "audio"
+aliases = ["oga"]
+ffmpeg = ["-c:a", "libvorbis", "-q:a", "5"]
+
+[formats.opus]
+kind = "audio"
+ffmpeg = ["-c:a", "libopus", "-b:a", "128k"]
+
+[formats.m4a]
+kind = "audio"
+ffmpeg = ["-c:a", "aac", "-b:a", "192k"]
+
+[formats.aac]
+kind = "audio"
+ffmpeg = ["-c:a", "aac", "-b:a", "192k"]
+
+[formats.aiff]
+kind = "audio"
+aliases = ["aif"]
+ffmpeg = ["-c:a", "pcm_s16be"]
+
+[formats.wma]
+kind = "audio"
+ffmpeg = ["-c:a", "wmav2", "-b:a", "192k"]
+
+# AC-3 only takes 32, 44.1 and 48 kHz.
+[formats.ac3]
+kind = "audio"
+ffmpeg = ["-c:a", "ac3", "-b:a", "384k", "-ar", "48000"]
+
+[formats.wv]
+kind = "audio"
+ffmpeg = ["-c:a", "wavpack", "-frame_size", "16384"]
+
+# --- Video ------------------------------------------------------------------
+
+# "@h264" is the H.264 encoder of the FFmpeg in use: x264 where it has it,
+# otherwise Windows' own encoder through FFmpeg (h264_mf), with the CRF as
+# its quality and no preset. The FFmpeg that comes with Kiln has no x264.
+
+[formats.mp4]
+kind = "video"
+ffmpeg = ["-c:v", "@h264", "-pix_fmt", "yuv420p", "-crf", "20", "-preset", "medium", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart"]
+
+[formats.m4v]
+kind = "video"
+ffmpeg = ["-c:v", "@h264", "-pix_fmt", "yuv420p", "-crf", "20", "-preset", "medium", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart"]
+
+[formats.mov]
+kind = "video"
+ffmpeg = ["-c:v", "@h264", "-pix_fmt", "yuv420p", "-crf", "20", "-preset", "medium", "-c:a", "aac", "-b:a", "160k"]
+
+[formats.mkv]
+kind = "video"
+ffmpeg = ["-c:v", "@h264", "-pix_fmt", "yuv420p", "-crf", "20", "-preset", "medium", "-c:a", "libopus", "-b:a", "128k"]
+
+[formats.webm]
+kind = "video"
+ffmpeg = ["-c:v", "libvpx-vp9", "-pix_fmt", "yuv420p", "-b:v", "0", "-crf", "31", "-row-mt", "1", "-c:a", "libopus", "-b:a", "128k"]
+
+# MPEG-4 Part 2 with MP3: the AVI that old players and TVs expect.
+[formats.avi]
+kind = "video"
+ffmpeg = ["-c:v", "mpeg4", "-vtag", "xvid", "-q:v", "3", "-c:a", "libmp3lame", "-b:a", "192k"]
+
+[formats.wmv]
+kind = "video"
+ffmpeg = ["-c:v", "wmv2", "-q:v", "3", "-c:a", "wmav2", "-b:a", "192k"]
+
+# FLV can't store B-frame reordering cleanly: players see a late start and
+# a long duration. Without B-frames the timeline starts at zero.
+[formats.flv]
+kind = "video"
+ffmpeg = ["-c:v", "@h264", "-pix_fmt", "yuv420p", "-crf", "20", "-preset", "medium", "-bf", "0", "-c:a", "aac", "-b:a", "160k", "-ar", "44100"]
+
+# MPEG-2 program stream, as DVD players read it. FFmpeg also picks a frame
+# rate MPEG-2 allows when the source's isn't one.
+[formats.mpg]
+kind = "video"
+aliases = ["mpeg", "vob"]
+ffmpeg = ["-f", "dvd", "-c:v", "mpeg2video", "-q:v", "3", "-maxrate", "9000k", "-bufsize", "1835k", "-c:a", "mp2", "-b:a", "224k", "-ar", "48000"]
+
+[formats.ts]
+kind = "video"
+aliases = ["mts", "m2ts"]
+ffmpeg = ["-c:v", "@h264", "-pix_fmt", "yuv420p", "-crf", "20", "-preset", "medium", "-c:a", "aac", "-b:a", "160k"]
+
+[formats.3gp]
+kind = "video"
+ffmpeg = ["-c:v", "@h264", "-pix_fmt", "yuv420p", "-profile:v", "baseline", "-crf", "23", "-preset", "medium", "-c:a", "aac", "-b:a", "96k"]
+
+[formats.ogv]
+kind = "video"
+ffmpeg = ["-c:v", "libtheora", "-q:v", "8", "-c:a", "libvorbis", "-q:a", "5"]
+
+# --- Subtitles --------------------------------------------------------------
+
+[formats.srt]
+kind = "subtitle"
+ffmpeg = ["-c:s", "srt"]
+
+[formats.vtt]
+kind = "subtitle"
+ffmpeg = ["-c:s", "webvtt"]
+
+[formats.ass]
+kind = "subtitle"
+aliases = ["ssa"]
+ffmpeg = ["-c:s", "ass"]
+
+# --- Documents --------------------------------------------------------------
+
+[formats.md]
+kind = "document"
+aliases = ["markdown"]
+pandoc = "markdown"
+
+# LibreOffice writes HTML only from spreadsheets.
+[formats.html]
+kind = "document"
+aliases = ["htm"]
+pandoc = "html"
+standalone = true
+libreoffice = "html"
+
+[formats.docx]
+kind = "document"
+pandoc = "docx"
+libreoffice = "docx:MS Word 2007 XML"
+
+[formats.odt]
+kind = "document"
+pandoc = "odt"
+libreoffice = "odt:writer8"
+
+[formats.epub]
+kind = "document"
+pandoc = "epub"
+
+[formats.rst]
+kind = "document"
+pandoc = "rst"
+
+[formats.tex]
+kind = "document"
+pandoc = "latex"
+standalone = true
+
+[formats.rtf]
+kind = "document"
+pandoc = "rtf"
+standalone = true
+libreoffice = "rtf:Rich Text Format"
+
+# Pandoc writes plain text; LibreOffice reads it, line for line.
+[formats.txt]
+kind = "document"
+aliases = ["text"]
+pandoc = "plain"
+libreoffice_infilter = "Text (encoded):UTF8"
+
+[formats.org]
+kind = "document"
+pandoc = "org"
+
+[formats.adoc]
+kind = "document"
+aliases = ["asciidoc"]
+pandoc = "asciidoc"
+
+[formats.typ]
+kind = "document"
+pandoc = "typst"
+standalone = true
+
+[formats.wiki]
+kind = "document"
+aliases = ["mediawiki"]
+pandoc = "mediawiki"
+
+[formats.textile]
+kind = "document"
+pandoc = "textile"
+
+[formats.dbk]
+kind = "document"
+aliases = ["docbook"]
+pandoc = "docbook"
+standalone = true
+
+[formats.fb2]
+kind = "document"
+pandoc = "fb2"
+
+[formats.ipynb]
+kind = "document"
+pandoc = "ipynb"
+
+# --- E-books (Calibre) ------------------------------------------------------
+
+[formats.mobi]
+kind = "document"
+
+[formats.azw3]
+kind = "document"
+aliases = ["azw"]
+
+# --- Office (LibreOffice) ---------------------------------------------------
+
+[formats.doc]
+kind = "document"
+libreoffice = "doc:MS Word 97"
+
+[formats.pdf]
+kind = "document"
+libreoffice = "pdf"
+
+# Apple Pages, WordPerfect, Visio and Publisher are read only.
+[formats.pages]
+kind = "document"
+
+[formats.wpd]
+kind = "document"
+
+[formats.vsdx]
+kind = "document"
+aliases = ["vsd"]
+
+[formats.pub]
+kind = "document"
+
+[formats.xlsx]
+kind = "spreadsheet"
+libreoffice = "xlsx:Calc MS Excel 2007 XML"
+
+[formats.xls]
+kind = "spreadsheet"
+libreoffice = "xls:MS Excel 97"
+
+[formats.ods]
+kind = "spreadsheet"
+libreoffice = "ods:calc8"
+
+# Comma separated, double quotes only where needed, UTF-8 (76), starting at
+# line 1, cells written as shown, every sheet (-1) in a file of its own.
+[formats.csv]
+kind = "spreadsheet"
+libreoffice = "csv:Text - txt - csv (StarCalc):44,34,76,1,,0,false,true,true,false,false,-1"
+libreoffice_infilter = "CSV:44,34,76,1"
+
+[formats.numbers]
+kind = "spreadsheet"
+
+[formats.pptx]
+kind = "presentation"
+pandoc = "pptx"
+libreoffice = "pptx:Impress MS PowerPoint 2007 XML"
+
+[formats.ppt]
+kind = "presentation"
+libreoffice = "ppt:MS PowerPoint 97"
+
+[formats.odp]
+kind = "presentation"
+libreoffice = "odp:impress8"
+
+[formats.key]
+kind = "presentation"
+
+# --- Routes -----------------------------------------------------------------
+
+[[route]]
+backend = "image"
+from = ["png", "jpg", "webp", "bmp", "gif", "tiff", "ico", "tga", "qoi", "ppm", "svg",
+        "dng", "cr2", "cr3", "nef", "arw", "orf", "rw2", "raf", "pef", "srw", "heic", "avif"]
+to = ["png", "jpg", "webp", "bmp", "gif", "tiff", "ico", "tga", "qoi", "ppm"]
+
+# JPEG XL goes through PNG; chains below take it further.
+[[route]]
+backend = "ffmpeg"
+from = ["jxl"]
+to = ["png"]
+
+[[route]]
+backend = "ffmpeg"
+from = ["png"]
+to = ["avif", "jxl"]
+
+# Sound is Kiln's own work (kiln-media), from audio files and from the
+# sound of the five video containers it can open. "audio" needs nothing
+# installed; "audio-mf" needs Windows' Media Foundation, for AAC, M4A, WMA
+# and AC3 and for reading WMA and AC3.
+[[route]]
+backend = "audio"
+from = ["wav", "mp3", "flac", "ogg", "opus", "m4a", "aac", "aiff", "wv",
+        "mp4", "m4v", "mov", "mkv", "webm"]
+to = ["wav", "mp3", "flac", "ogg", "opus", "aiff", "wv"]
+
+[[route]]
+backend = "audio-mf"
+from = ["wav", "mp3", "flac", "ogg", "opus", "m4a", "aac", "aiff", "wv",
+        "mp4", "m4v", "mov", "mkv", "webm"]
+to = ["m4a", "aac", "wma", "ac3"]
+
+[[route]]
+backend = "audio-mf"
+from = ["wma", "ac3"]
+to = ["wav", "mp3", "flac", "ogg", "opus", "m4a", "aac", "aiff", "wma", "ac3", "wv"]
+
+# Video among MP4, MOV, M4V and MKV is Kiln's own work (kiln-media), through
+# Windows' Media Foundation. It hands a file to FFmpeg when FFmpeg is
+# installed and Windows can't read the picture or the sound.
+[[route]]
+backend = "video"
+from = ["mp4", "m4v", "mov", "mkv"]
+to = ["mp4", "m4v", "mov", "mkv"]
+
+# FFmpeg writes the other video types, and animations, from those four...
+[[route]]
+backend = "ffmpeg"
+from = ["mp4", "m4v", "mov", "mkv"]
+to = ["webm", "avi", "wmv", "flv", "mpg", "ts", "3gp", "ogv", "gif", "webp", "apng"]
+
+# ...and converts every video type it alone reads.
+[[route]]
+backend = "ffmpeg"
+from = ["webm", "avi", "wmv", "flv", "mpg", "ts", "3gp", "ogv"]
+to = ["mp4", "m4v", "mov", "mkv", "webm", "avi", "wmv", "flv", "mpg", "ts", "3gp", "ogv",
+      "gif", "webp", "apng"]
+
+# The sound of the video types Kiln can't open itself still goes through
+# FFmpeg.
+[[route]]
+backend = "ffmpeg"
+from = ["avi", "wmv", "flv", "mpg", "ts", "3gp", "ogv"]
+to = ["wav", "mp3", "flac", "ogg", "opus", "m4a", "aac", "aiff", "wma", "ac3", "wv"]
+
+# Animations become silent video.
+[[route]]
+backend = "ffmpeg"
+from = ["gif", "apng"]
+to = ["mp4", "m4v", "mov", "mkv", "webm", "avi", "wmv", "flv", "mpg", "ts", "3gp", "ogv"]
+
+[[route]]
+backend = "ffmpeg"
+from = ["srt", "vtt", "ass"]
+to = ["srt", "vtt", "ass"]
+
+# The first subtitle track of a video.
+[[route]]
+backend = "ffmpeg"
+from = ["mkv", "mp4"]
+to = ["srt", "vtt", "ass"]
+
+[[route]]
+backend = "pandoc"
+from = ["md", "html", "docx", "odt", "epub", "rst", "tex", "org", "adoc", "typ", "wiki",
+        "textile", "dbk", "fb2", "ipynb"]
+to = ["md", "html", "docx", "odt", "epub", "rst", "tex", "rtf", "txt", "org", "adoc", "typ",
+      "wiki", "textile", "dbk", "fb2", "ipynb", "pptx"]
+
+[[route]]
+backend = "calibre"
+from = ["epub", "mobi", "azw3"]
+to = ["epub", "mobi", "azw3"]
+
+# Office files to PDF through Microsoft Office when it is installed (Word,
+# Excel and PowerPoint, each for its own files), else through LibreOffice.
+
+[[route]]
+backend = "office"
+fallback = "libreoffice"
+from = ["doc", "docx", "odt", "rtf", "txt"]
+to = ["pdf"]
+
+[[route]]
+backend = "office"
+fallback = "libreoffice"
+from = ["xlsx", "xls", "ods", "csv"]
+to = ["pdf"]
+
+[[route]]
+backend = "office"
+fallback = "libreoffice"
+from = ["pptx", "ppt", "odp"]
+to = ["pdf"]
+
+# LibreOffice takes the other office pairs Pandoc can't do: legacy binary
+# types, RTF and plain text as input, Apple and other read-only types,
+# spreadsheets, slides, and PDF from the types Office doesn't open. Pandoc
+# keeps the pairs it already has, such as DOCX to ODT.
+
+[[route]]
+backend = "libreoffice"
+from = ["doc", "rtf", "txt", "pages", "wpd"]
+to = ["doc", "docx", "odt", "rtf"]
+
+[[route]]
+backend = "libreoffice"
+from = ["pages", "wpd"]
+to = ["pdf"]
+
+[[route]]
+backend = "libreoffice"
+from = ["docx", "odt"]
+to = ["doc"]
+
+[[route]]
+backend = "libreoffice"
+from = ["vsdx", "pub"]
+to = ["pdf"]
+
+[[route]]
+backend = "libreoffice"
+from = ["xlsx", "xls", "ods", "csv", "numbers"]
+to = ["xlsx", "xls", "ods", "csv", "html"]
+
+[[route]]
+backend = "libreoffice"
+from = ["numbers"]
+to = ["pdf"]
+
+[[route]]
+backend = "libreoffice"
+from = ["pptx", "ppt", "odp", "key"]
+to = ["pptx", "ppt", "odp"]
+
+[[route]]
+backend = "libreoffice"
+from = ["key"]
+to = ["pdf"]
+
+# PDF in process: its text, its pages as images, and images as pages.
+[[route]]
+backend = "pdf"
+from = ["pdf"]
+to = ["txt", "png", "jpg", "webp", "bmp", "tiff"]
+
+[[route]]
+backend = "pdf"
+from = ["png", "jpg", "webp", "bmp", "gif", "tiff", "ico", "tga", "qoi", "ppm"]
+to = ["pdf"]
+
+# --- Chains -----------------------------------------------------------------
+
+[[chain]]
+from = ["jxl"]
+via = ["png"]
+to = ["jpg", "webp", "bmp", "gif", "tiff", "ico", "tga", "qoi", "ppm", "pdf"]
+
+[[chain]]
+from = ["jpg", "webp", "bmp", "gif", "tiff", "ico", "tga", "qoi", "ppm", "svg",
+        "dng", "cr2", "cr3", "nef", "arw", "orf", "rw2", "raf", "pef", "srw", "heic"]
+via = ["png"]
+to = ["avif", "jxl"]
+
+[[chain]]
+from = ["avif"]
+via = ["png"]
+to = ["jxl"]
+
+[[chain]]
+from = ["jxl"]
+via = ["png"]
+to = ["avif"]
+
+[[chain]]
+from = ["svg", "dng", "cr2", "cr3", "nef", "arw", "orf", "rw2", "raf", "pef", "srw", "heic",
+        "avif"]
+via = ["png"]
+to = ["pdf"]
+
+# A PDF's text, laid out again as a document. Its pictures, tables and layout
+# are left behind, which `note = "text-only"` has Kiln say.
+[[chain]]
+from = ["pdf"]
+via = ["txt"]
+to = ["docx", "odt", "doc", "rtf"]
+note = "text-only"
+
+[[chain]]
+from = ["pdf"]
+via = ["docx"]
+to = ["md", "html", "epub", "rst", "org", "adoc", "typ", "wiki", "textile", "dbk", "fb2",
+      "ipynb", "pptx"]
+note = "text-only"
+
+[[chain]]
+from = ["txt"]
+via = ["docx"]
+to = ["md", "html", "epub", "rst", "org", "adoc", "typ", "wiki", "textile", "dbk", "fb2",
+      "ipynb", "pptx"]
+
+# Pandoc documents to PDF and Word 97, laid out by LibreOffice.
+[[chain]]
+from = ["md", "html", "epub", "rst", "tex", "org", "adoc", "typ", "wiki", "textile", "dbk",
+        "fb2", "ipynb"]
+via = ["docx"]
+to = ["pdf", "doc"]
+
+# Word 97, RTF, Pages and WordPerfect onward through Word.
+[[chain]]
+from = ["doc", "rtf", "pages", "wpd"]
+via = ["docx"]
+to = ["md", "html", "epub", "txt"]
+
+# E-books.
+[[chain]]
+from = ["mobi", "azw3"]
+via = ["epub"]
+to = ["md", "html", "docx", "odt", "rst", "tex", "rtf", "txt", "org", "adoc", "typ",
+      "wiki", "textile", "dbk", "fb2", "ipynb"]
+
+[[chain]]
+from = ["md", "html", "docx", "odt", "rst", "tex", "org", "adoc", "typ", "wiki", "textile",
+        "dbk", "fb2", "ipynb"]
+via = ["epub"]
+to = ["mobi", "azw3"]
+
+[[chain]]
+from = ["mobi", "azw3"]
+via = ["docx"]
+to = ["pdf"]
+
+[[chain]]
+from = ["pdf"]
+via = ["epub"]
+to = ["mobi", "azw3"]
+note = "text-only"
+
+[[chain]]
+from = ["txt", "doc", "rtf", "pages", "wpd"]
+via = ["epub"]
+to = ["mobi", "azw3"]
+
+# Slides, drawings and documents as one image per page.
+[[chain]]
+from = ["pptx", "ppt", "odp", "key", "vsdx", "pub", "docx", "odt", "doc"]
+via = ["pdf"]
+to = ["png", "jpg"]

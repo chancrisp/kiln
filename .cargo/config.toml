@@ -1,0 +1,11 @@
+# Link the C runtime into the program, so none of kiln-app.exe, kiln.exe and
+# lame_enc.dll needs the Visual C++ Redistributable (VCRUNTIME140.dll) on the PC.
+# The C code Kiln builds (LAME, libFLAC, libopus, libvorbis, WavPack) is
+# compiled to match. All three binaries must agree, so this stays here and not
+# in one crate.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[env]
+# Picked up by the cmake crate, which builds libFLAC. Left overridable.
+CMAKE_TOOLCHAIN_FILE = { value = ".cargo/msvc-static-crt.cmake", relative = true }

@@ -1,0 +1,48 @@
+name: Bug report
+description: Something in Kiln doesn't work as it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what Kiln did instead.
+    validations:
+      required: true
+  - type: input
+    id: files
+    attributes:
+      label: File types involved
+      placeholder: "MP4 to WEBM, or Make smaller on a JPG"
+  - type: textarea
+    id: details
+    attributes:
+      label: Error details
+      description: If a row showed "Show details", paste what it said.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Kiln version
+      description: Settings > About shows it.
+      placeholder: "0.1.0, MSI or portable"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version, edition and display scaling
+      description: Settings > System > About in Windows shows the version and edition (for example Pro, Home or an N edition).
+      placeholder: "Windows 11 24H2 Pro, 150%"
+  - type: input
+    id: helpers
+    attributes:
+      label: Helper apps
+      description: If the problem involves FFmpeg, Pandoc, LibreOffice or Calibre, which one and its version.
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: |
+        Paste what Settings > About > Diagnostics > Copy diagnostics copies. If Kiln closed, a crash-….txt file from the log folder (Open log folder) helps too. A line can name a file or folder, so remove anything you'd rather not share.
+      render: text

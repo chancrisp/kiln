@@ -1,0 +1,9 @@
+# The one Rust every build of Kiln uses: on this PC, in CI and for releases.
+# Move it on purpose, in its own commit, after the gate passes on
+# the new version. Cargo.toml's rust-version is the oldest Rust Kiln builds
+# with, which CI checks separately.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+targets = ["x86_64-pc-windows-msvc"]
+profile = "minimal"

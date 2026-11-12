@@ -1,0 +1,336 @@
+name: Release
+
+# Push a tag v<version> (the version in Cargo.toml, such as v0.1.0 or
+# v0.1.0-rc.1) to build the installer, the portable ZIP, the source ZIPs, the
+# symbols ZIP and SHA256SUMS.txt, signed, and attach them to a draft release
+# of this repository. A person publishes the draft. Run it by hand
+# (workflow_dispatch) for a dry run: it builds and signs the same way, with
+# SignPath's test certificate, and keeps the files on the run, but makes no
+# release.
+#
+# Signing: the repository variable KILN_SIGNING says how.
+#   signpath  SignPath Foundation (the plan). Needs the secret
+#             SIGNPATH_API_TOKEN and the variables SIGNPATH_ORGANIZATION_ID
+#             and SIGNPATH_PROJECT_SLUG. A tag uses the signing policy
+#             release-signing, a dry run test-signing.
+#   azure     Azure Artifact Signing (the fallback). Needs the secrets
+#             AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_SUBSCRIPTION_ID
+#             (OpenID Connect, no password; the federated credential is for
+#             the environment "release") and the variables
+#             AZURE_SIGNING_ENDPOINT, AZURE_SIGNING_ACCOUNT and
+#             AZURE_CERTIFICATE_PROFILE.
+#   unset     Nothing is signed. Allowed for a dry run, and for the one tag
+#             the variable KILN_UNSIGNED_RELEASE names (v0.1.0: SignPath
+#             Foundation takes only projects that have released already).
+#             Any other tag stops.
+# FFmpeg's programs and DLLs are an upstream project's binaries. SignPath
+# Foundation's terms don't allow signing them, so they ship unsigned inside
+# the signed packages, and the check lists them apart.
+# packaging/SIGNING.md has the steps for each.
+#
+# The build job, which runs every crate's build script, has no write access
+# and no signing credentials. The package job, which signs, packs and drafts
+# the release, runs no build script.
+#
+# FFmpeg comes from the release ffmpeg-lgpl of this repository, which
+# ffmpeg-lgpl.yml builds once (on the first run that finds no such release:
+# that run takes hours) and every later run reuses. The run's own
+# GITHUB_TOKEN reads and creates that release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # fmt, clippy and the tests, as on every push: a release is built only
+  # from code that passes them.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      # The version without a pre-release part (0.1.0 for 0.1.0-rc.1): the
+      # one the programs' version resources and the MSI carry.
+      numeric: ${{ steps.read.outputs.numeric }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            Cargo.toml
+
+      - name: The tag is v and the version in Cargo.toml
+        id: read
+        env:
+          SIGNING: ${{ vars.KILN_SIGNING }}
+          UNSIGNED_RELEASE: ${{ vars.KILN_UNSIGNED_RELEASE }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          echo "Kiln $version"
+          echo "numeric=${version%%-*}" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+              echo "::error::The tag is $GITHUB_REF_NAME, but Cargo.toml says version $version. Tag v$version, or change the version first."
+              exit 1
+            fi
+            if [ "$SIGNING" != signpath ] && [ "$SIGNING" != azure ]; then
+              if [ -z "$SIGNING" ] && [ -n "$UNSIGNED_RELEASE" ] && [ "$UNSIGNED_RELEASE" = "$GITHUB_REF_NAME" ]; then
+                echo "::warning::$GITHUB_REF_NAME is released unsigned, as KILN_UNSIGNED_RELEASE allows. Clear that variable once it is published."
+              else
+                echo "::error::A release must be signed. Set the repository variable KILN_SIGNING to signpath or azure (see packaging/SIGNING.md)."
+                exit 1
+              fi
+            fi
+          fi
+
+  ffmpeg:
+    needs: version
+    uses: ./.github/workflows/ffmpeg-lgpl.yml
+    permissions:
+      contents: write
+
+  build:
+    needs: [ci, ffmpeg]
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # The Rust rust-toolchain.toml names, with rustfmt and clippy.
+      - name: Install the pinned Rust
+        run: rustup toolchain install
+
+      # Writes 4 GiB to the temp dir and takes a while, so it runs for release
+      # tags and not on every push.
+      - name: RF64 test
+        if: startsWith(github.ref, 'refs/tags/')
+        run: cargo test -p kiln-media --test pcm -- --ignored big_wav_becomes_rf64
+
+      # The stored FFmpeg, checked against the SHA-256 recorded with it, into
+      # packaging/ffmpeg/staged.
+      - name: Fetch the stored FFmpeg
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $from = Join-Path $env:RUNNER_TEMP 'ffmpeg-lgpl'
+          gh release download ffmpeg-lgpl -R $env:GITHUB_REPOSITORY -D $from
+          if ($LASTEXITCODE -ne 0) { throw "Couldn't download the release ffmpeg-lgpl." }
+          ./packaging/ffmpeg/unpack-stored.ps1 -From $from
+
+      - name: Build and stage
+        shell: pwsh
+        run: ./packaging/package.ps1 -Stage
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: staged
+          path: |
+            dist/stage/
+            dist/symbols/
+
+  package:
+    needs: [version, build]
+    runs-on: windows-latest
+    # Azure's federated credential is for this environment, and the maintainer
+    # can make it wait for a reviewer.
+    environment: release
+    permissions:
+      contents: write
+      # Azure Artifact Signing signs in through OpenID Connect.
+      id-token: write
+      # SignPath reads the run to check where the files came from.
+      actions: read
+    env:
+      SIGNING: ${{ vars.KILN_SIGNING }}
+      # Off a tag, SignPath signs with its test certificate, whose root
+      # Windows doesn't trust: the check then accepts a signature that is
+      # intact but untrusted. Never on a tag.
+      TEST_CERT: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      POLICY: ${{ startsWith(github.ref, 'refs/tags/') && 'release-signing' || 'test-signing' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # The Rust rust-toolchain.toml names, with rustfmt and clippy.
+      - name: Install the pinned Rust
+        run: rustup toolchain install
+
+      - name: Install WiX
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add -g WixToolset.UI.wixext/5.0.2 WixToolset.Util.wixext/5.0.2
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: staged
+          path: dist/
+
+      # FFmpeg's source zip, which goes beside the packages.
+      - name: Fetch the stored FFmpeg
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $from = Join-Path $env:RUNNER_TEMP 'ffmpeg-lgpl'
+          gh release download ffmpeg-lgpl -R $env:GITHUB_REPOSITORY -D $from
+          if ($LASTEXITCODE -ne 0) { throw "Couldn't download the release ffmpeg-lgpl." }
+          ./packaging/ffmpeg/unpack-stored.ps1 -From $from
+
+      # Round 1: Kiln's programs and lame_enc.dll, signed where they are
+      # staged, before any package holds them.
+      - name: Upload the staged files for SignPath
+        id: unsigned-files
+        if: env.SIGNING == 'signpath'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unsigned-files
+          path: dist/stage/
+
+      - name: Sign the staged files (SignPath)
+        if: env.SIGNING == 'signpath'
+        uses: SignPath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ env.POLICY }}
+          artifact-configuration-slug: kiln-files
+          github-artifact-id: ${{ steps.unsigned-files.outputs.artifact-id }}
+          parameters: |
+            version: "${{ needs.version.outputs.numeric }}"
+          wait-for-completion: true
+          # A release waits for a person to approve it in SignPath.
+          wait-for-completion-timeout-in-seconds: 7200
+          output-artifact-directory: dist/stage-signed
+
+      - name: Take the signed files (SignPath)
+        if: env.SIGNING == 'signpath'
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force dist/stage
+          Move-Item dist/stage-signed dist/stage
+
+      - name: Sign in to Azure
+        if: env.SIGNING == 'azure'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign the staged files (Azure Artifact Signing)
+        if: env.SIGNING == 'azure'
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_CERTIFICATE_PROFILE }}
+          files-folder: ${{ github.workspace }}\dist\stage
+          files-folder-filter: exe,dll
+          files-folder-recurse: false
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Check the staged files' signatures
+        if: env.SIGNING != ''
+        shell: pwsh
+        run: |
+          $o = @{ AllowTestCertificate = $env:TEST_CERT -eq 'true' }
+          ./packaging/check-signatures.ps1 -Path dist/stage @o
+
+      - name: Pack
+        shell: pwsh
+        run: ./packaging/package.ps1 -Pack
+
+      # Round 2: the MSI, which now holds the signed files.
+      - name: Upload the MSI for SignPath
+        id: unsigned-msi
+        if: env.SIGNING == 'signpath'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unsigned-msi
+          path: dist/*.msi
+
+      - name: Sign the MSI (SignPath)
+        if: env.SIGNING == 'signpath'
+        uses: SignPath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ env.POLICY }}
+          artifact-configuration-slug: kiln-msi
+          github-artifact-id: ${{ steps.unsigned-msi.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 7200
+          output-artifact-directory: dist/msi-signed
+
+      - name: Take the signed MSI (SignPath)
+        if: env.SIGNING == 'signpath'
+        shell: pwsh
+        run: |
+          $signed = @(Get-ChildItem dist/msi-signed -Filter *.msi)
+          if ($signed.Count -ne 1) { throw "SignPath returned $($signed.Count) MSIs." }
+          Move-Item $signed[0].FullName (Join-Path dist $signed[0].Name) -Force
+          Remove-Item -Recurse -Force dist/msi-signed
+
+      - name: Sign the MSI (Azure Artifact Signing)
+        if: env.SIGNING == 'azure'
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_CERTIFICATE_PROFILE }}
+          files-folder: ${{ github.workspace }}\dist
+          files-folder-filter: msi
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      # Every program, DLL and the MSI, and the programs inside the portable
+      # ZIP and inside the MSI as they will be installed.
+      - name: Check every shipped file's signature
+        if: env.SIGNING != ''
+        shell: pwsh
+        run: |
+          $o = @{ AllowTestCertificate = $env:TEST_CERT -eq 'true' }
+          ./packaging/check-signatures.ps1 -Path dist -Packages @o
+
+      - name: Checksums
+        shell: pwsh
+        run: ./packaging/package.ps1 -Sums
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: kiln-packages
+          path: |
+            dist/*.msi
+            dist/*.zip
+            dist/SHA256SUMS.txt
+
+      # Only a pushed tag drafts a release, never a run by hand.
+      - name: Draft the release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $files = @(Get-ChildItem dist -File | Where-Object { $_.Extension -in '.msi', '.zip' -or $_.Name -eq 'SHA256SUMS.txt' }).FullName
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $notes = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          $signed = if ($env:SIGNING) { 'Both are signed.' } else { 'This release is not signed. Windows SmartScreen may warn before it runs: choose More info, then Run anyway.' }
+          (Get-Content packaging/release-notes.md -Raw).Replace('VERSION', $version).Replace('SIGNED_LINE', $signed) | Set-Content $notes
+          $pre = if ($version -match '-') { @('--prerelease') } else { @() }
+          gh release create $env:GITHUB_REF_NAME -R $env:GITHUB_REPOSITORY --draft --verify-tag --title "Kiln $version" --notes-file $notes @pre @files
+          if ($LASTEXITCODE -ne 0) { throw "Couldn't create the draft release." }

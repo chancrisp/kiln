@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SignPath artifact configuration "kiln-msi": round 2 of release.yml. The
+  artifact is the one MSI the workflow uploads, whose programs were already
+  signed in round 1. Paste it into the SignPath project as the artifact
+  configuration with the slug kiln-msi.
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <msi-file path="Kiln-*-x64.msi" max-matches="1">
+      <authenticode-sign />
+    </msi-file>
+  </zip-file>
+</artifact-configuration>

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SignPath artifact configuration "kiln-files": round 1 of release.yml.
+  The artifact is dist\stage as the workflow uploads it (a ZIP with the
+  staged files at its root). Kiln's own programs and lame_enc.dll are
+  signed. FFmpeg's programs and DLLs in ffmpeg\bin are an upstream
+  project's binaries, which SignPath Foundation's terms don't allow Kiln to
+  sign; they pass through unchanged, as every other file does.
+
+  lame_enc.dll is LAME's code, built by Kiln's kiln-lame crate. It is
+  signed here only if SignPath Foundation agrees it counts as Kiln's own
+  build; if not, delete its pe-file element.
+
+  SignPath Foundation asks that every signed file's product name be the
+  project's and its product version the same in each build: the release
+  workflow passes the version as the parameter "version".
+
+  Paste it into the SignPath project as the artifact configuration with the
+  slug kiln-files, and check it in SignPath's editor, which validates it.
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file path="kiln-app.exe" product-name="Kiln" product-version="${version}">
+      <authenticode-sign />
+    </pe-file>
+    <pe-file path="kiln.exe" product-name="Kiln" product-version="${version}">
+      <authenticode-sign />
+    </pe-file>
+    <pe-file path="lame_enc.dll" product-name="Kiln" product-version="${version}">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

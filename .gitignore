@@ -1,0 +1,5 @@
+/target
+/dist
+/packaging/ffmpeg/staged/
+# Local work files that never go in the repository.
+/.scratch/

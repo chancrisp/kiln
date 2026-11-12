@@ -1,0 +1,63 @@
+[workspace]
+resolver = "2"
+members = ["crates/kiln-core", "crates/kiln-cli", "crates/kiln-app", "crates/kiln-media", "crates/kiln-lame"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+# Kiln's crates are built only into Kiln, never published to crates.io.
+publish = false
+rust-version = "1.88"
+
+[workspace.dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif", "tiff", "ico", "tga", "qoi", "pnm"] }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+tempfile = "3"
+clap = { version = "4", features = ["derive"] }
+assert_cmd = "2"
+predicates = "3"
+kiln-core = { path = "crates/kiln-core" }
+kiln-media = { path = "crates/kiln-media" }
+lopdf = { version = "0.42", default-features = false }
+
+# The rust-version above is the floor of the locked dependencies, and Clippy
+# lints for what that version has. These two ask for newer slice and integer
+# methods than the code uses. Taking them up is a code change of its own.
+[workspace.lints.clippy]
+chunks_exact_to_as_chunks = "allow"
+manual_is_multiple_of = "allow"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+# Debug and test builds keep line numbers only, so panics and failing tests
+# still name the file and line, and dependencies keep none. Full symbols for
+# every test program made the build folder grow past 100 GB.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+# libFLAC is built by CMake, which picks its profile from the opt-level.
+# At 0 it builds the Debug C runtime, which clashes with the one Rust links.
+[profile.dev.package.libflac-sys]
+opt-level = 1
+
+# Symphonia 0.5.5 with the fixes the fuzzers called for: panics on damaged
+# files (see crates/kiln-media/vendor/README.md for each change).
+[patch.crates-io]
+symphonia-core = { path = "crates/kiln-media/vendor/symphonia-core" }
+symphonia-codec-aac = { path = "crates/kiln-media/vendor/symphonia-codec-aac" }
+symphonia-codec-alac = { path = "crates/kiln-media/vendor/symphonia-codec-alac" }
+symphonia-codec-vorbis = { path = "crates/kiln-media/vendor/symphonia-codec-vorbis" }
+symphonia-format-isomp4 = { path = "crates/kiln-media/vendor/symphonia-format-isomp4" }
+symphonia-format-mkv = { path = "crates/kiln-media/vendor/symphonia-format-mkv" }
+symphonia-format-ogg = { path = "crates/kiln-media/vendor/symphonia-format-ogg" }
+symphonia-metadata = { path = "crates/kiln-media/vendor/symphonia-metadata" }
+symphonia-format-riff = { path = "crates/kiln-media/vendor/symphonia-format-riff" }

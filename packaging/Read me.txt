@@ -1,0 +1,54 @@
+Kiln
+====
+
+Kiln converts files from one format to another on Windows 10 and 11, and
+makes files smaller.
+
+Starting
+--------
+Open Kiln from the Start menu, or run kiln-app.exe in this folder. Drop
+files on its window, or choose Add files. A wheel of the formats they can
+become opens. Pick one, and the new file is saved next to the original.
+
+From a terminal, kiln.exe does the same work, for example:
+    kiln convert photo.png jpg
+"kiln --help" lists the commands.
+
+Helper apps
+-----------
+FFmpeg comes with Kiln, in the ffmpeg folder. Documents, office files and
+e-books need a free helper app: Pandoc for documents, LibreOffice for office
+files, spreadsheets and slides, and Calibre for MOBI and AZW3. A file that
+needs one says which, and Settings > Helper apps can install or find it.
+
+Where Kiln keeps things
+-----------------------
+Settings:                  %APPDATA%\Kiln\settings.toml
+Log and crash reports:     %LOCALAPPDATA%\Kiln\logs
+Results not saved yet:     %LOCALAPPDATA%\Kiln\held, and a hidden .kiln-held
+                           folder on the drive of the file they came from
+Windows' crash dumps:      %LOCALAPPDATA%\Kiln\CrashDumps (installer only)
+
+Uninstalling Kiln leaves these, so a later install keeps your settings. To
+remove them, delete the Kiln folders in %APPDATA% and %LOCALAPPDATA% and any
+.kiln-held folder at the top of a drive after uninstalling. PRIVACY.md lists
+everything Kiln keeps and what it sends.
+
+Help
+----
+Guide:      https://github.com/chancrisp/kiln#readme
+Help:       https://github.com/chancrisp/kiln/blob/main/SUPPORT.md
+Problems:   https://github.com/chancrisp/kiln/issues
+Signing:    https://github.com/chancrisp/kiln/blob/main/docs/code-signing-policy.md
+Donate:     https://github.com/chancrisp/kiln/blob/main/DONATE.md
+
+Settings > About > Diagnostics copies Kiln's version and the end of its log
+for a bug report, and opens the log folder.
+
+Licence
+-------
+Copyright (C) 2026 Chandler Crisp. Kiln is free software under the GNU
+General Public License, version 3 or later, with no warranty: see LICENSE.
+THIRD_PARTY_NOTICES.md and THIRD_PARTY_LICENSES cover the parts Kiln is
+built from, and FFmpeg's licence and source are described in the ffmpeg
+folder.

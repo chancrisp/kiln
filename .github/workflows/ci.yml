@@ -1,0 +1,186 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # release.yml runs these checks first, and on a release tag the
+  # quality harness too.
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: fmt, clippy and tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # The Rust rust-toolchain.toml names, with rustfmt and clippy.
+      - name: Install the pinned Rust
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      # The backend tests run the real engines. Chocolatey installs the
+      # upstream builds, which include the data Pandoc needs in --sandbox
+      # mode. LibreOffice stays off PATH, as a normal install does; Kiln
+      # finds it in Program Files.
+      - name: Install FFmpeg, Pandoc and LibreOffice
+        run: |
+          choco install ffmpeg pandoc libreoffice-fresh --no-progress -y
+          "C:\Program Files\Pandoc" | Out-File -FilePath $env:GITHUB_PATH -Append
+          ffmpeg -version | Select-Object -First 1
+          pandoc --version | Select-Object -First 1
+          & "C:\Program Files\LibreOffice\program\soffice.com" --version
+
+      # The AAC, WMA and AC-3 tests need Windows' Media Foundation codecs, which
+      # a Windows Server image may not have (Server Media Foundation is a
+      # feature, and turning it on can need a restart that a runner can't do).
+      # This step tries to turn it on, then checks what is really there. If
+      # the codecs are missing it sets KILN_CI_NO_MF=1 for the steps after it,
+      # and each test that needs them prints "skipped: no Media Foundation" and
+      # returns. Cargo hides a passing test's output, so the skip is shown in
+      # a warning annotation and in the run's step summary instead. With the
+      # codecs present, nothing is skipped.
+      - name: Check for Media Foundation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          if (Get-Command Install-WindowsFeature -ErrorAction SilentlyContinue) {
+            $r = Install-WindowsFeature Server-Media-Foundation
+            "Server-Media-Foundation: success=$($r.Success) restart needed=$($r.RestartNeeded)"
+          }
+          $missing = 'mfplat.dll', 'mfreadwrite.dll', 'mf.dll' |
+            Where-Object { -not (Test-Path (Join-Path $env:windir "System32\$_")) }
+          $has = $false
+          if ($missing) {
+            "Missing from System32: $missing"
+          } else {
+            $out = cargo test -p kiln-media --lib print_media_foundation_codecs -- --ignored --nocapture 2>&1 | Out-String
+            $out
+            if ($LASTEXITCODE -ne 0) { throw "The Media Foundation probe did not run." }
+            # Only a probe that really ran may say "no Media Foundation".
+            if ($out -notmatch '1 passed') { throw "The Media Foundation probe did not report a pass." }
+            $has = $out -match 'aac_enc: true'
+          }
+          if ($has) {
+            "Media Foundation codecs found."
+          } else {
+            "KILN_CI_NO_MF=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+            "::warning::No Media Foundation codecs on this runner. The tests that need them are skipped."
+            "No Media Foundation codecs on this runner, so the tests that need them were skipped (KILN_CI_NO_MF=1)." |
+              Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          }
+
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # lame_enc.dll is LAME, the MP3 encoder, built from kiln-lame. Kiln loads
+      # it from its own folder, so the tests that run target\debug\kiln.exe
+      # need it beside that program. The workspace tests build it as a
+      # dev-dependency too, but into target\debug\deps, which is no use to them.
+      - name: Build lame_enc.dll
+        run: cargo build -p kiln-lame
+
+      - name: cargo test
+        run: cargo test --workspace
+
+      - name: Release build size
+        shell: pwsh
+        run: |
+          cargo build --release -p kiln-app -p kiln-cli
+          $app = Get-Item target/release/kiln-app.exe
+          "kiln-app.exe is {0:N2} MB" -f ($app.Length / 1MB)
+          if ($app.Length -gt 16MB) { throw "kiln-app.exe is over the 16 MB budget." }
+
+  # Kiln is GPL-3.0-or-later. Every crate it builds with must carry a licence
+  # that may be combined with it; deny.toml lists the ones allowed.
+  licences:
+    name: dependency licences
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --version 0.20.2 --locked
+
+      - name: cargo deny check licenses
+        run: cargo deny --locked check licenses
+
+      # THIRD_PARTY_LICENSES holds every crate's licence text, made by
+      # cargo-about from Cargo.lock; it must be remade when the crates change.
+      - name: Install cargo-about
+        run: cargo install cargo-about --version 0.9.3 --locked --features cli
+
+      - name: THIRD_PARTY_LICENSES is up to date
+        shell: pwsh
+        run: ./packaging/licences.ps1 -Check
+
+  # The oldest Rust Kiln promises to build with: rust-version in Cargo.toml,
+  # which is read below so it is written down in one place only.
+  msrv:
+    name: Oldest supported Rust
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Read rust-version
+        id: msrv
+        shell: pwsh
+        run: |
+          $m = Select-String -Path Cargo.toml -Pattern '^rust-version = "(.+)"' | Select-Object -First 1
+          if (-not $m) { throw "No rust-version in Cargo.toml." }
+          $v = $m.Matches[0].Groups[1].Value
+          "Oldest supported Rust: $v"
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Install Rust ${{ steps.msrv.outputs.version }}
+        run: rustup toolchain install ${{ steps.msrv.outputs.version }} --profile minimal
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: msrv-${{ steps.msrv.outputs.version }}
+
+      - name: cargo check
+        run: cargo +${{ steps.msrv.outputs.version }} check --workspace --locked
+
+  # The quality harness holds Kiln's lossy audio and its video to FFmpeg's.
+  # It runs on release tags only. The maintainer's clips are not in the
+  # repository, so with KILN_HARNESS_CLIPS and KILN_HARNESS_VIDEO_CLIPS unset
+  # it runs its own checks, reports "no clips" and passes: it proves the
+  # harness builds and runs. Point those variables at folders to compare.
+  harness:
+    name: audio and video quality harness
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # The Rust rust-toolchain.toml names, with rustfmt and clippy.
+      - name: Install the pinned Rust
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Install FFmpeg
+        run: |
+          choco install ffmpeg --no-progress -y
+          ffmpeg -version | Select-Object -First 1
+
+      - name: Run the harness
+        run: cargo test --release -p kiln-media --features harness --test harness
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: harness-report
+          path: target/harness/*.md
