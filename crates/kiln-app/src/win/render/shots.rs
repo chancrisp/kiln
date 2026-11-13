@@ -1898,3 +1898,60 @@ fn a_saved_rows_line_is_secondary_and_a_running_rows_bar_runs_to_its_percentage(
         }
     }
 }
+
+/// Kiln's K in the window is the flame K of the app icon and the README,
+/// flat in the accent's text colour on the accent tile: in the title bar
+/// and About at 16 DIPs, and in the empty window at 64. On a 16-unit
+/// tile, (9.6, 6.4) is inside the flame and outside the old three
+/// strokes, and (9.15, 9.55) is on the old leg and outside the flame.
+#[test]
+fn the_k_is_the_flame_mark_flat_on_the_accent_tile_in_every_theme_and_size() {
+    use crate::theme::fluent::ALL_BUILT_IN;
+    const FLAME: (f32, f32) = (9.6, 6.4);
+    const OLD_LEG: (f32, f32) = (9.15, 9.55);
+    const TILE: (f32, f32) = (8.0, 1.0);
+    let dir = shots_dir();
+    for (name, f) in ALL_BUILT_IN
+        .into_iter()
+        .map(|f| (f.name, f))
+        .chain([("contrast", fluent_contrast())])
+    {
+        for k in [1.0, 1.25, 1.5, 1.75, 2.0] {
+            for side in [16.0_f32, 60.0] {
+                let at = format!("{name} at {k}, {side} DIPs");
+                let r = layout::Rect::new(4.0, 4.0, side, side);
+                let (sh, px) = kit_shot(side + 8.0, side + 8.0, k, &f, |d| d.k_mark(&r, &f));
+                let c = |(x, y): (f32, f32)| {
+                    rgb(sh.at(&px, r.x + x * side / 16.0, r.y + y * side / 16.0))
+                };
+                assert_eq!(c(FLAME), f.on_accent, "{at}: the flame");
+                assert_eq!(c(OLD_LEG), f.accent, "{at}: no old leg");
+                assert_eq!(c(TILE), f.accent, "{at}: the tile");
+                let pct = (k * 100.0).round() as u32;
+                sh.save(&dir.join(format!("k-mark-{name}-{side}-{pct}.png")));
+            }
+            // The title bar's and the empty window's K are this one.
+            if name == "dark" {
+                use crate::win::titlebar::{layout as bar, Caption};
+                let b = bar(720.0, false);
+                let (sh, px) = title_shot(720.0, k, Caption::default(), false);
+                let c = |(x, y): (f32, f32)| {
+                    rgb(sh.at(
+                        &px,
+                        b.mark.x + x * b.mark.w / 16.0,
+                        b.mark.y + y * b.mark.w / 16.0,
+                    ))
+                };
+                assert_eq!(c(FLAME), f.on_accent, "title bar at {k}");
+                assert_eq!(c(OLD_LEG), f.accent, "title bar at {k}");
+            }
+            let (sh, px, e) = empty_shot((1100.0, 720.0), k, &f, false, 0.0);
+            let m = e.mark.expect("the K shows in a tall window");
+            let s = m.w / 64.0;
+            let (tx, ty, tw) = (m.x + 2.0 * s, m.y + 2.0 * s, 60.0 * s);
+            let c = |(x, y): (f32, f32)| rgb(sh.at(&px, tx + x * tw / 16.0, ty + y * tw / 16.0));
+            assert_eq!(c(FLAME), f.on_accent, "empty window, {name} at {k}");
+            assert_eq!(c(OLD_LEG), f.accent, "empty window, {name} at {k}");
+        }
+    }
+}

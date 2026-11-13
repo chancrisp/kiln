@@ -1852,12 +1852,12 @@ fn the_packages_ship_read_me_txt_not_the_readme() {
 }
 
 /// The README's pictures are files in `docs/readme`, which the public
-/// tree keeps, and each light picture has its dark one.
+/// tree keeps, and every picture there is one the README shows.
 #[test]
 fn every_readme_picture_is_in_docs_readme() {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
     let readme = read(&format!("{root}/README.md"));
-    let mut seen = 0;
+    let mut shown = std::collections::BTreeSet::new();
     for part in readme.split(['"', ' ']) {
         let Some(path) = part.strip_prefix("docs/") else {
             continue;
@@ -1873,16 +1873,17 @@ fn every_readme_picture_is_in_docs_readme() {
             std::path::Path::new(&format!("{root}/docs/{path}")).is_file(),
             "docs/{path} is missing"
         );
-        if let Some(stem) = path.strip_suffix("-light.png") {
-            assert!(
-                readme.contains(&format!("docs/{stem}-dark.png")),
-                "no dark {stem}"
-            );
-        }
-        seen += 1;
+        shown.insert(path.trim_start_matches("readme/").to_owned());
     }
-    assert!(seen >= 10, "{seen} pictures");
+    assert!(shown.len() >= 7, "{} pictures", shown.len());
     assert!(!readme.contains("docs/screenshots/"));
+    for entry in std::fs::read_dir(format!("{root}/docs/readme")).unwrap() {
+        let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+        assert!(
+            shown.contains(&name),
+            "docs/readme/{name} isn't shown in the README"
+        );
+    }
 }
 
 /// The donation links are filled in (D22), and no placeholder for them

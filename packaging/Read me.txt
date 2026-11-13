@@ -30,9 +30,9 @@ Results not saved yet:     %LOCALAPPDATA%\Kiln\held, and a hidden .kiln-held
 Windows' crash dumps:      %LOCALAPPDATA%\Kiln\CrashDumps (installer only)
 
 Uninstalling Kiln leaves these, so a later install keeps your settings. To
-remove them, delete the Kiln folders in %APPDATA% and %LOCALAPPDATA% and any
-.kiln-held folder at the top of a drive after uninstalling. PRIVACY.md lists
-everything Kiln keeps and what it sends.
+remove them, delete the Kiln folders in %APPDATA%, %LOCALAPPDATA% and
+%TEMP%, and any .kiln-held folder at the top of a drive, after uninstalling.
+PRIVACY.md lists everything Kiln keeps and what it sends.
 
 Help
 ----

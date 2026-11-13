@@ -17,9 +17,11 @@ ones: a new format, a clearer error, a fix with a test.
 
 ## Setting up
 
-You need Rust stable (1.88 or newer). On Windows use the MSVC toolchain.
-The backend tests run real engines, so put `ffmpeg`, `ffprobe` and `pandoc`
-on PATH. Use the official Pandoc release. Some Linux distribution builds
+You need rustup with the MSVC toolchain. It installs the Rust that
+`rust-toolchain.toml` pins (1.98.1). Kiln still builds with Rust 1.88, which CI
+checks. The backend tests run real engines: put `ffmpeg`, `ffprobe` and
+`pandoc` on PATH, and install LibreOffice (Kiln finds it in Program Files).
+Calibre is needed for the e-book tests. Use the official Pandoc release. Some Linux distribution builds
 can't write DOCX, ODT or EPUB in `--sandbox` mode.
 
 ```sh
@@ -39,7 +41,10 @@ cargo clippy -p kiln-app --target x86_64-pc-windows-gnu -- -D warnings
 
 ## Before you open a pull request
 
-CI runs these on windows-latest, and all three must pass:
+CI runs these on windows-latest, and they must pass. It also checks
+dependency licences (`cargo deny check licenses`, and
+`.\packaging\licences.ps1 -Check` for `THIRD_PARTY_LICENSES`) and builds with
+the oldest supported Rust:
 
 ```sh
 cargo fmt --all --check
@@ -56,7 +61,8 @@ Also:
   [VISUAL_TESTING.md](VISUAL_TESTING.md) at 100%, 150% and 200% scaling, in
   both themes. Attach before and after screenshots to the pull request.
 - If you changed a theme token on purpose, update the snapshot with
-  `KILN_UPDATE_SNAPSHOTS=1 cargo test -p kiln-app` and say why in the
+  `KILN_UPDATE_SNAPSHOTS=1 cargo test -p kiln-app` (in PowerShell:
+  `$env:KILN_UPDATE_SNAPSHOTS=1; cargo test -p kiln-app`) and say why in the
   pull request.
 - Add a line to [CHANGELOG.md](CHANGELOG.md) under the newest version.
 
@@ -69,24 +75,25 @@ Also:
 - Never overwrite a file. Claim output names with `create_new`, as
   `kiln_core::output` does.
 - Converting makes no network calls. The one exception is the update
-  check in `kiln-app/src/win/updates.rs`, which runs only when the user
+  check in `crates/kiln-app/src/win/updates.rs`, which runs only when the user
   presses Check for updates.
 - User-facing text follows the voice rules: calm, specific, no
   exclamation marks, and "convert" rather than "fire".
 
 ## Building Kiln
 
-You need Rust (stable, 1.88 or newer) with the MSVC toolchain on Windows 10 or 11.
+You need rustup with the MSVC toolchain on Windows 10 or 11; it installs the
+Rust that `rust-toolchain.toml` pins.
 
 ```powershell
 cargo build --release          # target\release\kiln-app.exe, kiln.exe and lame_enc.dll
 cargo test --workspace         # backend tests need ffmpeg, ffprobe, pandoc, LibreOffice and Calibre
-.\packaging\package.ps1        # dist\ MSI, portable ZIP and the source and symbols ZIPs (needs WiX 5 and its UI and Util extensions for the MSI: see package.ps1; and Making a release for FFmpeg)
+.\packaging\package.ps1        # needs PowerShell 7 (pwsh); dist\ MSI, portable ZIP and the source and symbols ZIPs (needs WiX 5 and its UI and Util extensions for the MSI: see package.ps1; and Making a release for FFmpeg)
 ```
 
 Some environment variables are for testing and capturing, and are not settings:
 
-- `KILN_TEST_CONTRAST=1` draws Kiln in High Contrast Black's colours without changing Windows' theme.
+- `KILN_TEST_CONTRAST=1` draws Kiln in High Contrast Black's colours without changing Windows' theme. Debug and `test-hooks` builds only.
 - `KILN_FRAME_LOG=<path>` appends one line for each frame drawn, with the time and how long the drawing took, so a run's timing can be read afterwards.
 - `KILN_TEST_DRIVES=<drives, separated by ;>` replaces the mounted drives recovery looks on. Empty means none. Debug builds only: the tests set it so they never look on a real drive.
 - `KILN_TEST_TRANSPARENCY=0` takes Windows' Transparency effects as off, so the base is solid. Debug builds only.
@@ -131,7 +138,7 @@ through SignPath or Azure Artifact Signing: see `packaging/SIGNING.md`.
 ```text
 crates/kiln-core   conversion logic, format registry, job runner (no UI)
 crates/kiln-cli    the `kiln` command
-crates/kiln-media  the audio engine, with its quality harness, fuzzers and vendored Symphonia
+crates/kiln-media  the audio and video engine, with its quality harness, fuzzers and vendored Symphonia
 crates/kiln-lame   lame_enc.dll, LAME as a DLL of its own (LGPL)
 crates/kiln-app    the Windows app: Win32, Direct2D, DirectWrite, DirectComposition
 packaging          MSI definition and the packaging script

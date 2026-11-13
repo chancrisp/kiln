@@ -426,7 +426,7 @@ pub struct Renderer {
     round: ID2D1StrokeStyle,
     /// A dashed line, for the empty window's drop outline.
     dash: ID2D1StrokeStyle,
-    /// Kiln's mark (`icons::MARK_PATH`), as an outline.
+    /// Kiln's mark (`icons::MARK_PATH`), filled or outlined.
     mark: ID2D1PathGeometry,
     /// The device, swap chain and composition, made at the first frame and
     /// again after the device is lost.
@@ -1387,13 +1387,14 @@ fn dash_stroke(factory: &ID2D1Factory) -> Result<ID2D1StrokeStyle> {
     unsafe { factory.CreateStrokeStyle(&props, Some(&[4.0, 3.0])) }
 }
 
-/// Kiln's mark as an outline, on its 24-unit grid.
+/// Kiln's mark on its 24-unit grid, filled: the K tiles fill it, and
+/// the side pane draws its outline.
 fn mark_geometry(factory: &ID2D1Factory) -> Result<ID2D1PathGeometry> {
     unsafe {
         let geom = factory.CreatePathGeometry()?;
         let sink = geom.Open()?;
         let mut open = false;
-        let begin = D2D1_FIGURE_BEGIN_HOLLOW;
+        let begin = D2D1_FIGURE_BEGIN_FILLED;
         for c in MARK_PATH {
             match *c {
                 Cmd::Move(x, y) => {

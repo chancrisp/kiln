@@ -19,9 +19,9 @@ The helper apps Kiln can use (FFmpeg, Pandoc, LibreOffice and Calibre) run on yo
 | Settings | `%APPDATA%\Kiln\settings.toml` | No |
 | Converted files on their way to their folder, and any Kiln couldn't save yet (it tries again at the next start) | `%LOCALAPPDATA%\Kiln\held`, or a hidden `.kiln-held` folder at the top of the drive the original is on | No |
 | The log, `kiln.log` and `kiln.1.log`, 2 MB at most. A line can name a file or folder Kiln couldn't handle. | `%LOCALAPPDATA%\Kiln\logs` | No |
-| A crash report, `crash-<time>.txt`, with the error and Kiln's version; the newest few are kept | `%LOCALAPPDATA%\Kiln\logs` | No |
+| A crash report, `crash-<date>-<time>-<process id>.txt`, with the error, a backtrace and Kiln's version; the newest 10 are kept | `%LOCALAPPDATA%\Kiln\logs` | No |
 | Windows' crash dumps of Kiln, five at most (MSI installs only). A dump is a copy of part of Kiln's memory when it crashed, so it can hold names of files that were open. | `%LOCALAPPDATA%\Kiln\CrashDumps` | No |
 | Work files during a conversion | `%TEMP%\Kiln` | Removed as each job ends |
-| Kiln's start-up entry, its Send to shortcut and its Open with entries | Windows' registry and your Send to folder | Yes, by the MSI's uninstall |
+| Kiln's start-up entry, its Send to shortcut and its Open with entries | Windows' registry and your Send to folder | Yes, by the MSI's uninstall, for the account that runs it. A portable Kiln's start-up entry goes when the drag-wheel is turned off. |
 
 Uninstalling keeps your settings and logs, as most Windows apps do, so a later install starts where you left off. To remove everything Kiln left, uninstall it, then delete the three `Kiln` folders above: in `%APPDATA%`, in `%LOCALAPPDATA%` and in `%TEMP%`, and any `.kiln-held` folder at the top of a drive.

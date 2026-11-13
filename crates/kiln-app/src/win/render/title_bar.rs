@@ -26,16 +26,6 @@ pub struct TitleView<'a> {
     pub palette: &'a FluentPalette,
 }
 
-/// The K, a 16-DIP tile in the accent with the mark's three strokes, as
-/// the mock draws it on a 16 x 16 grid: the stem, the arm and the leg.
-const K_STROKES: [((f32, f32), (f32, f32)); 3] = [
-    ((5.0, 3.5), (5.0, 12.5)),
-    ((5.0, 8.4), (10.6, 3.5)),
-    ((7.1, 6.6), (11.2, 12.5)),
-];
-const K_STROKE: f32 = 1.8;
-const K_RADIUS: f32 = 3.5;
-
 impl Draw<'_> {
     /// The text colour on the bar: secondary while the window is inactive.
     fn bar_ink(t: &TitleView) -> Rgb {
@@ -46,23 +36,22 @@ impl Draw<'_> {
         }
     }
 
-    /// The K tile filling `r`.
+    /// The K tile filling `r`: Kiln's flame K (`icons::MARK_PATH`), flat
+    /// in the accent's text colour on the accent tile, placed as the app
+    /// icon places it.
     pub(super) fn k_mark(&self, r: &Rect, f: &FluentPalette) {
-        let s = r.w / 16.0;
-        self.fill(r, K_RADIUS * s, f.accent, 1.0);
-        let at = |(x, y): (f32, f32)| pt(r.x + x * s, r.y + y * s);
-        for (a, b) in K_STROKES {
-            // SAFETY: a plain draw on this thread's render target, inside
-            // the frame's BeginDraw.
-            unsafe {
-                self.rt.DrawLine(
-                    at(a),
-                    at(b),
-                    self.paint(f.on_accent, 1.0),
-                    K_STROKE * s,
-                    self.round,
-                );
-            }
+        let at = crate::icons::app_icon_layout(r.w);
+        self.fill(r, at.tile_radius, f.accent, 1.0);
+        let base = self.base.get();
+        let (x, y) = (r.x + at.offset.0, r.y + at.offset.1);
+        // SAFETY: plain draws on this thread's render target, inside the
+        // frame's BeginDraw, of a geometry made with its factory.
+        unsafe {
+            self.rt
+                .SetTransform(&compose(&scale_at(at.scale, x, y), &base));
+            self.rt
+                .FillGeometry(self.mark, self.paint(f.on_accent, 1.0), None);
+            self.rt.SetTransform(&base);
         }
     }
 

@@ -34,16 +34,6 @@ const DISMISS_GLYPH: f32 = 12.0;
 const DROP_LINE: f32 = 2.0;
 const DROP_FILL: f32 = 0.06;
 
-/// The K at 64, on the mock's 64 x 64 grid: the tile's corners, the
-/// strokes' width, and the stem, the arm and the leg.
-const BIG_K_RADIUS: f32 = 14.0;
-const BIG_K_STROKE: f32 = 6.0;
-const BIG_K_STROKES: [((f32, f32), (f32, f32)); 3] = [
-    ((21.0, 15.0), (21.0, 49.0)),
-    ((21.0, 33.5), (42.0, 15.0)),
-    ((29.0, 27.0), (44.0, 49.0)),
-];
-
 /// Where a row's name and line run: from `x`, both to the end
 /// `layout::row_text_ends` gives, short of Cancel, Retry, the link or
 /// Options and a mark's room; and the link if the row shows one. `saving`
@@ -285,26 +275,12 @@ impl Draw<'_> {
         Ok(())
     }
 
-    /// The K at 64: the accent tile with the mark's three strokes in the
-    /// accent's text colour, as the mock draws it on a 64 x 64 grid.
+    /// The K at 64: the flame K on its accent tile, 2 DIPs in from each
+    /// side as the mock draws it on a 64 x 64 grid.
     fn big_k(&self, r: &Rect, f: &FluentPalette) {
         let s = r.w / 64.0;
         let tile = Rect::new(r.x + 2.0 * s, r.y + 2.0 * s, 60.0 * s, 60.0 * s);
-        self.fill(&tile, BIG_K_RADIUS * s, f.accent, 1.0);
-        let at = |(x, y): (f32, f32)| pt(r.x + x * s, r.y + y * s);
-        for (a, b) in BIG_K_STROKES {
-            // SAFETY: a plain draw on this thread's render target, inside
-            // the frame's BeginDraw.
-            unsafe {
-                self.rt.DrawLine(
-                    at(a),
-                    at(b),
-                    self.paint(f.on_accent, 1.0),
-                    BIG_K_STROKE * s,
-                    self.round,
-                );
-            }
-        }
+        self.k_mark(&tile, f);
     }
 
     /// The InfoBar at the top of the list or the empty window, while one

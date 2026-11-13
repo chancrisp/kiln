@@ -1,12 +1,14 @@
 <div align="center">
 
-<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme/banner-dark.png"><img src="docs/readme/banner-light.png" alt="Kiln: a list of files, the selected photo in the side pane, and the formats it can become" width="820"></picture>
+<img src="docs/readme/banner-monokai.png" alt="Kiln's window in the Monokai theme, with the format wheel open over a photo" width="820">
 
 A file converter for Windows 10 and 11.
 
 <a href="https://github.com/chancrisp/kiln/releases"><img src="https://img.shields.io/badge/DOWNLOAD-Windows_10_%26_11-1F7A5C?style=for-the-badge&logo=data:image%2Fsvg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0iI2ZmZiIgZD0iTTEgMWgxMC41djEwLjVIMXpNMTIuNSAxSDIzdjEwLjVIMTIuNXpNMSAxMi41aDEwLjVWMjNIMXpNMTIuNSAxMi41SDIzVjIzSDEyLjV6Ii8%2BPC9zdmc%2B&labelColor=202020" alt="Download for Windows 10 and 11"></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/LICENSE-GPL--3.0-6FCBA8?style=for-the-badge&labelColor=202020" alt="GPL-3.0 license"></a>
 <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/BUILT_WITH-Rust-6FCBA8?style=for-the-badge&logo=rust&logoColor=white&labelColor=202020" alt="Built with Rust"></a>
+
+[Features](#features) · [Install](#install) · [Formats](#formats) · [Settings](#settings) · [Command line](#command-line) · [Build from source](CONTRIBUTING.md)
 
 </div>
 
@@ -17,23 +19,34 @@ on its window and a wheel of the formats they can become opens where they
 landed. Pick one, and the new file is saved next to the original, with
 **Show in folder** on its row.
 
+## Features
+
+<table>
+  <tr>
+    <td width="50%" valign="top"><img src="docs/readme/format-choice-monokai.png" alt="The format wheel open over a JPG, with Make smaller first and More last" width="400"><br><b>The wheel</b><br>Opens where the files land, with the formats they can become. <b>Make smaller</b> comes first where it works, and <b>More</b> has every other format and the tools.</td>
+    <td width="50%" valign="top"><img src="docs/readme/main-window-monokai.png" alt="Kiln's window: five files in the list, and the selected photo in the side pane with the formats it can become" width="400"><br><b>The side pane</b><br>In a wide window, the selected file's picture, what it is, the formats it can become with an estimate, and what happened to it.</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="docs/readme/make-smaller-monokai.png" alt="The Make smaller dialog for a 2.1 MB JPG: Max size 1 MB, About 994 KB, Keeps 3000 by 2000" width="400"><br><b>Make smaller</b><br>Video, photos and PDF in the same format, at or under a size you pick, with an estimate before it starts.</td>
+    <td width="50%" valign="top"><img src="docs/readme/settings-monokai.png" alt="The Settings page: Appearance, Saving, Quality and the drag-wheel" width="400"><br><b>Settings</b><br>One page of cards: theme, where new files go, quality, the drag-wheel and helper apps. Every change is saved straight away.</td>
+  </tr>
+</table>
+
 - **Ways in.** Drop files on the window, choose **Add files** (<kbd>Ctrl</kbd>+<kbd>O</kbd>), paste files copied in File Explorer (<kbd>Ctrl</kbd>+<kbd>V</kbd>), or right-click files in File Explorer and choose **Open with**, then Kiln. A folder adds the files in it.
-- **The wheel.** Files of one kind open a ring of the formats they can become, with **Make smaller** first where it works and **More** for every other format and the tools. Picking a format converts at once with the quality set in Settings; <kbd>Tab</kbd> on a format, or the last row of More (`Options for JPG…`), opens its options first.
-- **Make smaller.** MP4, MOV, M4V and MKV video, JPG, PNG and WEBP photos, and PDF, in the same format, at or under a size you pick, with an estimate before it starts. Kiln never saves a copy over that size or larger than the original.
+- **Progress you can read.** A converting row has a progress bar, its percentage and **Cancel**. A finished one says what it saved and how much smaller it is. A failed one says what happened in one line, with **Show details**, and **Retry** where trying again can help.
 - **Photo tools.** **Resize** brings a photo's long side down to a size, and **Remove location data** saves a copy without where it was taken and the camera details.
-- **Progress you can read.** A converting row has a progress bar, its percentage and **Cancel**. A finished one says what it saved and how much smaller it is, with **Show in folder**. A failed one says what happened in one line, with **Show details**, and **Retry** where trying again can help.
-- **The side pane.** In a wide window, a pane beside the list shows the selected file: its picture, what it is, the formats it can become with what each is for and an estimate, and what happened to it.
-- **The drag-wheel**, if you turn it on: pick a format while dragging a file anywhere in Windows. [The drag-wheel](#the-drag-wheel) says how.
-- **A command line too.** `kiln convert photo.png jpg` does the same work from a terminal.
-- **Light, dark and six more themes**, Windows' contrast themes, every monitor's scale, Windows' Text size and Animation effects, the keyboard and Narrator.
+- **The drag-wheel**, if you turn it on: pick a format while dragging a file anywhere in Windows. See [The drag-wheel](#the-drag-wheel).
+- **A command line.** `kiln convert photo.png jpg` does the same work from a terminal.
+- **Light, dark and six more themes.** Kiln also follows Windows' contrast themes, each monitor's scale, Windows' Text size and Animation effects, and works with the keyboard and Narrator.
 
-<div align="center">
+## Install
 
-<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme/main-window-dark.png"><img src="docs/readme/main-window-light.png" alt="Kiln's window: five files in the list, and the selected photo in the side pane with the formats it can become" width="820"></picture>
+- **Installer.** `Kiln-<version>-x64.msi` installs into Program Files, adds a Start menu entry and puts `kiln` on PATH. It also adds Kiln to Open with for the files it converts, and, for the account that installs it, to Send to.
+- **Portable.** Unzip `Kiln-<version>-x64-portable.zip` anywhere and run `kiln-app.exe`.
 
-</div>
-
-## What needs nothing else installed
+Releases are signed as the [code signing policy](docs/code-signing-policy.md)
+describes. Until a release is signed, Windows SmartScreen may warn before Kiln
+starts: choose **More info**, then **Run anyway**.
 
 The MSI and the portable ZIP on the release page come with FFmpeg, an LGPL
 build in the `ffmpeg` folder beside Kiln. On a PC with nothing else
@@ -41,17 +54,72 @@ installed, Kiln converts:
 
 - photos and pictures: PNG, JPG, WEBP, BMP, GIF, TIFF, ICO, TGA, QOI, PPM, SVG, HEIC, AVIF and JPEG XL, and camera RAW (on older Windows builds, RAW needs Microsoft's Raw Image Extension);
 - sound: WAV, MP3, FLAC, OGG, OPUS, M4A, AAC, AIFF, WMA, AC3 and WV;
-- video: MP4, MOV, M4V, MKV, WEBM, AVI, WMV, FLV, MPG, TS, 3GP and OGV, animated GIF, WEBP and APNG, and subtitles;
+- video: MP4, MOV, M4V, MKV, WEBM, AVI, WMV, FLV, MPG, TS, 3GP and OGV; animated GIF and APNG to video, and video to animated GIF, WEBP and APNG; and subtitles;
 - PDF to text, and PDF pages to pictures;
 
 and Make smaller, Resize, Remove location data and the other tools work.
 
-Documents, office files and e-books need a free helper app (see
-[Install](#install)): Pandoc for documents, LibreOffice for office files,
-spreadsheets, slides and documents to PDF, and Calibre for MOBI and AZW3. A
-file that needs one says which, with **Get it** to open the app's download page.
+Documents, office files and e-books need a free helper app, listed below. A
+file that needs one says which, with a button such as **Get Pandoc** that opens
+the app's download page.
 
-## First run
+| Helper app | Needed for |
+|---|---|
+| FFmpeg (comes with Kiln) | video other than MP4, MOV, M4V and MKV, GIFs, subtitles, JPEG XL, writing AVIF, the video and audio tools other than Make smaller, and pictures Windows can't read. Also the fallback for MP4, M4V, MOV and MKV video Windows can't read (ProRes, for example) and on a PC without Media Foundation |
+| [Pandoc](https://pandoc.org/installing.html) | documents |
+| [LibreOffice](https://www.libreoffice.org/download/) | office files, spreadsheets and slides, and documents to PDF |
+| [Calibre](https://calibre-ebook.com/download) | MOBI and AZW3 e-books |
+
+<details>
+<summary><b>FFmpeg, helper apps and Windows' codecs</b></summary>
+
+The included FFmpeg, in the `ffmpeg` folder beside `kiln-app.exe`, is an LGPL build
+without x264 or x265, so H.264 and HEVC from it are Windows' own encoders.
+Its licence, the licences of the libraries built into it, how it was built and
+where to get its source are in that folder, and in **Settings > About >
+Licences and third-party notices**. **Settings > Helper apps > Use another
+copy…** points Kiln at a different FFmpeg; a full build chosen there writes
+H.264 and HEVC with x264 and x265.
+
+Kiln looks for helper apps on PATH, and for LibreOffice and Calibre in their
+usual install folders too, and
+finds one installed while it runs, without a restart. **Settings > Helper
+apps** shows what it found, with **Get Pandoc**, **Get LibreOffice** or **Get Calibre** and **Choose…** for one it didn't,
+and **Install with winget** for Pandoc, LibreOffice or Calibre where Windows
+has winget.
+Each LibreOffice job runs with a fresh profile in its own temporary folder,
+with macros and self-updating links turned off, and an RTF's linked pictures
+are cut out of a copy before LibreOffice opens it.
+
+Windows' codecs write AAC, M4A, WMA and AC3, and read HEIC, AVIF, HEVC, AV1
+and VP9 through Microsoft's extensions:
+
+- **HEIC and AVIF** are read by Windows through the HEIF Image and HEVC Video Extensions and the AV1 Video Extension, and by the included FFmpeg where Windows can't. A transparent AVIF goes to FFmpeg, so its transparency is kept.
+- **HEVC, AV1 and VP9 video** that Kiln's own engine reads need the extension for that codec when the picture is encoded again; a copy needs none. The included FFmpeg converts the file instead where the extension is missing. **Get HEVC extension** (or AV1, VP9) opens the extension's page in the Microsoft Store.
+- **N editions** of Windows leave the codecs out until the Media Feature Pack is added. A file that needs them says `Needs Windows' Media Feature Pack, which isn't installed.`, and **Get Media Feature Pack** opens Windows' Optional features page.
+- **MP3** is written by `lame_enc.dll`, beside `kiln-app.exe` and `kiln.exe`. If it is missing, the row says `Kiln's MP3 encoder is missing. Reinstall Kiln to fix it.`
+
+</details>
+
+<details>
+<summary><b>Updates and uninstalling</b></summary>
+
+**Check for updates** in **Settings > About** asks GitHub for the latest
+release when you press it. [PRIVACY.md](PRIVACY.md) says what that request
+carries and what Kiln keeps on your PC.
+
+**Uninstalling** removes Kiln's programs, its Start menu entry, its start-up
+entry and its Open with and Send to entries. It keeps your settings in
+`%APPDATA%\Kiln` and the log, crash reports and any results waiting to be
+saved in `%LOCALAPPDATA%\Kiln`, so a later install starts where you left off.
+Delete those folders, and any hidden `.kiln-held` folder at the top of a drive,
+after uninstalling to remove them.
+
+</details>
+
+## Using Kiln
+
+### First run
 
 The empty window has **Add files** and, until you dismiss it, a short
 **How it works** card:
@@ -62,7 +130,7 @@ The empty window has **Add files** and, until you dismiss it, a short
 
 Help (<kbd>F1</kbd>) has **Show first-run help** to bring the card back.
 
-## The wheel
+### The wheel
 
 A plain drop of files of one kind opens the format wheel where they landed.
 Files of several kinds that share no format are listed, and an InfoBar says
@@ -76,19 +144,20 @@ the files stay listed.
 - **Several files** of one kind are offered every format any of them can become. A file already in the format picked is left alone and its row says `Already JPG`.
 - **Other ways to pick.** The side pane's **Convert to** list, the list the footer's **Convert** opens and a row's **Convert to…** in its right-click menu offer the same formats. With the side pane showing, **Convert** converts to the format the pane outlines.
 
-<table>
-  <tr>
-    <td align="center" valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme/format-choice-dark.png"><img src="docs/readme/format-choice-light.png" alt="The format wheel open over a JPG, with Make smaller first and More last" width="400"></picture><br><b>THE WHEEL</b><br><sub>Opens where the files land. The hub shows the file and what a pick makes.</sub></td>
-    <td align="center" valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme/format-choice-lit-dark.png"><img src="docs/readme/format-choice-lit-light.png" alt="The format wheel with Make smaller lit, and the hub reading Make smaller, Keeps JPG" width="400"></picture><br><b>A PICK LIT</b><br><sub>The slice under the pointer or the arrows fills, and the hub says what it makes.</sub></td>
-  </tr>
-</table>
+<div align="center">
 
-## Make smaller
+<img src="docs/readme/format-choice-lit-monokai.png" alt="The format wheel with Make smaller lit, and the hub reading Make smaller, Keeps JPG" width="820">
+
+<sub>The slice under the pointer or the arrows fills, and the hub says what it makes.</sub>
+
+</div>
+
+### Make smaller
 
 **Make smaller** is on the wheel, in the side pane and in the right-click menu
 for MP4, MOV, M4V, MKV, JPG, PNG, WEBP and PDF. It opens a dialog:
 
-- **Max size** as a few sizes for the kind of file (video 10, 25 and 50 MB; photos 500 KB, 1 and 2 MB; PDF 1, 5 and 10 MB) or **Custom**. A size the file is already under says `already smaller`.
+- **Max size** as a few sizes for the kind of file (video 10, 25 and 50 MB; photos 500 KB, 1 and 2 MB; PDF 1, 5 and 10 MB) or **Custom**. A size the file is already under is greyed out and says `Already smaller than this`.
 - **An estimate** of the result, and what becomes of the picture.
 - **More options:** for video, the largest picture size and whether to keep the sound; for photos, a long side to resize to and **Remove location data**.
 
@@ -100,13 +169,7 @@ reach saves nothing and says so, as in
 - **Photos** keep their colour profile and their details, unless **Remove location data** is on. A PNG gets fewer pixels, never fewer colours.
 - **PDF** is tidied, then its photos are saved as JPG at lower qualities and sizes until it fits. Its text, drawing and fonts are kept as they are, so a PDF of text and drawing shrinks little.
 
-<div align="center">
-
-<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme/make-smaller-dark.png"><img src="docs/readme/make-smaller-light.png" alt="The Make smaller dialog for a 2.1 MB JPG: Max size 1 MB, About 994 KB, Keeps 3000 by 2000" width="736"></picture>
-
-</div>
-
-## Where new files go
+### Where new files go
 
 Each result is saved as soon as it is ready, under a free name: Kiln never
 replaces a file. A taken name becomes `name (1).jpg`. **Settings > Saving >
@@ -117,7 +180,7 @@ gone, the result goes to `Documents\Kiln results` and the row says so, as in
 `Saved in Documents\Kiln results. Kiln can't save in DCIM.` When even that
 fails, Kiln keeps the result and tries again the next time it starts.
 
-## The drag-wheel
+### The drag-wheel
 
 The drag-wheel is off until you turn it on in **Settings > Drag-wheel**
 (**Pick a format while dragging anywhere in Windows**). While it is on:
@@ -125,12 +188,12 @@ The drag-wheel is off until you turn it on in **Settings > Drag-wheel**
 - Drag files from File Explorer, the desktop or another app and tap <kbd>Shift</kbd>: the same wheel opens under the pointer. Drop on a format and Kiln converts the files with Settings' quality and saves each result where new files go, without bringing its window forward. Drop on **Make smaller** or **Resize** and Kiln comes forward with its dialog. Tap <kbd>Shift</kbd> again for the tools.
 - Kiln starts with Windows, in the notification area with no window, so the drag-wheel works from the start of the session. Task Manager lists it under Startup apps. Turning the drag-wheel off removes that entry.
 - Closing the window leaves Kiln in the notification area. Its icon's menu has **Open Kiln**, **Drag-wheel** and **Quit Kiln**.
-- One notification a drop says what was saved, with **Show in folder**.
+- One notification for each drop says what was saved, with **Show in folder**.
 
 A `settings.toml` from an earlier Kiln that had the drag-wheel on turns it off
 once, and Kiln says so at the top of its window.
 
-## Options and quality
+### Options and quality
 
 Picking a format converts at once with the quality in **Settings > Quality**.
 To change it for one conversion, press <kbd>Tab</kbd> on the format in the
@@ -158,13 +221,69 @@ it writes H.264, or HEVC if you choose, on the graphics card where there is
 one. Phone video comes out upright; HDR video written as HEVC on the graphics
 card stays HDR.
 
+## Settings
+
+Open Settings with the gear in the title bar or <kbd>Ctrl</kbd>+<kbd>,</kbd>.
+It is one page: **Appearance** (theme), **Saving** (where new files go), **Quality** (the defaults), **Drag-wheel**,
+**Helper apps** and **About**. **Back** or <kbd>Esc</kbd> closes it.
+**Theme** offers System, Light and Dark, and Dracula, Gruvbox, Monokai, Nord,
+Solarized Dark and Solarized Light. A Windows contrast theme, when one is on,
+takes over from all of them. Every
+change is saved straight away to `%APPDATA%\Kiln\settings.toml`, which you can
+also edit by hand.
+
+<details>
+<summary><b>settings.toml</b></summary>
+
+```toml
+save_to = 'D:\Converted'         # where new files go; leave out for next to
+                                 # the original
+theme = "system"                 # system, light, dark, dracula, gruvbox, monokai,
+                                 # nord, solarized-dark or solarized-light
+drag_wheel = false               # true turns the drag-wheel on
+drag_wheel_reset = true          # keep this line, or Kiln turns the
+                                 # drag-wheel off once
+
+[quality]                        # the defaults in Settings > Quality
+video = "high"                   # small, high or best
+resolution = "original"          # original, or a cap in lines: 1080
+images = "high"                  # small, high or best
+image_size = "original"          # original, or a cap on the long side: 2048
+audio_kbps = 192                 # leave out to follow the preset
+page_dpi = 150                   # 36 to 600
+
+[engines]                        # leave out for the FFmpeg that comes with
+                                 # Kiln, then PATH
+ffmpeg = 'C:\Tools\ffmpeg\bin\ffmpeg.exe'
+pandoc = 'C:\Program Files\Pandoc\pandoc.exe'
+libreoffice = 'D:\LibreOffice\program\soffice.exe'
+calibre = 'C:\Program Files\Calibre2\ebook-convert.exe'
+```
+
+An older `settings.toml` with a `save_next_to_original` line still loads; the
+line goes the next time settings are saved. A file Kiln can't read is left
+alone: the app starts with the defaults and says why.
+
+</details>
+
+<div align="center">
+
+<img src="docs/readme/themes-gallery.png" alt="Kiln's window in Dracula, Gruvbox, Monokai, Nord, Solarized Dark and Solarized Light" width="820">
+
+<sub>Dracula, Gruvbox, Monokai, Nord, Solarized Dark and Solarized Light, beside Light and Dark.</sub>
+
+</div>
+
 ## Formats
 
 Kiln knows 85 formats and converts between 1,245 pairs. When no single helper
-app does a pair, Kiln chains two steps through a shared format, such as HEIC to
+app does a pair, Kiln chains two steps through a shared format, such as JPEG XL to
 JPG through PNG, or MOBI to PDF through DOCX. The steps run in one temporary
 folder, and only the finished file is kept, where new files go (see
 [Where new files go](#where-new-files-go)).
+
+<details>
+<summary><b>Every format and pair</b></summary>
 
 | Kind | Reads | Converts to | Helper app |
 |---|---|---|---|
@@ -184,7 +303,7 @@ folder, and only the finished file is kept, where new files go (see
 | E-book | EPUB, MOBI, AZW3 | any other of those. MOBI and AZW3 also become documents and PDF | Calibre |
 | PDF | PDF | TXT, and PNG, JPG, WEBP, BMP or TIFF with one image per page | built in (Windows draws the pages) |
 | | | DOCX, ODT, DOC, RTF, the Pandoc formats, MOBI and AZW3, from its text | built in, then the document helper apps |
-| Office document | DOC, RTF, TXT, and read only PAGES and WPD | DOC, DOCX, ODT, RTF, PDF, and through DOCX the Pandoc formats | LibreOffice |
+| Office document | DOC, RTF, TXT, and read only PAGES and WPD | DOC, DOCX, ODT, RTF and PDF; through DOCX, MD, HTML, EPUB and TXT (a TXT becomes every Pandoc format but TEX); through EPUB, MOBI and AZW3 | LibreOffice |
 | | DOCX, ODT | DOC, PDF, and PNG or JPG with one image per page | LibreOffice |
 | | read only VSDX and PUB | PDF, and PNG or JPG with one image per page | LibreOffice |
 | Spreadsheet | XLSX, XLS, ODS, CSV, and read only NUMBERS | XLSX, XLS, ODS, CSV, PDF and HTML | LibreOffice |
@@ -209,6 +328,11 @@ ASCIIDOC, MEDIAWIKI, DOCBOOK, AZW and VSD. The full list lives in
 [`crates/kiln-core/formats.toml`](crates/kiln-core/formats.toml), and
 `kiln formats FILE` prints what a given file can become.
 
+</details>
+
+<details>
+<summary><b>Tools</b></summary>
+
 | Tool | Works on | What it does |
 |---|---|---|
 | Make smaller | MP4, MOV, M4V and MKV video, JPG, PNG and WEBP images, PDF | Saves a copy in the same format at or under a size (`--max-size`), and saves nothing if it can't get there or the copy wouldn't be smaller. A video is encoded again on the graphics card (or the processor when there is none), with its sound copied where it fits. A photo keeps its colour profile and its details unless Remove location data is on, and a PNG gets fewer pixels, never fewer colours. A PDF is tidied, then its photos are saved as JPG at lower qualities and sizes until it fits; its text, drawing and fonts are kept as they are |
@@ -220,7 +344,10 @@ ASCIIDOC, MEDIAWIKI, DOCBOOK, AZW and VSD. The full list lives in
 | Save each page as a PDF | PDF | Writes one PDF per page |
 | Merge | two or more audio, video, document or PDF files of one type, or images | Joins them in order. Images become one PDF, a page each |
 
-## What a conversion keeps and leaves out
+</details>
+
+<details>
+<summary><b>What a conversion keeps and leaves out</b></summary>
 
 Where a conversion drops something, the options dialog says so under the file's
 line before **Convert**, the row says so while it converts and once it is done,
@@ -236,119 +363,20 @@ files, a note is shown only when it holds for every one.
 - **WEBP.** It is written lossy at the quality of the preset, or of `--quality`, with transparency kept. An animated GIF converted to WEBP stays animated: every frame, its timing and its loop count. A GIF with no loop count plays once.
 - **Gaps in sound.** When sound is re-encoded and a gap of 100 ms or more is left in its timestamps, as when a stretch is cut from an MKV, Kiln puts silence there so the sound stays in step with the picture. FLAC is included, since its timestamps come from its frame headers. A gap gets at most 10 minutes of silence, and so does one file in all. A packet the decoder refuses is skipped, not filled.
 
-## Install
-
-- **Installer.** `Kiln-<version>-x64.msi` installs into Program Files, adds a Start menu entry and puts `kiln` on PATH. It also adds Kiln to Open with for the files it converts, and, for the account that installs it, to Send to.
-- **Portable.** Unzip `Kiln-<version>-x64-portable.zip` anywhere and run `kiln-app.exe`.
-
-Both have FFmpeg in the `ffmpeg` folder beside `kiln-app.exe`: an LGPL build,
-without x264 or x265, so H.264 and HEVC from it are Windows' own encoders.
-Its licence, the licences of the libraries built into it, how it was built and
-where to get its source are in that folder, and in **Settings > About >
-Licences and third-party notices**. **Settings > Helper apps > Use another
-copy…** points Kiln at a different FFmpeg; a full build chosen there writes
-H.264 and HEVC with x264 and x265.
-
-| Helper app | Needed for |
-|---|---|
-| FFmpeg (comes with Kiln) | video other than MP4, MOV, M4V and MKV, GIFs, subtitles, JPEG XL, writing AVIF, the video and audio tools other than Make smaller, and pictures Windows can't read. Also the fallback for MP4, M4V, MOV and MKV video Windows can't read (ProRes, for example) and on a PC without Media Foundation |
-| [Pandoc](https://pandoc.org/installing.html) | documents |
-| [LibreOffice](https://www.libreoffice.org/download/) | office files, spreadsheets and slides, and documents to PDF |
-| [Calibre](https://calibre-ebook.com/download) | MOBI and AZW3 e-books |
-
-Kiln looks for helper apps on PATH and in their usual install folders, and
-finds one installed while it runs, without a restart. **Settings > Helper
-apps** shows what it found, with **Get it** and **Choose…** for one it didn't,
-and **Install with winget** for Pandoc, LibreOffice or Calibre where Windows
-has winget.
-Each LibreOffice job runs with a fresh profile in its own temporary folder,
-with macros and self-updating links turned off, and an RTF's linked pictures
-are cut out of a copy before LibreOffice opens it.
-
-Windows' codecs write AAC, M4A, WMA and AC3, and read HEIC, AVIF, HEVC, AV1
-and VP9 through Microsoft's extensions:
-
-- **HEIC and AVIF** are read by Windows through the HEIF Image and HEVC Video Extensions and the AV1 Video Extension, and by the included FFmpeg where Windows can't. A transparent AVIF goes to FFmpeg, so its transparency is kept.
-- **HEVC, AV1 and VP9 video** that Kiln's own engine reads need the extension for that codec when the picture is encoded again; a copy needs none. The included FFmpeg converts the file instead where the extension is missing. **Get it** opens the extension's page in the Microsoft Store.
-- **N editions** of Windows leave the codecs out until the Media Feature Pack is added. A file that needs them says `Needs Windows' Media Feature Pack, which isn't installed.`, and **Install it** opens Settings > Optional features.
-- **MP3** is written by `lame_enc.dll`, beside `kiln-app.exe` and `kiln.exe`. If it is missing, the row says `Kiln's MP3 encoder is missing. Reinstall Kiln to fix it.`
-
-**Check for updates** in **Settings > About** asks GitHub for the latest
-release when you press it. [PRIVACY.md](PRIVACY.md) says what that request
-carries and what Kiln keeps on your PC.
-
-Releases are signed as the [code signing policy](docs/code-signing-policy.md)
-describes. Until a release is signed, Windows SmartScreen may warn before Kiln
-starts: choose **More info**, then **Run anyway**.
-
-**Uninstalling** removes Kiln's programs, its Start menu entry, its start-up
-entry and its Open with and Send to entries. It keeps your settings in
-`%APPDATA%\Kiln` and the log, crash reports and any results waiting to be
-saved in `%LOCALAPPDATA%\Kiln`, so a later install starts where you left off.
-Delete those folders after uninstalling to remove them.
-
-## Settings
-
-Open Settings with the gear in the title bar or <kbd>Ctrl</kbd>+<kbd>,</kbd>.
-It is one page: **Appearance** (theme), **Saving** (where new files go), **Quality** (the defaults), **Drag-wheel**,
-**Helper apps** and **About**. **Back** or <kbd>Esc</kbd> closes it.
-**Theme** offers System, Light and Dark, and Dracula, Gruvbox, Monokai, Nord,
-Solarized Dark and Solarized Light. A Windows contrast theme, when one is on,
-takes over from all of them. Every
-change is saved straight away to `%APPDATA%\Kiln\settings.toml`, which you can
-also edit by hand:
-
-```toml
-save_to = 'D:\Converted'         # where new files go; leave out for next to
-                                 # the original
-theme = "system"                 # system, light, dark, dracula, gruvbox, monokai,
-                                 # nord, solarized-dark or solarized-light
-drag_wheel = false               # true turns the drag-wheel on
-
-[quality]                        # the defaults in Settings > Quality
-video = "high"                   # small, high or best
-resolution = "original"          # original, or a cap in lines: 1080
-images = "high"                  # small, high or best
-image_size = "original"          # original, or a cap on the long side: 2048
-audio_kbps = 192                 # leave out to follow the preset
-page_dpi = 150                   # 36 to 600
-
-[engines]                        # leave out for the FFmpeg that comes with
-                                 # Kiln, then PATH
-ffmpeg = 'C:\Tools\ffmpeg\bin\ffmpeg.exe'
-pandoc = 'C:\Program Files\Pandoc\pandoc.exe'
-libreoffice = 'D:\LibreOffice\program\soffice.exe'
-calibre = 'C:\Program Files\Calibre2\ebook-convert.exe'
-```
-
-An older `settings.toml` with a `save_next_to_original` line still loads; the
-line goes the next time settings are saved. A file Kiln can't read is left
-alone: the app starts with the defaults and says why.
-
-<table>
-  <tr>
-    <td align="center" valign="top"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme/settings-dark.png"><img src="docs/readme/settings-light.png" alt="The Settings page: Appearance, Saving, Quality and the drag-wheel" width="400"></picture><br><b>SETTINGS</b><br><sub>One page of cards. Every change is saved straight away.</sub></td>
-    <td align="center" valign="top"><img src="docs/readme/themes-gallery.png" alt="Kiln's window in Dracula, Gruvbox, Monokai, Nord, Solarized Dark and Solarized Light" width="400"><br><b>THEMES</b><br><sub>Dracula, Gruvbox, Monokai, Nord, Solarized Dark and Solarized Light, beside Light and Dark.</sub></td>
-  </tr>
-</table>
-
-## Logs and recovery
-
-- **Logs.** Kiln writes `kiln.log` in `%LOCALAPPDATA%\Kiln\logs`, a line for each failed conversion and for other things worth knowing later. At 1 MB it becomes `kiln.1.log`, replacing the one before, so the logs take 2 MB at most.
-- **Crash files.** A crash writes `crash-<date>-<time>-<process>.txt` beside the log, with the problem, where it happened, a backtrace, Kiln's version and commit, and the Windows version. The newest 10 are kept.
-- **After a crash in the window.** Kiln shows `Kiln ran into a problem and has to close. Your converted files are kept, and Kiln saves them the next time it starts. A report was saved in` the logs folder, and closes. A crash in a conversion fails only that conversion, and leaves a crash file too.
-- **Results on their way.** Kiln makes each result on the drive of the file it came from, and keeps it there until it is saved, in a hidden `<drive>\.kiln-held\<your account's id>\<run>` folder that only your account, SYSTEM and administrators can open (on NTFS), so saving next to the original on that drive is a rename. Since results wait on the file's own drive, a full drive fails the job, a FAT32 drive can't hold a result over 4 GB, and an unplugged drive takes its held results with it until it is plugged in again. A file on the system drive, on a network path, or on a drive Kiln can't write to is held in `%LOCALAPPDATA%\Kiln\held` instead. Each run has its own folder, with a note of the folder each original was in. Saving to another drive copies the result, with its progress on the row; cancelling it keeps the held result whole. On a quit Kiln removes the folders it made once they are empty.
-- **At the next start.** Results left by a session that crashed, was killed, or ended with a sign-out or shutdown are saved without a question: next to their originals, or in the folder chosen in Settings when they were made, else in `Documents\Kiln results`, never over a file already there. An InfoBar says it once, as `Saved 3 converted files from last time next to their originals.` A result that can't be saved stays for the next start. Another Kiln that is running keeps its own results; this one never touches them.
-- **Left-over job folders.** Working folders in `%TEMP%\Kiln` that a crash or a kill left are cleared at start, unless a job is still using them.
+</details>
 
 ## Command line
+
+<details>
+<summary><b>Commands, options and exit codes</b></summary>
 
 ```text
 kiln convert INPUT FORMAT [-o DIR] [-p small|high|best] [-q QUALITY] [--size N] [--fps N]
              [--audio-kbps N] [--dpi N] [--ffmpeg PATH] [--pandoc PATH] [--libreoffice PATH] [--calibre PATH]
 kiln tool TOOL INPUTS... [-o DIR] [--max-size SIZE] [--long-side PX] [--remove-location]
+             [--ffmpeg PATH] [--pandoc PATH] [--libreoffice PATH] [--calibre PATH]
 kiln formats FILE
-kiln suggest FILE...
+kiln suggest FILE... [--ffmpeg PATH] [--pandoc PATH] [--libreoffice PATH] [--calibre PATH]
 ```
 
 `kiln convert` and `kiln tool` write next to the input, or into `-o DIR`,
@@ -375,15 +403,24 @@ photo.png    JPG  A photo. JPG keeps the look at about 4.2 KB.
 sample.mov   MP4  Plays on any phone, PC or browser.
 ```
 
-## Build from source
+</details>
 
-Building Kiln, making a release and adding a format are in
-[CONTRIBUTING.md](CONTRIBUTING.md).
+## More
+
+<details>
+<summary><b>Logs and recovery</b></summary>
+
+- **Logs.** Kiln writes `kiln.log` in `%LOCALAPPDATA%\Kiln\logs`, a line for each failed conversion and for other things worth knowing later. At 1 MB it becomes `kiln.1.log`, replacing the one before, so the logs take 2 MB at most.
+- **Crash files.** A crash writes `crash-<date>-<time>-<process id>.txt` beside the log, with the problem, where it happened, a backtrace, Kiln's version and commit, and the Windows version. The newest 10 are kept.
+- **After a crash in the window.** Kiln shows `Kiln ran into a problem and has to close. Your converted files are kept, and Kiln saves them the next time it starts. A report was saved in` the logs folder, and closes. A crash in a conversion fails only that conversion, and leaves a crash file too.
+- **Results on their way.** Kiln makes each result on the drive of the file it came from, and keeps it there until it is saved, in a hidden `<drive>\.kiln-held\<your account's id>\<run>` folder that only your account, SYSTEM and administrators can open (on NTFS), so saving next to the original on that drive is a rename. Since results wait on the file's own drive, a full drive fails the job, a FAT32 drive can't hold a result over 4 GB, and an unplugged drive takes its held results with it until it is plugged in again. A file on the system drive, on a network path, or on a drive Kiln can't write to is held in `%LOCALAPPDATA%\Kiln\held` instead. Each run has its own folder, with a note of the folder each original was in. Saving to another drive copies the result, with its progress on the row; cancelling it keeps the held result whole. On a quit Kiln removes the folders it made once they are empty.
+- **At the next start.** Results left by a session that crashed, was killed, or ended with a sign-out or shutdown are saved without a question: next to their originals, or in the folder chosen in Settings when they were made, else in `Documents\Kiln results`, never over a file already there. An InfoBar says it once, as `Saved 3 converted files from last time next to their originals.` A result that can't be saved stays for the next start. Another Kiln that is running keeps its own results; this one never touches them.
+- **Left-over job folders.** Working folders in `%TEMP%\Kiln` that a crash or a kill left are cleared at start, unless a job is still using them.
+
+</details>
 
 <details>
 <summary><b>Known limitations</b></summary>
-
-<br>
 
 - An animated GIF converted to WebP keeps every frame, its timing and its loop count. Converted to another image format, it keeps only its first frame, as does an APNG converted to any image format. Convert it to video to keep the motion.
 - A PDF that needs a password is refused. The PDF tools refuse one with only an owner password, which they would write out with its restrictions gone; its text still converts. A PDF or an SVG nested far deeper than any real one fails its conversion, and so does a PDF whose pages draw themselves, an SVG whose effects are too heavy and an SVG that takes more than a minute to draw. Each says why in one sentence, and Kiln goes on. An SVG that would draw at more than 50 megapixels is drawn smaller, in the same shape.
@@ -408,6 +445,9 @@ Building Kiln, making a release and adding a format are in
 
 </details>
 
+Building Kiln, making a release and adding a format are in
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Reporting problems
 
 Bug reports and format requests are welcome in
@@ -428,6 +468,6 @@ release.
 **[Download Kiln](https://github.com/chancrisp/kiln/releases)** · [Privacy](PRIVACY.md) · [Code signing policy](docs/code-signing-policy.md) · [Donate](DONATE.md)
 
 <sub>Built with Rust, Win32, Direct2D and DirectWrite. Made by Chandler Crisp.<br>
-Copyright (C) 2026 Chandler Crisp. Kiln is free software under the GNU General Public License, version 3 or later: see <a href="LICENSE">LICENSE</a>. Third-party components keep their own licenses: see <a href="THIRD_PARTY_LICENSES">THIRD_PARTY_LICENSES</a> and <a href="THIRD_PARTY_NOTICES.md">THIRD_PARTY_NOTICES.md</a>, which covers the audio libraries, LAME and FFmpeg (LGPL).</sub>
+Copyright (C) 2026 Chandler Crisp. Kiln is free software under the GNU General Public License, version 3 or later: see <a href="LICENSE">LICENSE</a>. Third-party components keep their own licences: see <a href="THIRD_PARTY_LICENSES">THIRD_PARTY_LICENSES</a> and <a href="THIRD_PARTY_NOTICES.md">THIRD_PARTY_NOTICES.md</a>, which covers the audio libraries, LAME and FFmpeg (LGPL).</sub>
 
 </div>
